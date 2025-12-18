@@ -1,0 +1,17 @@
+[project]
+name = "qmodem"
+version = "0.1.0"
+description = "QMoDeM: Quantum-aided Models for Decision Making."
+readme = "README.md"
+authors = [
+    { name = "debrevitatevitae", email = "giotb92@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+qmodem = "qmodem:main"
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"
