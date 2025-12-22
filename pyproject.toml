@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "jax-ai-stack>=2025.10.28",
+    "lib-eod-simulation",
 ]
 
 [project.scripts]
@@ -30,3 +31,6 @@ dev = [
 recursive = true
 black = true
 style = "google"
+
+[tool.uv.sources]
+lib-eod-simulation = { path = "../lib_eod_simulation", editable = true }
