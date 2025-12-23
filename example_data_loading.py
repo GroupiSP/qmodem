@@ -1,3 +1,4 @@
+import json
 from typing import SupportsIndex
 
 import lib_eod_simulation as les
@@ -36,28 +37,18 @@ class BatterySimulationSingleTimeSource:
 
 
 def main() -> None:
-    model_config = {
-        "Q": 2.8 * 3600,
-        "R": 0.1,
-        "dt": 10,  # (indirectly) the grid resolution.
-        "voc_params": {
-            "vL": 1.35531394,
-            "v0": 4.12017677,
-            "gamma": 0.13286143,
-            "alpha": 0.16945463,
-            "beta": 2.34538224,
-        },
-        "omega_std": 0.0,  # Process noise (play with this)
-        "eta_std": 0.0,  # Voltage sensor noise (play with this)
-    }
-    v_cut = 2.5  # Cutoff voltage of the battery
-    SoC = 1  # Initial state of charge
+    with open("./battery_sim_config.json") as fp:
+        sim_config = json.load(fp)
 
-    I_discharge = les.ConstantCurrentDischarge(
-        -2.8 * 0.75
-    )  # Constant current discharge policy (load)
+    I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])
 
-    sim = les.SimulatorSimple(1, v_cut, SoC, I_discharge, model_config)
+    sim = les.SimulatorSimple(
+        1,
+        sim_config["v_cut"],
+        sim_config["SoC"],
+        I_discharge,
+        sim_config["model_config"],
+    )
 
     source = BatterySimulationSingleTimeSource(sim)
     sampler = IndexSampler(num_records=len(source), shuffle=True, seed=0)
