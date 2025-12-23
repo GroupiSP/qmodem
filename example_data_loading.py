@@ -1,6 +1,8 @@
+from typing import SupportsIndex
+
 import lib_eod_simulation as les
 import numpy as np
-from grain import DataLoader, SupportsIndex
+from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
@@ -62,11 +64,11 @@ def main() -> None:
     dataloader = DataLoader(
         data_source=source,
         sampler=sampler,
-        operations=Batch(batch_size=100),
+        operations=[Batch(batch_size=10)],
         worker_count=0,
     )
 
-    print(next(dataloader))
+    print(next(iter(dataloader)))
 
 
 if __name__ == "__main__":
