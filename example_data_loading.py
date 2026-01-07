@@ -33,9 +33,12 @@ def get_battery_dataloader(N_simu: int = 1) -> DataLoader:
 
 
 def main() -> None:
-    dataloader = get_battery_dataloader()
+    # Run iid simulations for training and testing
+    dataloader_train = get_battery_dataloader(N_simu=40)
+    dataloader_test = get_battery_dataloader(N_simu=10)
 
-    print(next(iter(dataloader)))
+    print(next(iter(dataloader_train)))
+    print(next(iter(dataloader_test)))
 
 
 if __name__ == "__main__":

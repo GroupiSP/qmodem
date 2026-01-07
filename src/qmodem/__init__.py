@@ -14,9 +14,6 @@ class BatterySimulationSingleTimeSource:
                 source. It must have `N_simu=1` (only deterministic case, work in progress
                 to extend).
         """
-        if simulator.N_simu != 1:
-            raise ValueError("We only support one simulation at the moment.")
-
         simulator.simulate()
 
         self.discharge_voltage = simulator.v_memo.ravel()
