@@ -8,7 +8,7 @@ from grain.transforms import Batch
 from qmodem import BatterySimulationSingleTimeSource
 
 
-def get_battery_dataloader(N_simu: int = 1) -> DataLoader:
+def get_battery_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
     with open("./battery_sim_config.json") as fp:
         sim_config = json.load(fp)
 
@@ -27,14 +27,14 @@ def get_battery_dataloader(N_simu: int = 1) -> DataLoader:
     return DataLoader(
         data_source=source,
         sampler=sampler,
-        operations=[Batch(batch_size=10)],
+        operations=[Batch(batch_size=batch_size)],
         worker_count=0,
     )
 
 
 def main() -> None:
     # Run iid simulations for training and testing
-    dataloader_train = get_battery_dataloader(N_simu=40)
+    dataloader_train = get_battery_dataloader(N_simu=40, batch_size=5)
     dataloader_test = get_battery_dataloader(N_simu=10)
 
     print(next(iter(dataloader_train)))
