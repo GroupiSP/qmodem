@@ -8,14 +8,14 @@ from grain.transforms import Batch
 from qmodem import BatterySimulationSingleTimeSource
 
 
-def main() -> None:
+def get_battery_dataloader(N_simu: int = 1) -> DataLoader:
     with open("./battery_sim_config.json") as fp:
         sim_config = json.load(fp)
 
     I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])
 
     sim = les.SimulatorSimple(
-        1,
+        N_simu,
         sim_config["v_cut"],
         sim_config["SoC"],
         I_discharge,
@@ -24,12 +24,16 @@ def main() -> None:
 
     source = BatterySimulationSingleTimeSource(sim)
     sampler = IndexSampler(num_records=len(source), shuffle=True, seed=0)
-    dataloader = DataLoader(
+    return DataLoader(
         data_source=source,
         sampler=sampler,
         operations=[Batch(batch_size=10)],
         worker_count=0,
     )
+
+
+def main() -> None:
+    dataloader = get_battery_dataloader()
 
     print(next(iter(dataloader)))
 
