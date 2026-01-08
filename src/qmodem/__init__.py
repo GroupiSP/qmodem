@@ -27,9 +27,12 @@ class BatterySimulationSingleTimeSource:
         """Number of records in the dataset."""
         return len(self.discharge_voltage)
 
-    def __getitem__(self, record_key: SupportsIndex) -> np.ndarray:
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""
-        return self.discharge_voltage[record_key], self.ruls[record_key]
+        return (
+            jnp.array([self.discharge_voltage[record_key]]),
+            self.ruls[record_key],
+        )
 
 
 class GaussianHeteroscedasticMLP(nnx.Module):
