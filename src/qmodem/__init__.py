@@ -54,12 +54,14 @@ class GaussianHeteroscedasticMLP(nnx.Module):
             rngs (nnx.Rngs): RNGs for the flax internal modules.
         """
         self.dim_in = dimensions[0]
-        self.n_layers = len(dimensions)
+        self.n_hid_layers = len(dimensions) - 1
 
-        self.layers = [
-            nnx.Linear(d_i, d_j, rngs=rngs)
-            for d_i, d_j in zip(dimensions[:-1], dimensions[1:])
-        ]
+        self.layers = nnx.List(
+            [
+                nnx.Linear(d_i, d_j, rngs=rngs)
+                for d_i, d_j in zip(dimensions[:-1], dimensions[1:])
+            ]
+        )
         self.output_layer = nnx.Linear(dimensions[-1], 2, rngs=rngs)
 
     def __call__(self, x: jax.Array) -> jax.Array:
