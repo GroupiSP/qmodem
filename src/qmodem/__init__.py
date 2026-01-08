@@ -1,4 +1,4 @@
-from typing import Sequence, SupportsIndex
+from typing import Optional, Sequence, SupportsIndex
 
 import jax
 import jax.numpy as jnp
@@ -65,31 +65,33 @@ class GaussianHeteroscedasticMLP(nnx.Module):
         )
         self.output_layer = nnx.Linear(dimensions[-1], 2, rngs=rngs)
 
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
         for layer in self.layers:
             x = self.act_fn(layer(x))
 
         x = self.output_layer(x)
-        return jnp.array([x[:, 0], nnx.softplus(x[:, 1])])
+        return jnp.stack([x[:, 0], nnx.softplus(x[:, 1])], axis=-1)
 
 
-def nll_loss(batch: jax.Array, model: nnx.Module) -> jax.Array:
+def nll_loss(
+    batch: jax.Array, model: nnx.Module, rngs: Optional[nnx.Rngs] = None
+) -> jax.Array:
     """Negative log-liklihood loss, based on a Gaussian predictive distribution of the model.
     It implements Equation (31) in https://doi.org/10.1016/j.ymssp.2023.110796.
 
     Args:
         batch (jax.Array): batched input data.
         model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
+        rngs (nnx.Rngs): passed to the forward method of the model.
 
     Returns:
         jax.Array: loss value for the batch.
     """
-    eps = 1e-6
 
     xs, labels = batch
-    outputs = model(xs)
-    means, vars = outputs[:, 0], outputs[:, 1]
-    losses = 0.5 * jnp.log(vars) + 0.5 * jnp.square(labels - means) / vars + eps
+    outputs = model(xs, rngs=rngs)
+    means, variances = outputs[:, 0], outputs[:, 1]
+    losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
 
     return jnp.mean(losses)
 

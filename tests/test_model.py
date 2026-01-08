@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from qmodem import GaussianHeteroscedasticMLP
+from qmodem import GaussianHeteroscedasticMLP, nll_loss
 
 _rng_key = jax.random.PRNGKey(0)
 
@@ -39,8 +39,46 @@ def test_gauss_het_mlp_forward(mock_gauss_het_mlp, x) -> None:
 
     It checks:
     - if the output is a jax array
+    - the output shape
     - if the variance output is always non-negative
     """
     preds = mock_gauss_het_mlp(x)
     assert isinstance(preds, jax.Array)
+    assert preds.shape == (x.shape[0], 2)
     assert jnp.all(preds[:, 1] >= 0.0)
+
+
+@pytest.mark.parametrize(
+    "batch",
+    [
+        (
+            jax.random.normal(shape=[10, 1], key=_rng_key),
+            jax.random.normal(
+                shape=[10],
+                key=_rng_key,
+            ),
+        ),
+        (
+            jax.random.normal(shape=[1, 1], key=_rng_key),
+            jax.random.normal(
+                shape=[1],
+                key=_rng_key,
+            ),
+        ),
+        (
+            jnp.zeros(shape=[10, 1]),
+            jnp.zeros(shape=[10]),
+        ),
+    ],
+)
+def test_nll_loss(mock_gauss_het_mlp, batch) -> None:
+    """Tests the negative log-likelihood loss. The test is parametrized for different
+    input types. Batch size generic, batch size = 1, all zeros.
+
+    It checks:
+    - if the output is a jax array
+    - if the output contains one element (shape=(1,))
+    """
+    loss_value = nll_loss(batch, mock_gauss_het_mlp)
+    assert isinstance(loss_value, jax.Array)
+    assert jnp.isscalar(loss_value)
