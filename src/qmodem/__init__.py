@@ -73,10 +73,25 @@ class GaussianHeteroscedasticMLP(nnx.Module):
         return jnp.array([x[:, 0], nnx.softplus(x[:, 1])])
 
 
-# def nll_loss(params: optax.Params, batch: jax.Array, model: nnx.Module) -> jax.Array:
-#     xs, labels = batch
-#     outputs = model(xs)
-#     means, stds = outputs[:, 0], outputs[:, 1]
+def nll_loss(batch: jax.Array, model: nnx.Module) -> jax.Array:
+    """Negative log-liklihood loss, based on a Gaussian predictive distribution of the model.
+    It implements Equation (31) in https://doi.org/10.1016/j.ymssp.2023.110796.
+
+    Args:
+        batch (jax.Array): batched input data.
+        model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
+
+    Returns:
+        jax.Array: loss value for the batch.
+    """
+    eps = 1e-6
+
+    xs, labels = batch
+    outputs = model(xs)
+    means, vars = outputs[:, 0], outputs[:, 1]
+    losses = 0.5 * jnp.log(vars) + 0.5 * jnp.square(labels - means) / vars + eps
+
+    return jnp.mean(losses)
 
 
 def main() -> None:
