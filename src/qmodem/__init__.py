@@ -1,6 +1,7 @@
 from typing import Sequence, SupportsIndex
 
 import jax
+import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
 from flax import nnx
@@ -31,7 +32,7 @@ class BatterySimulationSingleTimeSource:
         return self.discharge_voltage[record_key], self.ruls[record_key]
 
 
-class TwoOutputMLP(nnx.Module):
+class GaussianHeteroscedasticMLP(nnx.Module):
     def __init__(
         self,
         dimensions: Sequence[int],
@@ -39,9 +40,10 @@ class TwoOutputMLP(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> None:
-        """Multi-layer perceptron with two outputs. If the first output is intended as
-        the RUL's mean and the second one as the RUL's std, this MLP can model
-        heteroscedastic aleatoric uncertainty.
+        """Multi-layer perceptron. The first output is intended as the predicted mean
+        and the second one as the predicted variance, turned positive by a softplus
+        activation. The uncertainty is heteroscedastic, because the variance is also a
+        function of the input vector.
 
         Args:
             dimensions (Sequence[int]): The dimensions of the layers. The first
@@ -64,7 +66,14 @@ class TwoOutputMLP(nnx.Module):
         for layer in self.layers:
             x = self.activation(layer(x))
 
-        return self.output_layer(x)
+        x = self.output_layer(x)
+        return jnp.array([x[:, 0], nnx.softplus(x[:, 1])])
+
+
+# def nll_loss(params: optax.Params, batch: jax.Array, model: nnx.Module) -> jax.Array:
+#     xs, labels = batch
+#     outputs = model(xs)
+#     means, stds = outputs[:, 0], outputs[:, 1]
 
 
 def main() -> None:
