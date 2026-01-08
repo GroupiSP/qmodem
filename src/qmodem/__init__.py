@@ -55,6 +55,7 @@ class GaussianHeteroscedasticMLP(nnx.Module):
         """
         self.dim_in = dimensions[0]
         self.n_hid_layers = len(dimensions) - 1
+        self.act_fn = act_fn
 
         self.layers = nnx.List(
             [
@@ -66,7 +67,7 @@ class GaussianHeteroscedasticMLP(nnx.Module):
 
     def __call__(self, x: jax.Array) -> jax.Array:
         for layer in self.layers:
-            x = self.activation(layer(x))
+            x = self.act_fn(layer(x))
 
         x = self.output_layer(x)
         return jnp.array([x[:, 0], nnx.softplus(x[:, 1])])

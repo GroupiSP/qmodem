@@ -1,7 +1,11 @@
+import jax
+import jax.numpy as jnp
 import pytest
 from flax import nnx
 
 from qmodem import GaussianHeteroscedasticMLP
+
+_rng_key = jax.random.PRNGKey(0)
 
 
 @pytest.fixture
@@ -13,9 +17,30 @@ def test_gauss_het_mlp_init(mock_gauss_het_mlp) -> None:
     """Tests the __init__ of the GaussianHeteroscedasticMLP.
 
     It checks:
-    - If the number of linear layers is the expected one.
+    - if the number of linear layers is the expected one.
     """
     num_linear_layers = sum(
         isinstance(layer, nnx.Linear) for _, layer in mock_gauss_het_mlp.iter_modules()
     )
     assert num_linear_layers == mock_gauss_het_mlp.n_hid_layers + 1
+
+
+@pytest.mark.parametrize(
+    "x",
+    [
+        jax.random.normal(shape=[10, 1], key=_rng_key),
+        jax.random.normal(shape=[1, 1], key=_rng_key),
+        jnp.zeros(shape=[10, 1]),
+    ],
+)
+def test_gauss_het_mlp_forward(mock_gauss_het_mlp, x) -> None:
+    """Tests the __call__ of the GaussianHeteroscedasticMLP. The test is parametrized
+    for different input types. Batch size generic, batch size = 1, all zeros.
+
+    It checks:
+    - if the output is a jax array
+    - if the variance output is always non-negative
+    """
+    preds = mock_gauss_het_mlp(x)
+    assert isinstance(preds, jax.Array)
+    assert jnp.all(preds[:, 1] >= 0.0)
