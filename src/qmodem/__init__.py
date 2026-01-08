@@ -38,7 +38,7 @@ class TwoOutputMLP(nnx.Module):
         act_fn: nnx.Module = nnx.gelu,
         *,
         rngs: nnx.Rngs,
-    ):
+    ) -> None:
         """Multi-layer perceptron with two outputs. If the first output is intended as
         the RUL's mean and the second one as the RUL's std, this MLP can model
         heteroscedastic aleatoric uncertainty.
