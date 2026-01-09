@@ -39,7 +39,7 @@ class BatterySimulationSource:
 
     def __len__(self) -> int:
         """Number of records in the dataset."""
-        return len(self.discharge_voltage)
+        return len(self.ruls)
 
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""

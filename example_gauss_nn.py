@@ -30,7 +30,7 @@ def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
     )
 
     source = BatterySimulationSource(sim)
-    sampler = IndexSampler(num_records=len(source), shuffle=True, seed=0)
+    sampler = IndexSampler(num_records=len(source), num_epochs=1, shuffle=True, seed=0)
     return DataLoader(
         data_source=source,
         sampler=sampler,
@@ -41,13 +41,13 @@ def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
 
 def main() -> None:
     LR = 1e-2
-    N_EPOCHS = 1_000
-    PRINT_EVERY = 50
+    N_EPOCHS = 100
+    PRINT_EVERY = 5
 
     rngs = nnx.Rngs(0)
 
     # Run iid simulations for training and testing.
-    dataloader_train = quickstart_dataloader(N_simu=40, batch_size=5)
+    dataloader_train = quickstart_dataloader(N_simu=5, batch_size=50)
     # dataloader_test = quickstart_dataloader(N_simu=10)
 
     # Define the model.
