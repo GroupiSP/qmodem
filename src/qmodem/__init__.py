@@ -66,25 +66,28 @@ class GaussianHeteroscedasticMLP(nnx.Module):
                 for d_i, d_j in zip(dimensions[:-1], dimensions[1:])
             ]
         )
-        self.output_layer = nnx.Linear(dimensions[-1], 2, rngs=rngs)
+
+        # the output layer
+        self.layers.append(nnx.Linear(dimensions[-1], 2, rngs=rngs))
 
     def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
-        for layer in self.layers:
+        for layer in self.layers[:-1]:
             x = self.act_fn(layer(x))
 
-        x = self.output_layer(x)
+        # apply the output layer w/o activation function
+        x = self.layers[-1](x)
         return jnp.stack([x[:, 0], nnx.softplus(x[:, 1])], axis=-1)
 
 
 def nll_loss(
-    batch: jax.Array, model: nnx.Module, rngs: Optional[nnx.Rngs] = None
+    model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
 ) -> jax.Array:
     """Negative log-liklihood loss, based on a Gaussian predictive distribution of the model.
     It implements Equation (31) in https://doi.org/10.1016/j.ymssp.2023.110796.
 
     Args:
-        batch (jax.Array): batched input data.
         model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
+        batch (jax.Array): batched input data.
         rngs (nnx.Rngs): passed to the forward method of the model.
 
     Returns:

@@ -79,6 +79,6 @@ def test_nll_loss(mock_gauss_het_mlp, batch) -> None:
     - if the output is a jax array
     - if the output contains one element (shape=(1,))
     """
-    loss_value = nll_loss(batch, mock_gauss_het_mlp)
+    loss_value = nll_loss(mock_gauss_het_mlp, batch)
     assert isinstance(loss_value, jax.Array)
     assert jnp.isscalar(loss_value)
