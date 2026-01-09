@@ -9,7 +9,7 @@ from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
 from qmodem import (
-    BatterySimulationSingleTimeSource,
+    BatterySimulationSource,
     GaussianHeteroscedasticMLP,
     nll_loss,
 )
@@ -29,7 +29,7 @@ def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
         sim_config["model_config"],
     )
 
-    source = BatterySimulationSingleTimeSource(sim)
+    source = BatterySimulationSource(sim)
     sampler = IndexSampler(num_records=len(source), shuffle=True, seed=0)
     return DataLoader(
         data_source=source,

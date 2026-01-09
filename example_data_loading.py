@@ -5,7 +5,7 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
-from qmodem import BatterySimulationSingleTimeSource
+from qmodem import BatterySimulationSource
 
 
 def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
@@ -22,7 +22,7 @@ def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
         sim_config["model_config"],
     )
 
-    source = BatterySimulationSingleTimeSource(sim)
+    source = BatterySimulationSource(sim)
     sampler = IndexSampler(num_records=len(source), shuffle=True, seed=0)
     return DataLoader(
         data_source=source,
@@ -34,8 +34,8 @@ def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
 
 def main() -> None:
     # Run iid simulations for training and testing
-    dataloader_train = quickstart_dataloader(N_simu=40, batch_size=5)
-    dataloader_test = quickstart_dataloader(N_simu=10)
+    dataloader_train = quickstart_dataloader(N_simu=5, batch_size=5)
+    dataloader_test = quickstart_dataloader(N_simu=1, batch_size=5)
 
     print(next(iter(dataloader_train)))
     print(next(iter(dataloader_test)))

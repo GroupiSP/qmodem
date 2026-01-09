@@ -7,7 +7,7 @@ import numpy as np
 from flax import nnx
 
 
-class BatterySimulationSingleTimeSource:
+class BatterySimulationSource:
     def __init__(self, simulator: les.SimulatorSimple | les.SimulatorComplete) -> None:
         """Runs and access to battery simulation data.
 
@@ -19,9 +19,25 @@ class BatterySimulationSingleTimeSource:
         """
         simulator.simulate()
 
-        self.discharge_voltage = simulator.v_memo.ravel()
-        self.times = np.arange(len(self.discharge_voltage)) * simulator.batt.dt
-        self.ruls = self.times[-1] - self.times
+        # Transpose for convenience. Shape=(N_simu, N_t).
+        discharge_voltage_per_sim: np.ndarray = simulator.v_memo.T
+        N_t = discharge_voltage_per_sim.shape[1]
+
+        self.discharge_voltage = jnp.array(
+            discharge_voltage_per_sim.flatten().reshape(-1, 1)
+        )
+        self.ruls = jnp.empty(shape=(simulator.N_simu * N_t))
+
+        for i in range(simulator.N_simu):
+            self.ruls = self.ruls.at[
+                i * N_t : (i + 1) * N_t
+            ].set(
+                np.clip(
+                    simulator.t_eods[i] - np.arange(N_t) * simulator.batt.dt,
+                    a_min=0.0,
+                    a_max=None,
+                )
+            )  # clipping ensures that the failed particles have RUL=0. after their time of failure
 
     def __len__(self) -> int:
         """Number of records in the dataset."""
@@ -29,10 +45,7 @@ class BatterySimulationSingleTimeSource:
 
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""
-        return (
-            jnp.array([self.discharge_voltage[record_key]]),
-            self.ruls[record_key],
-        )
+        return self.discharge_voltage[record_key], self.ruls[record_key]
 
 
 class GaussianHeteroscedasticMLP(nnx.Module):
