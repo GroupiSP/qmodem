@@ -26,18 +26,16 @@ class BatterySimulationSource:
         self.discharge_voltage = jnp.array(
             discharge_voltage_per_sim.flatten().reshape(-1, 1)
         )
-        self.ruls = jnp.empty(shape=(simulator.N_simu * N_t))
+        ruls = np.empty(shape=(simulator.N_simu * N_t))
 
         for i in range(simulator.N_simu):
-            self.ruls = self.ruls.at[
-                i * N_t : (i + 1) * N_t
-            ].set(
-                np.clip(
-                    simulator.t_eods[i] - np.arange(N_t) * simulator.batt.dt,
-                    a_min=0.0,
-                    a_max=None,
-                )
+            ruls[i * N_t : (i + 1) * N_t] = np.clip(
+                simulator.t_eods[i] - np.arange(N_t) * simulator.batt.dt,
+                a_min=0.0,
+                a_max=None,
             )  # clipping ensures that the failed particles have RUL=0. after their time of failure
+
+        self.ruls = jnp.array(ruls)
 
     def __len__(self) -> int:
         """Number of records in the dataset."""
