@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import jax
 import lib_eod_simulation as les
@@ -14,9 +15,20 @@ from qmodem import (
     nll_loss,
 )
 
+SIM_CONFIG_FILE_PATH = Path(__file__).resolve().parent / "battery_sim_config.json"
 
-def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
-    with open("./battery_sim_config.json") as fp:
+
+def make_battery_datasource(N_simu: int = 1) -> BatterySimulationSource:
+    """Makes the Grain data source for the battery simulator. Assumes a constant current
+    policy.
+
+    Args:
+        N_simu (int, optional): Number of MC simulations of the battery discharge. Defaults to 1.
+
+    Returns:
+        BatterySimulationSource: the Grain battery data-source.
+    """
+    with open(SIM_CONFIG_FILE_PATH) as fp:
         sim_config = json.load(fp)
 
     I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])
@@ -29,33 +41,33 @@ def quickstart_dataloader(N_simu: int = 1, batch_size: int = 10) -> DataLoader:
         sim_config["model_config"],
     )
 
-    source = BatterySimulationSource(sim)
-    sampler = IndexSampler(num_records=len(source), num_epochs=1, shuffle=True, seed=0)
-    return DataLoader(
-        data_source=source,
-        sampler=sampler,
-        operations=[Batch(batch_size=batch_size)],
-        worker_count=0,
-    )
+    return BatterySimulationSource(sim)
 
 
 def main() -> None:
     LR = 1e-2
     N_EPOCHS = 100
     PRINT_EVERY = 5
+    N_SIMU_TRAIN_DS = 10
+    # N_SIMU_TEST_DS = 5
+    BATCH_SIZE = 50
 
     rngs = nnx.Rngs(0)
 
     # Run iid simulations for training and testing.
-    dataloader_train = quickstart_dataloader(N_simu=5, batch_size=50)
-    # dataloader_test = quickstart_dataloader(N_simu=10)
+    ds_train = make_battery_datasource(N_simu=N_SIMU_TRAIN_DS)
+    sampler_train = IndexSampler(
+        num_records=len(ds_train), num_epochs=1, shuffle=True, seed=0
+    )
+    dataloader_train = DataLoader(
+        data_source=ds_train,
+        sampler=sampler_train,
+        operations=[Batch(batch_size=BATCH_SIZE)],
+        worker_count=0,
+    )
 
     # Define the model.
     model = GaussianHeteroscedasticMLP(dimensions=[1, 30, 30, 30, 30], rngs=rngs)
-
-    # Run the model on a batch.
-    # batch = next(iter(dataloader_train))
-    # print(model(batch[0]))
 
     # Define the optimizer.
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=LR), wrt=nnx.Param)
