@@ -1,4 +1,5 @@
 import jax
+import matplotlib.pyplot as plt
 import optax
 from flax import nnx
 from grain import DataLoader
@@ -20,7 +21,7 @@ def main() -> None:
 
     # Run iid simulations for training and testing.
     _, ds_train = make_battery_data(N_simu=N_SIMU_TRAIN_DS)
-    _, ds_test = make_battery_data(N_simu=N_SIMU_TEST_DS)
+    sim_test, ds_test = make_battery_data(N_simu=N_SIMU_TEST_DS)
 
     sampler_train = IndexSampler(
         num_records=len(ds_train), num_epochs=1, shuffle=True, seed=0
@@ -74,6 +75,37 @@ def main() -> None:
             print(
                 f"Epoch: {epoch:3d}, train loss: {train_ds_loss:.4f}, test loss: {test_ds_loss:.4f}"
             )
+
+    # Plot RUL
+    color = plt.cm.rainbow([0.0, 1.0])
+    plt.figure()
+
+    t_eod_mean, t_eod_min, t_eod_max = (
+        sim_test.t_eod_stats["mean"],
+        sim_test.t_eod_stats["min"],
+        sim_test.t_eod_stats["max"],
+    )
+    plt.plot(
+        [0.0, t_eod_mean],
+        [t_eod_mean, 0.0],
+        color=color[0],
+        label="True",
+        alpha=0.4,
+    )
+    plt.fill_between(
+        [0.0, t_eod_max],
+        [t_eod_max, 0.0],
+        [t_eod_min, t_eod_min - t_eod_max],
+        alpha=0.2,
+        color=color[0],
+    )
+    plt.ylim((0.0, t_eod_max * 1.05))
+
+    plt.legend()
+    plt.grid()
+    plt.xlabel("Time [s]")
+    plt.ylabel("RUL")
+    plt.show()
 
 
 if __name__ == "__main__":
