@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Optional, Sequence, SupportsIndex
 
 import jax
@@ -5,6 +7,10 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
 from flax import nnx
+
+_SIM_CONFIG_FILE_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "battery_sim_config.json"
+)
 
 
 class BatterySimulationSource:
@@ -44,6 +50,32 @@ class BatterySimulationSource:
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""
         return self.discharge_voltage[record_key], self.ruls[record_key]
+
+
+def make_battery_datasource(N_simu: int = 1) -> BatterySimulationSource:
+    """Makes the Grain data source for the battery simulator. Assumes a constant current
+    policy.
+
+    Args:
+        N_simu (int, optional): Number of MC simulations of the battery discharge. Defaults to 1.
+
+    Returns:
+        BatterySimulationSource: the Grain battery data-source.
+    """
+    with open(_SIM_CONFIG_FILE_PATH) as fp:
+        sim_config = json.load(fp)
+
+    I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])
+
+    sim = les.SimulatorSimple(
+        N_simu,
+        sim_config["v_cut"],
+        sim_config["SoC"],
+        I_discharge,
+        sim_config["model_config"],
+    )
+
+    return BatterySimulationSource(sim)
 
 
 class GaussianHeteroscedasticMLP(nnx.Module):

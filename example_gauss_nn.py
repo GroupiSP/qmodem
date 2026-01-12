@@ -1,47 +1,11 @@
-import json
-from pathlib import Path
-
 import jax
-import lib_eod_simulation as les
 import optax
 from flax import nnx
 from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
-from qmodem import (
-    BatterySimulationSource,
-    GaussianHeteroscedasticMLP,
-    nll_loss,
-)
-
-SIM_CONFIG_FILE_PATH = Path(__file__).resolve().parent / "battery_sim_config.json"
-
-
-def make_battery_datasource(N_simu: int = 1) -> BatterySimulationSource:
-    """Makes the Grain data source for the battery simulator. Assumes a constant current
-    policy.
-
-    Args:
-        N_simu (int, optional): Number of MC simulations of the battery discharge. Defaults to 1.
-
-    Returns:
-        BatterySimulationSource: the Grain battery data-source.
-    """
-    with open(SIM_CONFIG_FILE_PATH) as fp:
-        sim_config = json.load(fp)
-
-    I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])
-
-    sim = les.SimulatorSimple(
-        N_simu,
-        sim_config["v_cut"],
-        sim_config["SoC"],
-        I_discharge,
-        sim_config["model_config"],
-    )
-
-    return BatterySimulationSource(sim)
+from qmodem import GaussianHeteroscedasticMLP, make_battery_datasource, nll_loss
 
 
 def main() -> None:
