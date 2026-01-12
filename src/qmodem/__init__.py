@@ -52,7 +52,7 @@ class BatterySimulationSource:
         return self.discharge_voltage[record_key], self.ruls[record_key]
 
 
-def make_battery_datasource(N_simu: int = 1) -> BatterySimulationSource:
+def make_battery_data(N_simu: int = 1) -> BatterySimulationSource:
     """Makes the Grain data source for the battery simulator. Assumes a constant current
     policy.
 
@@ -75,7 +75,7 @@ def make_battery_datasource(N_simu: int = 1) -> BatterySimulationSource:
         sim_config["model_config"],
     )
 
-    return BatterySimulationSource(sim)
+    return sim, BatterySimulationSource(sim)
 
 
 class GaussianHeteroscedasticMLP(nnx.Module):

@@ -5,7 +5,7 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
-from qmodem import GaussianHeteroscedasticMLP, make_battery_datasource, nll_loss
+from qmodem import GaussianHeteroscedasticMLP, make_battery_data, nll_loss
 
 
 def main() -> None:
@@ -19,8 +19,8 @@ def main() -> None:
     rngs = nnx.Rngs(0)
 
     # Run iid simulations for training and testing.
-    ds_train = make_battery_datasource(N_simu=N_SIMU_TRAIN_DS)
-    ds_test = make_battery_datasource(N_simu=N_SIMU_TEST_DS)
+    _, ds_train = make_battery_data(N_simu=N_SIMU_TRAIN_DS)
+    _, ds_test = make_battery_data(N_simu=N_SIMU_TEST_DS)
 
     sampler_train = IndexSampler(
         num_records=len(ds_train), num_epochs=1, shuffle=True, seed=0
