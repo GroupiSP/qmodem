@@ -10,8 +10,8 @@
             "alpha": 0.16945463,
             "beta": 2.34538224
         },
-        "omega_std": 0.0,
-        "eta_std": 0.0
+        "omega_std": 0.001,
+        "eta_std": 0.01
     },
     "v_cut": 2.5,
     "SoC": 1.0,
