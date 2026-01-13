@@ -19,6 +19,17 @@ class GaussianLayer(nnx.Module):
         return jnp.concat([mu, var_positive], axis=1)
 
 
+class ResNetLayer(nnx.Module):
+    def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
+        self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear_2 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+
+    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+        x = self.linear_1(x)
+        x1 = self.linear_2(x)
+        return x1 + x
+
+
 class GaussianHeteroscedasticMLP(nnx.Module):
     def __init__(
         self,
