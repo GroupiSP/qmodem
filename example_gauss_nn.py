@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import optax
 from flax import nnx
@@ -34,7 +35,9 @@ def main() -> None:
     )
 
     # Define the model.
-    model = GaussianHeteroscedasticMLP(dimensions=[1, 30, 30, 30, 30], rngs=rngs)
+    model = GaussianHeteroscedasticMLP(
+        dimensions=[1, 100, 50, 50, 50, 50, 10], rngs=rngs
+    )
 
     # Define the optimizer.
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=LR), wrt=nnx.Param)
@@ -89,7 +92,7 @@ def main() -> None:
         [0.0, t_eod_mean],
         [t_eod_mean, 0.0],
         color=color[0],
-        label="True",
+        label="True RUL",
         alpha=0.4,
     )
     plt.fill_between(
@@ -99,6 +102,15 @@ def main() -> None:
         alpha=0.2,
         color=color[0],
     )
+
+    model.eval()
+    plt.plot(
+        model(jnp.array(sim_test.v_mean).reshape(-1, 1), rngs=rngs)[:, 0],
+        color=color[1],
+        label="Mean Predicted RUL",
+        alpha=0.4,
+    )
+
     plt.ylim((0.0, t_eod_max * 1.05))
 
     plt.legend()
