@@ -30,7 +30,7 @@ class ResNetLayer(nnx.Module):
         return x1 + x
 
 
-class GaussianHeteroscedasticMLP(nnx.Module):
+class HeteroscedasticMLP(nnx.Module):
     def __init__(
         self,
         dimensions: Sequence[int],

@@ -7,7 +7,7 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
-from qmodem import GaussianHeteroscedasticMLP, make_battery_data, nll_loss
+from qmodem import HeteroscedasticMLP, make_battery_data, nll_loss
 
 
 def main() -> None:
@@ -35,9 +35,7 @@ def main() -> None:
     )
 
     # Define the model.
-    model = GaussianHeteroscedasticMLP(
-        dimensions=[1, 100, 50, 50, 50, 50, 10], rngs=rngs
-    )
+    model = HeteroscedasticMLP(dimensions=[1, 100, 50, 50, 50, 50, 10], rngs=rngs)
 
     # Define the optimizer.
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=LR), wrt=nnx.Param)
@@ -45,7 +43,7 @@ def main() -> None:
     # Define (jitted) training step and test step functions.
     @nnx.jit
     def train_step(
-        model: GaussianHeteroscedasticMLP,
+        model: HeteroscedasticMLP,
         optimizer: nnx.Optimizer,
         rngs: nnx.Rngs,
         batch: tuple[jax.Array],
@@ -57,7 +55,7 @@ def main() -> None:
 
     @nnx.jit
     def eval_step(
-        model: GaussianHeteroscedasticMLP, rngs: nnx.Rngs, dataset: tuple[jax.Array]
+        model: HeteroscedasticMLP, rngs: nnx.Rngs, dataset: tuple[jax.Array]
     ) -> jax.Array:
         """Evaluates the model over the entire data-source."""
         return nll_loss(model, batch=dataset, rngs=rngs)
