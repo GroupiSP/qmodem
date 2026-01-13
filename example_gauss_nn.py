@@ -7,12 +7,12 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
-from qmodem import HeteroscedasticMLP, make_battery_data, nll_loss
+from qmodem import HeteroscedasticResNet, make_battery_data, nll_loss
 
 
 def main() -> None:
     LR = 1e-2
-    N_EPOCHS = 300
+    N_EPOCHS = 50
     PRINT_EVERY = 10
     N_SIMU_TRAIN_DS = 10
     N_SIMU_TEST_DS = 5
@@ -35,7 +35,7 @@ def main() -> None:
     )
 
     # Define the model.
-    model = HeteroscedasticMLP(dimensions=[1, 100, 50, 50, 50, 50, 10], rngs=rngs)
+    model = HeteroscedasticResNet(rngs=rngs)
 
     # Define the optimizer.
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=LR), wrt=nnx.Param)
@@ -43,7 +43,7 @@ def main() -> None:
     # Define (jitted) training step and test step functions.
     @nnx.jit
     def train_step(
-        model: HeteroscedasticMLP,
+        model: HeteroscedasticResNet,
         optimizer: nnx.Optimizer,
         rngs: nnx.Rngs,
         batch: tuple[jax.Array],
@@ -55,7 +55,7 @@ def main() -> None:
 
     @nnx.jit
     def eval_step(
-        model: HeteroscedasticMLP, rngs: nnx.Rngs, dataset: tuple[jax.Array]
+        model: HeteroscedasticResNet, rngs: nnx.Rngs, dataset: tuple[jax.Array]
     ) -> jax.Array:
         """Evaluates the model over the entire data-source."""
         return nll_loss(model, batch=dataset, rngs=rngs)
@@ -102,11 +102,21 @@ def main() -> None:
     )
 
     model.eval()
+    predictions = model(jnp.array(sim_test.v_mean).reshape(-1, 1), rngs=rngs)
+    means_pred, vars_pred = predictions[:, 0], predictions[:, 1]
     plt.plot(
-        model(jnp.array(sim_test.v_mean).reshape(-1, 1), rngs=rngs)[:, 0],
+        jnp.arange(len(sim_test.v_mean)) * sim_test.batt.dt,
+        means_pred,
         color=color[1],
         label="Mean Predicted RUL",
         alpha=0.4,
+    )
+    plt.fill_between(
+        jnp.arange(len(sim_test.v_mean)) * sim_test.batt.dt,
+        means_pred - jnp.sqrt(vars_pred) * 1.96,
+        means_pred + jnp.sqrt(vars_pred) * 1.96,
+        alpha=0.2,
+        color=color[1],
     )
 
     plt.ylim((0.0, t_eod_max * 1.05))
