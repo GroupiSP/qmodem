@@ -22,7 +22,8 @@ def test_gauss_het_mlp_init(mock_gauss_het_mlp) -> None:
     num_linear_layers = sum(
         isinstance(layer, nnx.Linear) for _, layer in mock_gauss_het_mlp.iter_modules()
     )
-    assert num_linear_layers == mock_gauss_het_mlp.n_hid_layers + 1
+    # The Gaussian layer contains 2 linear layers.
+    assert num_linear_layers == mock_gauss_het_mlp.n_hid_layers + 2
 
 
 @pytest.mark.parametrize(

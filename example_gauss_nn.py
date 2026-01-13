@@ -12,7 +12,7 @@ from qmodem import GaussianHeteroscedasticMLP, make_battery_data, nll_loss
 
 def main() -> None:
     LR = 1e-2
-    N_EPOCHS = 100
+    N_EPOCHS = 300
     PRINT_EVERY = 10
     N_SIMU_TRAIN_DS = 10
     N_SIMU_TEST_DS = 5

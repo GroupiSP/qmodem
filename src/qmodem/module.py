@@ -7,6 +7,18 @@ import jax.numpy as jnp
 from flax import nnx
 
 
+class GaussianLayer(nnx.Module):
+    def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
+        self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear_2 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+
+    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+        mu = self.linear_1(x)
+        var = self.linear_2(x)
+        var_positive = nnx.softplus(var)
+        return jnp.concat([mu, var_positive], axis=1)
+
+
 class GaussianHeteroscedasticMLP(nnx.Module):
     def __init__(
         self,
@@ -39,16 +51,17 @@ class GaussianHeteroscedasticMLP(nnx.Module):
             ]
         )
 
-        # the output layer
-        self.layers.append(nnx.Linear(dimensions[-1], 2, rngs=rngs))
+        # Final layer is a Gaussian one (output=[mu, softplus(var)])
+        self.layers.append(
+            GaussianLayer(input_dim=dimensions[-1], output_dim=1, rngs=rngs)
+        )
 
     def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
         for layer in self.layers[:-1]:
             x = self.act_fn(layer(x))
 
-        # apply the output layer w/o activation function
-        x = self.layers[-1](x)
-        return jnp.stack([x[:, 0], nnx.softplus(x[:, 1])], axis=-1)
+        # Gaussian layer is applied w/o act function.
+        return self.layers[-1](x)
 
 
 def nll_loss(
