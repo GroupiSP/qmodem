@@ -20,13 +20,17 @@ class GaussianLayer(nnx.Module):
 
 
 class ResNetLayer(nnx.Module):
-    def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
+    def __init__(
+        self, input_dim: int, output_dim: int, act_fn: nnx.gelu, *, rngs: nnx.Rngs
+    ) -> None:
         self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear_2 = nnx.Linear(output_dim, output_dim, rngs=rngs)
+
+        self.act_fn = act_fn
 
     def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
-        x = self.linear_1(x)
-        x1 = self.linear_2(x)
+        x = self.act_fn(self.linear_1(x))
+        x1 = self.act_fn(self.linear_2(x))
         return x1 + x
 
 
@@ -73,6 +77,49 @@ class HeteroscedasticMLP(nnx.Module):
 
         # Gaussian layer is applied w/o act function.
         return self.layers[-1](x)
+
+
+class HeteroscedasticResNet(nnx.Module):
+    def __init__(
+        self,
+        dim_in: int = 1,
+        dim_out: int = 1,
+        dim_linear_start: int = 100,
+        dim_resnet_layers: int = 50,
+        num_resnet_layers: int = 2,
+        dim_linear_end: int = 10,
+        act_fn: nnx.Module = nnx.gelu,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.act_fn = act_fn
+
+        self.linear_start = nnx.Linear(dim_in, dim_linear_start, rngs=rngs)
+
+        resnet_ins = [dim_linear_start] + [
+            dim_resnet_layers for _ in range(num_resnet_layers - 1)
+        ]
+        resnet_outs = [dim_resnet_layers for _ in range(num_resnet_layers)]
+        self.resnets = nnx.List(
+            [
+                ResNetLayer(d_i, d_j, act_fn=act_fn, rngs=rngs)
+                for d_i, d_j in zip(resnet_ins, resnet_outs)
+            ]
+        )
+
+        self.linear_end = nnx.Linear(dim_resnet_layers, dim_linear_end, rngs=rngs)
+
+        self.gaussian = GaussianLayer(dim_linear_end, dim_out, rngs=rngs)
+
+    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+        x = self.act_fn(self.linear_start(x))
+
+        for resnet in self.resnets:
+            # incl. already activation function
+            x = resnet(x, rngs=rngs)
+
+        x = self.act_fn(self.linear_end(x))
+        return self.gaussian(x, rngs=rngs)
 
 
 def nll_loss(
