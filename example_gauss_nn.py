@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import optax
+import orbax.checkpoint as ocp
 from flax import nnx
 from grain import DataLoader
 from grain.samplers import IndexSampler
@@ -76,6 +79,13 @@ def main() -> None:
             print(
                 f"Epoch: {epoch:3d}, train loss: {train_ds_loss:.4f}, test loss: {test_ds_loss:.4f}"
             )
+
+    # Checkpoint the trained model
+    ckpt_dir = ocp.test_utils.erase_and_create_empty(Path().cwd() / "checkpoints/")
+    checkpointer = ocp.StandardCheckpointer()
+
+    _, model_state = nnx.split(model)
+    checkpointer.save(ckpt_dir / "trained_state", model_state)
 
     # Plot RUL
     color = plt.cm.rainbow([0.0, 1.0])
