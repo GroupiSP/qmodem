@@ -1,8 +1,6 @@
 from pathlib import Path
 
 import jax
-import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import optax
 import orbax.checkpoint as ocp
 from flax import nnx
@@ -86,56 +84,6 @@ def main() -> None:
 
     _, model_state = nnx.split(model)
     checkpointer.save(ckpt_dir / "trained_state", model_state)
-
-    # Plot RUL
-    color = plt.cm.rainbow([0.0, 1.0])
-    plt.figure()
-
-    t_eod_mean, t_eod_min, t_eod_max = (
-        sim_test.t_eod_stats["mean"],
-        sim_test.t_eod_stats["min"],
-        sim_test.t_eod_stats["max"],
-    )
-    plt.plot(
-        [0.0, t_eod_mean],
-        [t_eod_mean, 0.0],
-        color=color[0],
-        label="True RUL",
-        alpha=0.4,
-    )
-    plt.fill_between(
-        [0.0, t_eod_max],
-        [t_eod_max, 0.0],
-        [t_eod_min, t_eod_min - t_eod_max],
-        alpha=0.2,
-        color=color[0],
-    )
-
-    model.eval()
-    predictions = model(jnp.array(sim_test.v_mean).reshape(-1, 1), rngs=rngs)
-    means_pred, vars_pred = predictions[:, 0], predictions[:, 1]
-    plt.plot(
-        jnp.arange(len(sim_test.v_mean)) * sim_test.batt.dt,
-        means_pred,
-        color=color[1],
-        label="Mean Predicted RUL",
-        alpha=0.4,
-    )
-    plt.fill_between(
-        jnp.arange(len(sim_test.v_mean)) * sim_test.batt.dt,
-        means_pred - jnp.sqrt(vars_pred) * 1.96,
-        means_pred + jnp.sqrt(vars_pred) * 1.96,
-        alpha=0.2,
-        color=color[1],
-    )
-
-    plt.ylim((0.0, t_eod_max * 1.05))
-
-    plt.legend()
-    plt.grid()
-    plt.xlabel("Time [s]")
-    plt.ylabel("RUL")
-    plt.show()
 
 
 if __name__ == "__main__":
