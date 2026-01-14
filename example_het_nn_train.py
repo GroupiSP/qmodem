@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import jax
@@ -78,12 +79,14 @@ def main() -> None:
                 f"Epoch: {epoch:3d}, train loss: {train_ds_loss:.4f}, test loss: {test_ds_loss:.4f}"
             )
 
-    # Checkpoint the trained model
+    # Checkpoint the trained model.
     ckpt_dir = ocp.test_utils.erase_and_create_empty(Path().cwd() / "checkpoints/")
     checkpointer = ocp.StandardCheckpointer()
 
     _, model_state = nnx.split(model)
     checkpointer.save(ckpt_dir / "trained_state", model_state)
+
+    time.sleep(0.5)  # prevent shutdown to break checkpointing.
 
 
 if __name__ == "__main__":
