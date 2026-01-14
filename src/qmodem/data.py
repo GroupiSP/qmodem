@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
 
-_SIM_CONFIG_FILE_PATH = (
+SIM_CONFIG_FILE_PATH = (
     Path(__file__).resolve().parent.parent.parent / "battery_sim_config.json"
 )
 
@@ -65,7 +65,7 @@ def make_battery_data(
     Returns:
         BatterySimulationSource: the Grain battery data-source.
     """
-    with open(_SIM_CONFIG_FILE_PATH) as fp:
+    with open(SIM_CONFIG_FILE_PATH) as fp:
         sim_config = json.load(fp)
 
     I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])
