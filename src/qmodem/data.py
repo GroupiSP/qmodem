@@ -9,9 +9,7 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
 
-SIM_CONFIG_FILE_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "battery_sim_config.json"
-)
+BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
 
 
 class BatterySimulationSource:
@@ -37,7 +35,7 @@ class BatterySimulationSource:
 
         for i in range(simulator.N_simu):
             ruls[i * N_t : (i + 1) * N_t] = np.clip(
-                simulator.t_eods[i] - np.arange(N_t) * simulator.batt.dt,
+                simulator.t_eods[i] - np.arange(N_t) * simulator.dt,
                 a_min=0.0,
                 a_max=None,
             )  # clipping ensures that the failed particles have RUL=0. after their time of failure
@@ -65,7 +63,7 @@ def make_battery_data(
     Returns:
         BatterySimulationSource: the Grain battery data-source.
     """
-    with open(SIM_CONFIG_FILE_PATH) as fp:
+    with open(BATT_CONFIG_PATH) as fp:
         sim_config = json.load(fp)
 
     I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])

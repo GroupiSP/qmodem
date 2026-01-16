@@ -1,5 +1,5 @@
 from .data import (  # noqa: F401
-    SIM_CONFIG_FILE_PATH,
+    BATT_CONFIG_PATH,
     BatterySimulationSource,
     make_battery_data,
 )

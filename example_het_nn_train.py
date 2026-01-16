@@ -1,7 +1,9 @@
+import json
 import time
 from pathlib import Path
 
 import jax
+import lib_eod_simulation as les
 import optax
 import orbax.checkpoint as ocp
 from flax import nnx
@@ -9,23 +11,66 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
-from qmodem import HeteroscedasticResNet, make_battery_data, nll_loss
+from qmodem import (
+    BATT_CONFIG_PATH,
+    BatterySimulationSource,
+    HeteroscedasticResNet,
+    nll_loss,
+)
 
 
 def main() -> None:
+    rngs = nnx.Rngs(0)
+
+    # Training parameters.
     LR = 1e-2
     N_EPOCHS = 50
     PRINT_EVERY = 10
+    BATCH_SIZE = 50
+    DO_CHECKPOINT = False
+
+    # Battery simulator parameters.
     N_SIMU_TRAIN_DS = 10
     N_SIMU_TEST_DS = 5
-    BATCH_SIZE = 50
+    CURRENT_AMPLITUDE = -2.8 * 0.75
+    V_CUT = 2.5
+    SOC_0 = 1.0
+    DT = 10.0
+    OMEGA_STD = 1e-3
+    ETA_STD = 1e-2
 
-    rngs = nnx.Rngs(0)
+    # Create battery model.
+    with open(BATT_CONFIG_PATH) as fp:
+        battery_config = json.load(fp)
 
-    # Run iid simulations for training and testing.
-    _, ds_train = make_battery_data(N_simu=N_SIMU_TRAIN_DS)
-    sim_test, ds_test = make_battery_data(N_simu=N_SIMU_TEST_DS)
+    battery = les.BatteryModel(battery_config)
 
+    # Create a current discharge policy.
+    discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
+
+    # Create the battery simulators (1 for train and 1 for validation).
+    simulator_train_config = {
+        "N_simu": N_SIMU_TRAIN_DS,
+        "v_cut": V_CUT,
+        "SoC_0": SOC_0,
+        "dt": DT,
+        "omega_std": OMEGA_STD,
+        "eta_std": ETA_STD,
+        "I": discharge_policy,
+        "battery": battery,
+    }
+
+    simulator_test_config = simulator_train_config.copy()
+    simulator_test_config["N_simu"] = N_SIMU_TEST_DS
+
+    sim_train = les.SimulatorSimple(simulator_train_config)
+    sim_test = les.SimulatorSimple(simulator_train_config)
+
+    # Use the simulators to create the data sources.
+    ds_train = BatterySimulationSource(sim_train)
+    ds_test = BatterySimulationSource(sim_test)
+
+    # Prepare the train dataloader.
     sampler_train = IndexSampler(
         num_records=len(ds_train), num_epochs=1, shuffle=True, seed=0
     )
@@ -80,13 +125,14 @@ def main() -> None:
             )
 
     # Checkpoint the trained model.
-    ckpt_dir = ocp.test_utils.erase_and_create_empty(Path().cwd() / "checkpoints/")
-    checkpointer = ocp.StandardCheckpointer()
+    if DO_CHECKPOINT:
+        ckpt_dir = ocp.test_utils.erase_and_create_empty(Path().cwd() / "checkpoints/")
+        checkpointer = ocp.StandardCheckpointer()
 
-    _, model_state = nnx.split(model)
-    checkpointer.save(ckpt_dir / "trained_state", model_state)
+        _, model_state = nnx.split(model)
+        checkpointer.save(ckpt_dir / "trained_state", model_state)
 
-    time.sleep(0.5)  # prevent shutdown to break checkpointing.
+        time.sleep(0.5)  # prevent shutdown to break checkpointing.
 
 
 if __name__ == "__main__":
