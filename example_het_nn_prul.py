@@ -30,7 +30,7 @@ def main() -> None:
     # Create a current discharge policy.
     discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
 
-    # Create the battery simulators (1 for train and 1 for validation).
+    # Create the battery simulator.
     simulator_config = {
         "N_simu": N_SIMU,
         "v_cut": V_CUT,
