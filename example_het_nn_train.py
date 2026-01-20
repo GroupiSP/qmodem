@@ -126,7 +126,9 @@ def main() -> None:
 
     # Checkpoint the trained model.
     if DO_CHECKPOINT:
-        ckpt_dir = ocp.test_utils.erase_and_create_empty(Path().cwd() / "checkpoints/")
+        ckpt_dir = ocp.test_utils.erase_and_create_empty(
+            Path().cwd() / "checkpoints/het_resnet/"
+        )
         checkpointer = ocp.StandardCheckpointer()
 
         _, model_state = nnx.split(model)
