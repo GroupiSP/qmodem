@@ -122,6 +122,54 @@ class HeteroscedasticResNet(nnx.Module):
         return self.gaussian(x, rngs=rngs)
 
 
+class DropoutResNet(nnx.Module):
+    def __init__(
+        self,
+        dim_in: int = 1,
+        dim_out: int = 1,
+        dim_linear_start: int = 100,
+        dim_resnet_layers: int = 50,
+        num_resnet_layers: int = 2,
+        act_fn: nnx.Module = nnx.gelu,
+        dropout_rate: float = 0.1,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.act_fn = act_fn
+
+        self.linear_start = nnx.Linear(dim_in, dim_linear_start, rngs=rngs)
+        self.dropout_start = nnx.Dropout(rate=dropout_rate)
+
+        resnet_ins = [dim_linear_start] + [
+            dim_resnet_layers for _ in range(num_resnet_layers - 1)
+        ]
+        resnet_outs = [dim_resnet_layers for _ in range(num_resnet_layers)]
+        self.resnets = nnx.List(
+            [
+                ResNetLayer(d_i, d_j, act_fn=act_fn, rngs=rngs)
+                for d_i, d_j in zip(resnet_ins, resnet_outs)
+            ]
+        )
+        self.dropouts_mid = nnx.List([nnx.Dropout(rate=dropout_rate)])
+
+        self.linear_end = nnx.Linear(dim_resnet_layers, dim_out, rngs=rngs)
+
+    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+        x = self.act_fn(self.linear_start(x))
+        x = self.dropout_start(x, rngs=rngs)
+
+        for resnet, dropout in zip(self.resnets, self.dropouts_mid):
+            # incl. already activation function
+            x = resnet(x)
+            x = dropout(x, rngs=rngs)
+
+        return self.act_fn(self.linear_end(x))
+
+
+class NNEnsemble(nnx.Module):
+    pass
+
+
 def nll_loss(
     model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
 ) -> jax.Array:
