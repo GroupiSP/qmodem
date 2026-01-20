@@ -3,7 +3,13 @@ from .data import (  # noqa: F401
     BatterySimulationSource,
     make_battery_data,
 )
-from .module import HeteroscedasticMLP, HeteroscedasticResNet, nll_loss  # noqa: F401
+from .module import (  # noqa: F401
+    DropoutResNet,
+    HeteroscedasticMLP,
+    HeteroscedasticResNet,
+    mse_loss,
+    nll_loss,
+)
 
 
 def main() -> None:

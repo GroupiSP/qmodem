@@ -135,6 +135,8 @@ class DropoutResNet(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> None:
+        self.dim_in = dim_in
+        self.dim_out = dim_out
         self.act_fn = act_fn
 
         self.linear_start = nnx.Linear(dim_in, dim_linear_start, rngs=rngs)
@@ -150,7 +152,9 @@ class DropoutResNet(nnx.Module):
                 for d_i, d_j in zip(resnet_ins, resnet_outs)
             ]
         )
-        self.dropouts_mid = nnx.List([nnx.Dropout(rate=dropout_rate)])
+        self.dropouts_mid = nnx.List(
+            [nnx.Dropout(rate=dropout_rate) for _ in range(num_resnet_layers)]
+        )
 
         self.linear_end = nnx.Linear(dim_resnet_layers, dim_out, rngs=rngs)
 
@@ -164,6 +168,23 @@ class DropoutResNet(nnx.Module):
             x = dropout(x, rngs=rngs)
 
         return self.act_fn(self.linear_end(x))
+
+    def predict_ensemble(
+        self, x: jax.Array, ensemble_size: int = 5, rngs: Optional[nnx.Rngs] = None
+    ) -> jax.Array:
+        s = jnp.zeros(shape=(len(x), self.dim_out))
+        s2 = jnp.zeros(shape=(len(x), self.dim_out))
+        for _ in range(ensemble_size):
+            pred = self(x, rngs=rngs)
+            s += pred
+            s2 += jnp.square(pred)
+        mean = s / ensemble_size
+        # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+        var = (s2 - (s * s) / ensemble_size) / (ensemble_size - 1)
+        key = jax.random.PRNGKey(0)
+        return mean + jnp.sqrt(var) * jax.random.normal(
+            key, shape=(len(x), self.dim_out)
+        )
 
 
 class NNEnsemble(nnx.Module):
@@ -189,5 +210,15 @@ def nll_loss(
     outputs = model(xs, rngs=rngs)
     means, variances = outputs[:, 0], outputs[:, 1]
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
+
+    return jnp.mean(losses)
+
+
+def mse_loss(
+    model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
+) -> jax.Array:
+    xs, labels = batch
+    outputs = model(xs, rngs=rngs)
+    losses = jnp.square(outputs - labels)
 
     return jnp.mean(losses)
