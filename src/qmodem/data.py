@@ -44,12 +44,13 @@ class BatterySimulationSource:
             )  # clipping ensures that the failed particles have RUL=0. after their time of failure
 
         y = ruls
+        self.y_max = np.max(y)
 
         if normalize:
             scaler = MinMaxScaler()
             X, y = (
                 scaler.fit_transform(X),
-                y / np.max(y),
+                y / self.y_max,
             )
 
         self.X = jnp.array(X)

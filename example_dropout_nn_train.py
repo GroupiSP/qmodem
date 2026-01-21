@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 import jax
+import jax.numpy as jnp
 import lib_eod_simulation as les
 import optax
 import orbax.checkpoint as ocp
@@ -15,8 +16,15 @@ from qmodem import (
     BATT_CONFIG_PATH,
     BatterySimulationSource,
     DropoutResNet,
-    mse_loss,
 )
+
+
+def create_model_and_optimizer(lr: float):
+    rngs = nnx.Rngs(params=42, dropout=42)
+    model = DropoutResNet(rngs=rngs)
+
+    optimizer = nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)
+    return model, optimizer
 
 
 def main() -> None:
@@ -79,44 +87,44 @@ def main() -> None:
         worker_count=0,
     )
 
-    # Define the model.
-    model = DropoutResNet(rngs=nnx.Rngs(0))
+    # Define model and optimizer.
+    model, optimizer = create_model_and_optimizer(lr=LR)
 
-    # Define the optimizer.
-    optimizer = nnx.Optimizer(model, optax.adam(learning_rate=LR), wrt=nnx.Param)
+    def loss_fn(model, batch, deterministic):
+        # deterministic=False enables dropout during training
+        # NNX automatically updates the internal dropout RNG state here!
+        xs, labels = batch
+        predictions = model(xs, deterministic=deterministic)
+        loss = jnp.mean((predictions - labels) ** 2)
+        return loss
 
     # Define (jitted) training step and test step functions.
     @nnx.jit
     def train_step(
         model: DropoutResNet,
         optimizer: nnx.Optimizer,
-        rngs: nnx.Rngs,
         batch: tuple[jax.Array],
     ) -> None:
         """One step of the training (parameter and optimizer state update)."""
-        grad_fn = nnx.value_and_grad(mse_loss, argnums=0, has_aux=False)
-        loss, grads = grad_fn(model, batch, rngs)
+        grad_fn = nnx.value_and_grad(loss_fn, argnums=0, has_aux=False)
+        loss, grads = grad_fn(model, batch, False)
         optimizer.update(model, grads)  # In-place updates.\
 
     @nnx.jit
     def eval_step(  # TODO: check
-        model: DropoutResNet, rngs: nnx.Rngs, dataset: tuple[jax.Array]
+        model: DropoutResNet, dataset: tuple[jax.Array]
     ) -> jax.Array:
         """Evaluates the model over the entire data-source."""
-        return mse_loss(model, batch=dataset, rngs=rngs)
+        return loss_fn(model, batch=dataset, deterministic=True)
 
     # Train the model.
     for epoch in range(1, N_EPOCHS + 1):
-        model.train()
-
         for batch in dataloader_train:
-            train_step(model, optimizer, nnx.Rngs(0), batch)
+            train_step(model, optimizer, batch)
 
         if epoch % PRINT_EVERY == 0:
-            model.eval()
-
-            train_ds_loss = eval_step(model, nnx.Rngs(0), ds_train[:])
-            test_ds_loss = eval_step(model, nnx.Rngs(0), ds_test[:])
+            train_ds_loss = eval_step(model, ds_train[:])
+            test_ds_loss = eval_step(model, ds_test[:])
 
             print(
                 f"Epoch: {epoch:3d}, train loss: {train_ds_loss:.4f}, test loss: {test_ds_loss:.4f}"

@@ -140,7 +140,7 @@ class DropoutResNet(nnx.Module):
         self.act_fn = act_fn
 
         self.linear_start = nnx.Linear(dim_in, dim_linear_start, rngs=rngs)
-        self.dropout_start = nnx.Dropout(rate=dropout_rate)
+        self.dropout_start = nnx.Dropout(rate=dropout_rate, rngs=rngs)
 
         resnet_ins = [dim_linear_start] + [
             dim_resnet_layers for _ in range(num_resnet_layers - 1)
@@ -153,19 +153,22 @@ class DropoutResNet(nnx.Module):
             ]
         )
         self.dropouts_mid = nnx.List(
-            [nnx.Dropout(rate=dropout_rate) for _ in range(num_resnet_layers)]
+            [
+                nnx.Dropout(rate=dropout_rate, rngs=rngs)
+                for _ in range(num_resnet_layers)
+            ]
         )
 
         self.linear_end = nnx.Linear(dim_resnet_layers, dim_out, rngs=rngs)
 
-    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+    def __call__(self, x: jax.Array, deterministic=True) -> jax.Array:
         x = self.act_fn(self.linear_start(x))
-        x = self.dropout_start(x, rngs=rngs)
+        x = self.dropout_start(x, deterministic=deterministic)
 
         for resnet, dropout in zip(self.resnets, self.dropouts_mid):
             # incl. already activation function
             x = resnet(x)
-            x = dropout(x, rngs=rngs)
+            x = dropout(x, deterministic=deterministic)
 
         return self.act_fn(self.linear_end(x))
 
