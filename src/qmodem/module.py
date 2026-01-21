@@ -169,23 +169,6 @@ class DropoutResNet(nnx.Module):
 
         return self.act_fn(self.linear_end(x))
 
-    def predict_ensemble(
-        self, x: jax.Array, ensemble_size: int = 5, rngs: Optional[nnx.Rngs] = None
-    ) -> jax.Array:
-        s = jnp.zeros(shape=(len(x), self.dim_out))
-        s2 = jnp.zeros(shape=(len(x), self.dim_out))
-        for _ in range(ensemble_size):
-            pred = self(x, rngs=rngs)
-            s += pred
-            s2 += jnp.square(pred)
-        mean = s / ensemble_size
-        # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
-        var = (s2 - (s * s) / ensemble_size) / (ensemble_size - 1)
-        key = jax.random.PRNGKey(0)
-        return mean + jnp.sqrt(var) * jax.random.normal(
-            key, shape=(len(x), self.dim_out)
-        )
-
 
 class NNEnsemble(nnx.Module):
     pass
