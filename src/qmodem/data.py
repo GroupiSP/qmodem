@@ -8,12 +8,17 @@ import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
+from sklearn.preprocessing import MinMaxScaler
 
 BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
 
 
 class BatterySimulationSource:
-    def __init__(self, simulator: les.SimulatorSimple | les.SimulatorComplete) -> None:
+    def __init__(
+        self,
+        simulator: les.SimulatorSimple | les.SimulatorComplete,
+        normalize: bool = False,
+    ) -> None:
         """Runs and access to battery simulation data.
 
         Args:
@@ -28,9 +33,7 @@ class BatterySimulationSource:
         discharge_voltage_per_sim: np.ndarray = simulator.v_memo.T
         N_t = discharge_voltage_per_sim.shape[1]
 
-        self.discharge_voltage = jnp.array(
-            discharge_voltage_per_sim.flatten().reshape(-1, 1)
-        )
+        X = discharge_voltage_per_sim.flatten().reshape(-1, 1)
         ruls = np.empty(shape=(simulator.N_simu * N_t))
 
         for i in range(simulator.N_simu):
@@ -40,15 +43,25 @@ class BatterySimulationSource:
                 a_max=None,
             )  # clipping ensures that the failed particles have RUL=0. after their time of failure
 
-        self.ruls = jnp.array(ruls)
+        y = ruls
+
+        if normalize:
+            scaler = MinMaxScaler()
+            X, y = (
+                scaler.fit_transform(X),
+                y / np.max(y),
+            )
+
+        self.X = jnp.array(X)
+        self.y = jnp.array(y)
 
     def __len__(self) -> int:
         """Number of records in the dataset."""
-        return len(self.ruls)
+        return len(self.y)
 
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""
-        return self.discharge_voltage[record_key], self.ruls[record_key]
+        return self.X[record_key], self.y[record_key]
 
 
 def make_battery_data(
