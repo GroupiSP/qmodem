@@ -23,7 +23,7 @@ def main() -> None:
     rngs = nnx.Rngs(0)
 
     # Training parameters.
-    LR = 1e-2
+    LR = 1e-3
     N_EPOCHS = 50
     PRINT_EVERY = 10
     BATCH_SIZE = 50
