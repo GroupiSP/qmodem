@@ -101,7 +101,7 @@ def main() -> None:
     plt.plot(ts, rul_mean, color=color[0], alpha=0.4, label="True RUL")
     plt.fill_between(ts, rul_upper, rul_lower, color=color[0], alpha=0.2)
 
-    plt.plot(ts, rul_pred_mean, color=color[1], alpha=0.4, label="Predicted RUL")
+    plt.plot(ts, rul_pred_mean, color=color[1], alpha=0.4, label="Predicted RUL (HNN)")
     plt.fill_between(ts, rul_pred_upper, rul_pred_lower, color=color[1], alpha=0.2)
 
     plt.legend()
