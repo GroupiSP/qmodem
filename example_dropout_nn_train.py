@@ -14,14 +14,14 @@ from grain.transforms import Batch
 
 from qmodem import (
     BATT_CONFIG_PATH,
+    MLPV0,
     BatterySimulationSource,
-    DropoutResNet,
 )
 
 
 def create_model_and_optimizer(lr: float):
-    rngs = nnx.Rngs(params=42, dropout=42)
-    model = DropoutResNet(rngs=rngs)
+    rngs = nnx.Rngs(params=0, dropout=1)
+    model = MLPV0(rngs=rngs)
 
     optimizer = nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)
     return model, optimizer
@@ -29,11 +29,11 @@ def create_model_and_optimizer(lr: float):
 
 def main() -> None:
     # Training parameters.
-    LR = 1e-2
+    LR = 1e-3
     N_EPOCHS = 50
     PRINT_EVERY = 10
     BATCH_SIZE = 50
-    DO_CHECKPOINT = False
+    DO_CHECKPOINT = True
 
     # Battery simulator parameters.
     N_SIMU_TRAIN_DS = 10
@@ -94,14 +94,14 @@ def main() -> None:
         # deterministic=False enables dropout during training
         # NNX automatically updates the internal dropout RNG state here!
         xs, labels = batch
-        predictions = model(xs, deterministic=deterministic)
+        predictions = model(xs, deterministic=deterministic)[:, 0]
         loss = jnp.mean((predictions - labels) ** 2)
         return loss
 
     # Define (jitted) training step and test step functions.
     @nnx.jit
     def train_step(
-        model: DropoutResNet,
+        model: MLPV0,
         optimizer: nnx.Optimizer,
         batch: tuple[jax.Array],
     ) -> None:
@@ -112,7 +112,7 @@ def main() -> None:
 
     @nnx.jit
     def eval_step(  # TODO: check
-        model: DropoutResNet, dataset: tuple[jax.Array]
+        model: MLPV0, dataset: tuple[jax.Array]
     ) -> jax.Array:
         """Evaluates the model over the entire data-source."""
         return loss_fn(model, batch=dataset, deterministic=True)
@@ -137,7 +137,7 @@ def main() -> None:
         )
         checkpointer = ocp.StandardCheckpointer()
 
-        _, model_state = nnx.split(model)
+        model_state = nnx.state(model, nnx.Param)
         checkpointer.save(ckpt_dir / "trained_state", model_state)
 
         time.sleep(0.5)  # prevent shutdown from breaking checkpointing.
