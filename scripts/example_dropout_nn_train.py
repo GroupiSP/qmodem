@@ -14,15 +14,15 @@ from grain.transforms import Batch
 
 from qmodem import (
     BATT_CONFIG_PATH,
-    MLPV0,
     BatterySimulationSource,
+    MCDNetV0,
 )
 from qmodem.utils import mkdir_if_not_existent
 
 
 def create_model_and_optimizer(lr: float):
     rngs = nnx.Rngs(params=0, dropout=1)
-    model = MLPV0(rngs=rngs)
+    model = MCDNetV0(rngs=rngs)
 
     optimizer = nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)
     return model, optimizer
@@ -78,7 +78,7 @@ def main() -> None:
     simulator_test_config["N_simu"] = N_SIMU_TEST_DS
 
     sim_train = les.SimulatorSimple(simulator_train_config)
-    sim_test = les.SimulatorSimple(simulator_train_config)
+    sim_test = les.SimulatorSimple(simulator_test_config)
 
     # Use the simulators to create the data sources.
     ds_train = BatterySimulationSource(sim_train, normalize=True)
@@ -109,7 +109,7 @@ def main() -> None:
     # Define (jitted) training step and test step functions.
     @nnx.jit
     def train_step(
-        model: MLPV0,
+        model: MCDNetV0,
         optimizer: nnx.Optimizer,
         batch: tuple[jax.Array],
     ) -> None:
@@ -120,7 +120,7 @@ def main() -> None:
 
     @nnx.jit
     def eval_step(  # TODO: check
-        model: MLPV0, dataset: tuple[jax.Array]
+        model: MCDNetV0, dataset: tuple[jax.Array]
     ) -> jax.Array:
         """Evaluates the model over the entire data-source."""
         return loss_fn(model, batch=dataset, deterministic=True)

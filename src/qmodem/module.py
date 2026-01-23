@@ -19,7 +19,7 @@ class GaussianLayer(nnx.Module):
         return jnp.concat([mu, var_positive], axis=1)
 
 
-class ResNetLayer(nnx.Module):
+class ResNetBlockV0(nnx.Module):
     def __init__(
         self, input_dim: int, output_dim: int, act_fn: nnx.gelu, *, rngs: nnx.Rngs
     ) -> None:
@@ -51,42 +51,7 @@ class MLPBlockV0(nnx.Module):
         return x
 
 
-class MLPV0(nnx.Module):
-    def __init__(
-        self,
-        input_dim: int = 1,
-        hidden_dim: int = 64,
-        output_dim: int = 1,
-        num_blocks: int = 3,
-        dropout_rate: float = 0.1,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        # Project input up to hidden dimension
-        self.linear1 = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
-        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
-
-        # Stack ResNet Blocks
-        self.blocks = nnx.List(
-            [MLPBlockV0(hidden_dim, dropout_rate, rngs=rngs) for _ in range(num_blocks)]
-        )
-
-        self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
-
-    def __call__(self, x, deterministic: bool = False):
-        x = self.linear1(x)
-        x = self.norm1(x)
-        x = nnx.gelu(x)
-        # No dropout to avoid dropping important features.
-
-        for block in self.blocks:
-            x = block(x, deterministic=deterministic)
-
-        x = self.linear2(x)
-        return x
-
-
-class HeteroscedasticMLP(nnx.Module):
+class HNNV0(nnx.Module):
     def __init__(
         self,
         dimensions: Sequence[int],
@@ -94,10 +59,8 @@ class HeteroscedasticMLP(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> None:
-        """Multi-layer perceptron. The first output is intended as the predicted mean
-        and the second one as the predicted variance, turned positive by a softplus
-        activation. The uncertainty is heteroscedastic, because the variance is also a
-        function of the input vector.
+        """Heteroscedastic NN with standard MLP architecture (linear layers and
+        activation function).
 
         Args:
             dimensions (Sequence[int]): The dimensions of the layers. The first
@@ -131,7 +94,7 @@ class HeteroscedasticMLP(nnx.Module):
         return self.layers[-1](x)
 
 
-class HeteroscedasticResNet(nnx.Module):
+class HNNV1(nnx.Module):
     def __init__(
         self,
         dim_in: int = 1,
@@ -144,6 +107,10 @@ class HeteroscedasticResNet(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> None:
+        """Heteroscedastic NN with ResNet layers.
+
+        Initial and final layers are linear.
+        """
         self.act_fn = act_fn
 
         self.linear_start = nnx.Linear(dim_in, dim_linear_start, rngs=rngs)
@@ -154,7 +121,7 @@ class HeteroscedasticResNet(nnx.Module):
         resnet_outs = [dim_resnet_layers for _ in range(num_resnet_layers)]
         self.resnets = nnx.List(
             [
-                ResNetLayer(d_i, d_j, act_fn=act_fn, rngs=rngs)
+                ResNetBlockV0(d_i, d_j, act_fn=act_fn, rngs=rngs)
                 for d_i, d_j in zip(resnet_ins, resnet_outs)
             ]
         )
@@ -174,7 +141,46 @@ class HeteroscedasticResNet(nnx.Module):
         return self.gaussian(x, rngs=rngs)
 
 
-class DropoutResNet(nnx.Module):
+class MCDNetV0(nnx.Module):
+    def __init__(
+        self,
+        input_dim: int = 1,
+        hidden_dim: int = 64,
+        output_dim: int = 1,
+        num_blocks: int = 3,
+        dropout_rate: float = 0.1,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        """Dropout network with MLP blocks.
+
+        The blocks include dropout and layer normalization.
+        """
+        # Project input up to hidden dimension
+        self.linear1 = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
+        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
+
+        # Stack ResNet Blocks
+        self.blocks = nnx.List(
+            [MLPBlockV0(hidden_dim, dropout_rate, rngs=rngs) for _ in range(num_blocks)]
+        )
+
+        self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
+
+    def __call__(self, x, deterministic: bool = False):
+        x = self.linear1(x)
+        x = self.norm1(x)
+        x = nnx.gelu(x)
+        # No dropout to avoid dropping important features.
+
+        for block in self.blocks:
+            x = block(x, deterministic=deterministic)
+
+        x = self.linear2(x)
+        return x
+
+
+class MCDNetV1(nnx.Module):
     def __init__(
         self,
         dim_in: int = 1,
@@ -200,7 +206,7 @@ class DropoutResNet(nnx.Module):
         resnet_outs = [dim_resnet_layers for _ in range(num_resnet_layers)]
         self.resnets = nnx.List(
             [
-                ResNetLayer(d_i, d_j, act_fn=act_fn, rngs=rngs)
+                ResNetBlockV0(d_i, d_j, act_fn=act_fn, rngs=rngs)
                 for d_i, d_j in zip(resnet_ins, resnet_outs)
             ]
         )

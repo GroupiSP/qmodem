@@ -13,8 +13,8 @@ from grain.transforms import Batch
 
 from qmodem import (
     BATT_CONFIG_PATH,
+    HNNV1,
     BatterySimulationSource,
-    HeteroscedasticResNet,
     nll_loss,
 )
 
@@ -64,7 +64,7 @@ def main() -> None:
     simulator_test_config["N_simu"] = N_SIMU_TEST_DS
 
     sim_train = les.SimulatorSimple(simulator_train_config)
-    sim_test = les.SimulatorSimple(simulator_train_config)
+    sim_test = les.SimulatorSimple(simulator_test_config)
 
     # Use the simulators to create the data sources.
     ds_train = BatterySimulationSource(sim_train)
@@ -82,7 +82,7 @@ def main() -> None:
     )
 
     # Define the model.
-    model = HeteroscedasticResNet(rngs=rngs)
+    model = HNNV1(rngs=rngs)
 
     # Define the optimizer.
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=LR), wrt=nnx.Param)
@@ -90,7 +90,7 @@ def main() -> None:
     # Define (jitted) training step and test step functions.
     @nnx.jit
     def train_step(
-        model: HeteroscedasticResNet,
+        model: HNNV1,
         optimizer: nnx.Optimizer,
         rngs: nnx.Rngs,
         batch: tuple[jax.Array],
@@ -101,9 +101,7 @@ def main() -> None:
         optimizer.update(model, grads)  # In-place updates.\
 
     @nnx.jit
-    def eval_step(
-        model: HeteroscedasticResNet, rngs: nnx.Rngs, dataset: tuple[jax.Array]
-    ) -> jax.Array:
+    def eval_step(model: HNNV1, rngs: nnx.Rngs, dataset: tuple[jax.Array]) -> jax.Array:
         """Evaluates the model over the entire data-source."""
         return nll_loss(model, batch=dataset, rngs=rngs)
 

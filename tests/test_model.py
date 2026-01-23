@@ -3,14 +3,14 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from qmodem import HeteroscedasticMLP, nll_loss
+from qmodem import HNNV0, nll_loss
 
 _rng_key = jax.random.PRNGKey(0)
 
 
 @pytest.fixture
-def mock_gauss_het_mlp() -> HeteroscedasticMLP:
-    return HeteroscedasticMLP(dimensions=[1, 10, 10], rngs=nnx.Rngs(0))
+def mock_gauss_het_mlp() -> HNNV0:
+    return HNNV0(dimensions=[1, 10, 10], rngs=nnx.Rngs(0))
 
 
 def test_gauss_het_mlp_init(mock_gauss_het_mlp) -> None:

@@ -4,10 +4,10 @@ from .data import (  # noqa: F401
     make_battery_data,
 )
 from .module import (  # noqa: F401
-    MLPV0,
-    DropoutResNet,
-    HeteroscedasticMLP,
-    HeteroscedasticResNet,
+    HNNV0,
+    HNNV1,
+    MCDNetV0,
+    MCDNetV1,
     mse_loss,
     nll_loss,
 )

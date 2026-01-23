@@ -7,7 +7,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 from flax import nnx
 
-from qmodem import BATT_CONFIG_PATH, HeteroscedasticResNet
+from qmodem import BATT_CONFIG_PATH, HNNV1
 
 
 def main() -> None:
@@ -78,7 +78,7 @@ def main() -> None:
     ckpt_dir = Path().cwd() / "checkpoints/"
     checkpointer = ocp.StandardCheckpointer()
 
-    abstract_model = nnx.eval_shape(lambda: HeteroscedasticResNet(rngs=nnx.Rngs(0)))
+    abstract_model = nnx.eval_shape(lambda: HNNV1(rngs=nnx.Rngs(0)))
     graphdef, abstract_state = nnx.split(abstract_model)
 
     state_restored = checkpointer.restore(ckpt_dir / "trained_state", abstract_state)

@@ -8,7 +8,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 from flax import nnx
 
-from qmodem import BATT_CONFIG_PATH, MLPV0
+from qmodem import BATT_CONFIG_PATH, MCDNetV0
 
 
 def main() -> None:
@@ -89,7 +89,7 @@ def main() -> None:
     # Load (trained) model checkpoint.
     checkpointer = ocp.StandardCheckpointer()
 
-    model = MLPV0(rngs=nnx.Rngs(params=0, dropout=1))
+    model = MCDNetV0(rngs=nnx.Rngs(params=0, dropout=1))
     target_state = nnx.state(model, nnx.Param)
 
     state_restored = checkpointer.restore(
