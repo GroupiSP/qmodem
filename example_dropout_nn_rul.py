@@ -12,18 +12,23 @@ from qmodem import BATT_CONFIG_PATH, MLPV0
 
 
 def main() -> None:
+    # Directories
+    ROOT_DIR = Path().cwd() / "saved" / "MLPV0"
+    CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
+    METADATA_DIR = ROOT_DIR / "metadata"
+
     # Battery simulator parameters.
     N_SIMU = 100
     CURRENT_AMPLITUDE = -2.8 * 0.75
     V_CUT = 2.5
     OMEGA_STD = 1e-3
     ETA_STD = 1e-2
-
-    # For uncscaling.
-    RUL_MAX_TRAIN = 4900.0
-
     # Number of forward passes for the Monte Carlo Dropout.
     ENSEMBLE_SIZE = 20
+
+    # For uncscaling we need the max(RUL) found during training, saved as metadata.
+    with open(METADATA_DIR / "meta.json", "r") as fp:
+        meta = json.load(fp)
 
     # Create battery model.
     with open(BATT_CONFIG_PATH) as fp:
@@ -82,14 +87,13 @@ def main() -> None:
         rul_upper.append(m + 1.96 * np.sqrt(rul_var))
 
     # Load (trained) model checkpoint.
-    ckpt_dir = Path().cwd() / "checkpoints/dropout_resnet"
     checkpointer = ocp.StandardCheckpointer()
 
     model = MLPV0(rngs=nnx.Rngs(params=0, dropout=1))
     target_state = nnx.state(model, nnx.Param)
 
     state_restored = checkpointer.restore(
-        ckpt_dir / "trained_state", target=target_state
+        CHECKPOINT_DIR / "trained_state", target=target_state
     )
 
     nnx.update(model, state_restored)
@@ -104,7 +108,7 @@ def main() -> None:
     for i, v in enumerate(vs):
         predictions = jnp.array(
             [
-                predict_step(model, v).squeeze() * RUL_MAX_TRAIN
+                predict_step(model, v).squeeze() * meta["y_max"]
                 for _ in range(ENSEMBLE_SIZE)
             ]
         )

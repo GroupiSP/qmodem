@@ -17,6 +17,7 @@ from qmodem import (
     MLPV0,
     BatterySimulationSource,
 )
+from qmodem.utils import mkdir_if_not_existent
 
 
 def create_model_and_optimizer(lr: float):
@@ -28,6 +29,13 @@ def create_model_and_optimizer(lr: float):
 
 
 def main() -> None:
+    # Directories
+    ROOT_DIR = Path().cwd() / "saved" / "MLPV0"
+    CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
+    METADATA_DIR = ROOT_DIR / "metadata"
+    # Ensure exist for all directories.
+    mkdir_if_not_existent([CHECKPOINT_DIR, METADATA_DIR])
+
     # Training parameters.
     LR = 1e-3
     N_EPOCHS = 50
@@ -130,11 +138,14 @@ def main() -> None:
                 f"Epoch: {epoch:3d}, train loss: {train_ds_loss:.4f}, test loss: {test_ds_loss:.4f}"
             )
 
+    # Save metadata (in this case, the y_max used for scaling).
+    metadata = {"y_max": ds_train.y_max}
+    with open(METADATA_DIR / "meta.json", "w") as fp:
+        json.dump(metadata, fp)
+
     # Checkpoint the trained model.
     if DO_CHECKPOINT:
-        ckpt_dir = ocp.test_utils.erase_and_create_empty(
-            Path().cwd() / "checkpoints/dropout_resnet/"
-        )
+        ckpt_dir = ocp.test_utils.erase_and_create_empty(CHECKPOINT_DIR)
         checkpointer = ocp.StandardCheckpointer()
 
         model_state = nnx.state(model, nnx.Param)
