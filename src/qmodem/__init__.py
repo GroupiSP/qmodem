@@ -4,6 +4,7 @@ from .data import (  # noqa: F401
     make_battery_data,
 )
 from .module import (  # noqa: F401
+    MLPV0,
     DropoutResNet,
     HeteroscedasticMLP,
     HeteroscedasticResNet,
