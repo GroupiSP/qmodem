@@ -13,3 +13,6 @@ wheels/
 
 # Checkpoints
 checkpoints/
+
+# Model-data saves.
+saved/
