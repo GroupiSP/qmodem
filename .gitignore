@@ -14,5 +14,8 @@ wheels/
 # Checkpoints
 checkpoints/
 
-# Model-data saves.
+# Model-data saves
 saved/
+
+# Sandbox scripts
+sandbox/
