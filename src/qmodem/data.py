@@ -8,7 +8,6 @@ import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
 
 BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
 
@@ -26,6 +25,7 @@ class BatterySimulationSource:
                 lib_eod_simulation. It needs to be configured outside of this data
                 source. It must have `N_simu=1` (only deterministic case, work in progress
                 to extend).
+            normalize (bool): Normalizes the RUL values (divide by max(RUL)). Defaults to False.
         """
         simulator.simulate()
 
@@ -47,11 +47,7 @@ class BatterySimulationSource:
         self.y_max = np.max(y)
 
         if normalize:
-            scaler = MinMaxScaler()
-            X, y = (
-                scaler.fit_transform(X),
-                y / self.y_max,
-            )
+            y /= self.y_max
 
         self.X = jnp.array(X)
         self.y = jnp.array(y)
