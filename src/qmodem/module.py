@@ -34,6 +34,49 @@ class ResNetBlockV0(nnx.Module):
         return x1 + x
 
 
+class ResNetBlockV1(nnx.Module):
+    def __init__(self, hidden_dim: int, dropout_rate: float, rngs: nnx.Rngs):
+        """ResNet block with layer normalization with identity initialization and
+        dropout on the residual branch."""
+        # 1. First "Weight" Layer (Linear used here for 1D data, could be Conv)
+        self.linear1 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
+        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
+
+        # 2. Dropout INSIDE the branch
+        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
+
+        # 3. Second "Weight" Layer
+        self.linear2 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
+
+        # 4. Crucial: The Last Norm Layer
+        # We explicitly init the scale (gamma) to Zero.
+        # This makes the initial output of the residual branch 0.
+        self.norm2 = nnx.LayerNorm(
+            hidden_dim,
+            rngs=rngs,
+            scale_init=nnx.initializers.zeros,
+        )
+
+    def __call__(self, x, deterministic: bool = False):
+        residual = x
+
+        # First sub-block
+        x = self.linear1(x)
+        x = self.norm1(x)
+        x = nnx.gelu(x)
+
+        # Apply Dropout inside the branch
+        # specific to MC Dropout: we can control 'deterministic' externally
+        x = self.dropout(x, deterministic=deterministic)
+
+        # Second sub-block
+        x = self.linear2(x)
+        x = self.norm2(x)  # Starts as 0 contribution due to init
+
+        # Residual Connection
+        return x + residual
+
+
 class MLPBlockV0(nnx.Module):
     def __init__(self, hidden_dim: int, dropout_rate: float, rngs: nnx.Rngs):
         """Linear layer with layer normalization and dropout in between."""
@@ -183,52 +226,41 @@ class MCDNetV0(nnx.Module):
 class MCDNetV1(nnx.Module):
     def __init__(
         self,
-        dim_in: int = 1,
-        dim_out: int = 1,
-        dim_linear_start: int = 100,
-        dim_resnet_layers: int = 50,
-        num_resnet_layers: int = 2,
-        act_fn: nnx.Module = nnx.gelu,
+        input_dim: int = 1,
+        hidden_dim: int = 32,
+        output_dim: int = 1,
+        num_blocks: int = 3,
         dropout_rate: float = 0.1,
         *,
         rngs: nnx.Rngs,
-    ) -> None:
-        self.dim_in = dim_in
-        self.dim_out = dim_out
-        self.act_fn = act_fn
+    ):
+        """Dropout network with ResNet blocks.
 
-        self.linear_start = nnx.Linear(dim_in, dim_linear_start, rngs=rngs)
-        self.dropout_start = nnx.Dropout(rate=dropout_rate, rngs=rngs)
+        Dropout is in the residual branch of every block.
+        """
+        # Project input up to hidden dimension
+        self.linear1 = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
+        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
 
-        resnet_ins = [dim_linear_start] + [
-            dim_resnet_layers for _ in range(num_resnet_layers - 1)
+        # Stack ResNet Blocks
+        self.blocks = [
+            ResNetBlockV1(hidden_dim, dropout_rate, rngs) for _ in range(num_blocks)
         ]
-        resnet_outs = [dim_resnet_layers for _ in range(num_resnet_layers)]
-        self.resnets = nnx.List(
-            [
-                ResNetBlockV0(d_i, d_j, act_fn=act_fn, rngs=rngs)
-                for d_i, d_j in zip(resnet_ins, resnet_outs)
-            ]
-        )
-        self.dropouts_mid = nnx.List(
-            [
-                nnx.Dropout(rate=dropout_rate, rngs=rngs)
-                for _ in range(num_resnet_layers)
-            ]
-        )
 
-        self.linear_end = nnx.Linear(dim_resnet_layers, dim_out, rngs=rngs)
+        # Final prediction layer
+        self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
+        self.dropout2 = nnx.Dropout(dropout_rate, rngs=rngs)
 
-    def __call__(self, x: jax.Array, deterministic=True) -> jax.Array:
-        x = self.act_fn(self.linear_start(x))
-        x = self.dropout_start(x, deterministic=deterministic)
+    def __call__(self, x, deterministic: bool = False):
+        x = self.linear1(x)
+        x = self.norm1(x)
+        x = nnx.gelu(x)
 
-        for resnet, dropout in zip(self.resnets, self.dropouts_mid):
-            # incl. already activation function
-            x = resnet(x)
-            x = dropout(x, deterministic=deterministic)
+        for block in self.blocks:
+            x = block(x, deterministic=deterministic)
 
-        return self.act_fn(self.linear_end(x))
+        x = self.linear2(x)
+        return x
 
 
 class NNEnsemble(nnx.Module):
