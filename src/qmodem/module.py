@@ -293,6 +293,15 @@ def nll_loss(
 def mse_loss(
     model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
 ) -> jax.Array:
+    """Mean squared error loss.
+
+    Args:
+        model (nnx.Module): neural network model.
+        batch (jax.Array): batched input data.
+        rngs (nnx.Rngs): passed to the forward method of the model.
+    Returns:
+        jax.Array: loss value for the batch.
+    """
     xs, labels = batch
     outputs = model(xs, rngs=rngs)
     losses = jnp.square(outputs - labels)
