@@ -17,6 +17,7 @@ from qmodem import (
     BatterySimulationSource,
     MCDNetV0,
 )
+from qmodem.train import EarlyStopper
 from qmodem.utils import mkdir_if_not_existent
 
 
@@ -45,7 +46,7 @@ def main() -> None:
 
     # Battery simulator parameters.
     N_SIMU_TRAIN_DS = 10
-    N_SIMU_TEST_DS = 5
+    N_SIMU_VAL_DS = 5
     CURRENT_AMPLITUDE = -2.8 * 0.75
     V_CUT = 2.5
     SOC_0 = 1.0
@@ -74,15 +75,15 @@ def main() -> None:
         "battery": battery,
     }
 
-    simulator_test_config = simulator_train_config.copy()
-    simulator_test_config["N_simu"] = N_SIMU_TEST_DS
+    simulator_validation_config = simulator_train_config.copy()
+    simulator_validation_config["N_simu"] = N_SIMU_VAL_DS
 
     sim_train = les.SimulatorSimple(simulator_train_config)
-    sim_test = les.SimulatorSimple(simulator_test_config)
+    simulator_validation = les.SimulatorSimple(simulator_validation_config)
 
     # Use the simulators to create the data sources.
     ds_train = BatterySimulationSource(sim_train, normalize=True)
-    ds_test = BatterySimulationSource(sim_test, normalize=True)
+    ds_validation = BatterySimulationSource(simulator_validation, normalize=True)
 
     # Prepare the train dataloader.
     sampler_train = IndexSampler(
@@ -125,17 +126,25 @@ def main() -> None:
         """Evaluates the model over the entire data-source."""
         return loss_fn(model, batch=dataset, deterministic=True)
 
+    # Monitor the validation loss for early stopping.
+    early_stopper = EarlyStopper(patience=10, min_delta=1e-4)
+
     # Train the model.
     for epoch in range(1, N_EPOCHS + 1):
         for batch in dataloader_train:
             train_step(model, optimizer, batch)
 
+        val_loss = eval_step(model, ds_validation[:])
+
+        if early_stopper(val_loss):
+            break
+
         if epoch % PRINT_EVERY == 0:
+            # Also compute train loss for logging.
             train_ds_loss = eval_step(model, ds_train[:])
-            test_ds_loss = eval_step(model, ds_test[:])
 
             print(
-                f"Epoch: {epoch:3d}, train loss: {train_ds_loss:.4f}, test loss: {test_ds_loss:.4f}"
+                f"Epoch: {epoch:3d}, train loss: {train_ds_loss:.4f}, validation loss: {val_loss:.4f}"
             )
 
     # Save metadata (in this case, the y_max used for scaling).
