@@ -21,11 +21,19 @@ from qmodem.train import EarlyStopper
 from qmodem.utils import mkdir_if_not_existent
 
 
-def create_model_and_optimizer(lr: float):
+def create_model_and_optimizer(lr_init: float, n_epochs: int, steps_per_epoch: int):
     rngs = nnx.Rngs(params=0, dropout=1)
     model = MCDNetV0(rngs=rngs)
 
-    optimizer = nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)
+    # Cosine decay schedule
+    total_steps = n_epochs * steps_per_epoch
+    schedule = optax.cosine_decay_schedule(
+        init_value=lr_init,
+        decay_steps=total_steps,
+        alpha=0.1,  # minimum learning rate = 0.1 * lr
+    )
+
+    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
     return model, optimizer
 
 
@@ -97,7 +105,9 @@ def main() -> None:
     )
 
     # Define model and optimizer.
-    model, optimizer = create_model_and_optimizer(lr=LR)
+    model, optimizer = create_model_and_optimizer(
+        lr_init=LR, n_epochs=N_EPOCHS, steps_per_epoch=len(ds_train) // BATCH_SIZE
+    )
 
     def loss_fn(model, batch, deterministic):
         # deterministic=False enables dropout during training
