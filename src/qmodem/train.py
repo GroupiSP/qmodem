@@ -1,34 +1,27 @@
 from __future__ import annotations
 
-from typing import Sequence
-
 import jax
 
 
-def early_stop(
-    val_losses: Sequence[jax.Array],
-    patience: int,
-    min_delta: float = 0.0,
-) -> bool:
-    """Check if early stopping criterion is met.
+class EarlyStopper:
+    def __init__(self, patience: int, min_delta: float = 0.0) -> None:
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = float("inf")
+        self.counter = 0
+        self.current_epoch = 0
 
-    Args:
-        val_losses (Sequence[float]): List of validation losses.
-        patience (int): Number of epochs to wait for improvement.
-        min_delta (float, optional): Minimum change to qualify as an improvement. Defaults to 0.0.
-
-    Returns:
-        bool: True if early stopping criterion is met, False otherwise.
-    """
-    current_epoch = len(val_losses) + 1
-    if current_epoch < patience:
-        return False
-
-    recent_losses = val_losses[-(patience + 1) :]
-    best_loss = min(recent_losses[:-1])
-    current_loss = recent_losses[-1]
-
-    if current_loss > best_loss - min_delta:
-        print(f"Early stopping triggered at epoch {current_epoch}.")
-        return True
-    return False
+    def __call__(self, current_loss: jax.Array) -> bool:
+        self.current_epoch += 1
+        if current_loss < self.best_loss - self.min_delta:
+            self.best_loss = current_loss
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                print(
+                    f"Early stopping triggered at epoch {self.current_epoch}. Validation loss: {current_loss:.4f}"
+                )
+                return True
+            return False
