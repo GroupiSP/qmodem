@@ -21,17 +21,30 @@ class GaussianBlock(nnx.Module):
 
 class ResNetBlockV0(nnx.Module):
     def __init__(
-        self, input_dim: int, output_dim: int, act_fn: nnx.gelu, *, rngs: nnx.Rngs
+        self,
+        layer_dim: int,
+        act_fn: nnx.Module,
+        *,
+        rngs: nnx.Rngs,
     ) -> None:
-        self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(output_dim, output_dim, rngs=rngs)
+        """ResNet block with the same structure as in He et al., 2016 (seminal paper)
+        and with identity initialization."""
+        self.linear_1 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
+        self.linear_2 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
+        self.norm = nnx.LayerNorm(
+            layer_dim, rngs=rngs, scale_init=nnx.initializers.zeros
+        )
 
         self.act_fn = act_fn
 
     def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+        residual = x
         x = self.act_fn(self.linear_1(x))
-        x1 = self.act_fn(self.linear_2(x))
-        return x1 + x
+        x = self.linear_2(x)
+        x = self.norm(x)
+        x = x + residual  # Residual connection
+        x = self.act_fn(x)
+        return x
 
 
 class ResNetBlockV1(nnx.Module):
@@ -142,7 +155,6 @@ class HNNV1(nnx.Module):
         self,
         dim_in: int = 1,
         dim_out: int = 1,
-        dim_linear_start: int = 100,
         dim_resnet_layers: int = 50,
         num_resnet_layers: int = 2,
         dim_linear_end: int = 10,
@@ -156,16 +168,12 @@ class HNNV1(nnx.Module):
         """
         self.act_fn = act_fn
 
-        self.linear_start = nnx.Linear(dim_in, dim_linear_start, rngs=rngs)
+        self.linear_start = nnx.Linear(dim_in, dim_resnet_layers, rngs=rngs)
 
-        resnet_ins = [dim_linear_start] + [
-            dim_resnet_layers for _ in range(num_resnet_layers - 1)
-        ]
-        resnet_outs = [dim_resnet_layers for _ in range(num_resnet_layers)]
         self.resnets = nnx.List(
             [
-                ResNetBlockV0(d_i, d_j, act_fn=act_fn, rngs=rngs)
-                for d_i, d_j in zip(resnet_ins, resnet_outs)
+                ResNetBlockV0(dim_resnet_layers, act_fn=act_fn, rngs=rngs)
+                for _ in range(num_resnet_layers)
             ]
         )
 
