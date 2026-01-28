@@ -48,46 +48,39 @@ class ResNetBlockV0(nnx.Module):
 
 
 class ResNetBlockV1(nnx.Module):
-    def __init__(self, hidden_dim: int, dropout_rate: float, rngs: nnx.Rngs):
+    def __init__(
+        self,
+        layer_dim: int,
+        dropout_rate: float,
+        act_fn: nnx.Module,
+        *,
+        rngs: nnx.Rngs,
+    ):
         """ResNet block with layer normalization with identity initialization and
         dropout on the residual branch."""
-        # 1. First "Weight" Layer (Linear used here for 1D data, could be Conv)
-        self.linear1 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
-        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
-
-        # 2. Dropout INSIDE the branch
+        self.linear1 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
         self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
-
-        # 3. Second "Weight" Layer
-        self.linear2 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
-
-        # 4. Crucial: The Last Norm Layer
-        # We explicitly init the scale (gamma) to Zero.
-        # This makes the initial output of the residual branch 0.
-        self.norm2 = nnx.LayerNorm(
-            hidden_dim,
+        self.linear2 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
+        self.norm = nnx.LayerNorm(
+            layer_dim,
             rngs=rngs,
             scale_init=nnx.initializers.zeros,
         )
 
+        self.act_fn = act_fn
+
     def __call__(self, x, deterministic: bool = False):
         residual = x
-
-        # First sub-block
         x = self.linear1(x)
-        x = self.norm1(x)
-        x = nnx.gelu(x)
-
-        # Apply Dropout inside the branch
-        # specific to MC Dropout: we can control 'deterministic' externally
-        x = self.dropout(x, deterministic=deterministic)
-
-        # Second sub-block
+        x = self.act_fn(x)
+        x = self.dropout(
+            x, deterministic=deterministic
+        )  # apply Dropout inside the branch
         x = self.linear2(x)
-        x = self.norm2(x)  # Starts as 0 contribution due to init
-
-        # Residual Connection
-        return x + residual
+        x = self.norm(x)  # Starts as 0 contribution due to init
+        x = x + residual
+        x = self.act_fn(x)
+        return x
 
 
 class MLPBlockV0(nnx.Module):

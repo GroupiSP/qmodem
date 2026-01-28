@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from qmodem.module import GaussianBlock, MLPBlockV0, ResNetBlockV0
+from qmodem.module import GaussianBlock, MLPBlockV0, ResNetBlockV0, ResNetBlockV1
 
 
 class TestMLPBlockV0:
@@ -201,3 +201,97 @@ class TestResNetBlockV0:
         # Since weights are initialized to zero, output should be close to input after
         # activation
         assert jnp.allclose(output, self.act_fn(x), atol=1e-5)
+
+
+class TestResNetBlockV1:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.layer_dim = 32
+        self.dropout_rate = 0.1
+        self.batch_size = 16
+        self.rngs = nnx.Rngs(0)
+        self.act_fn = nnx.gelu
+
+    def test_initialization(self, setup):
+        """Test that ResNetBlockV1 initializes correctly."""
+        block = ResNetBlockV1(
+            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
+        )
+        assert hasattr(block, "linear1")
+        assert hasattr(block, "linear2")
+        assert hasattr(block, "dropout")
+        assert hasattr(block, "norm")
+        assert hasattr(block, "act_fn")
+
+    def test_forward_pass_shape(self, setup):
+        """Test that forward pass preserves input shape."""
+        block = ResNetBlockV1(
+            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
+        )
+        x = jnp.ones((self.batch_size, self.layer_dim))
+        output = block(x, deterministic=True)
+        assert output.shape == x.shape
+
+    def test_forward_pass_deterministic(self, setup):
+        """Test that deterministic mode produces consistent outputs."""
+        block = ResNetBlockV1(
+            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
+        )
+        x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.layer_dim))
+        output1 = block(x, deterministic=True)
+        output2 = block(x, deterministic=True)
+        assert jnp.allclose(output1, output2)
+
+    def test_forward_pass_stochastic(self, setup):
+        """Test that stochastic mode can produce different outputs due to dropout."""
+        block = ResNetBlockV1(
+            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
+        )
+        x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.layer_dim))
+        output1 = block(x, deterministic=False)
+        output2 = block(x, deterministic=False)
+        assert output1.shape == output2.shape
+
+    def test_output_dtype(self, setup):
+        """Test that output has correct dtype."""
+        block = ResNetBlockV1(
+            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
+        )
+        x = jnp.ones((self.batch_size, self.layer_dim), dtype=jnp.float32)
+        output = block(x, deterministic=True)
+        assert output.dtype == jnp.float32
+
+    def test_different_batch_sizes(self, setup):
+        """Test forward pass with different batch sizes."""
+        block = ResNetBlockV1(
+            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
+        )
+        for batch_size in [1, 8, 16, 64]:
+            x = jnp.ones((batch_size, self.layer_dim))
+            output = block(x, deterministic=True)
+            assert output.shape == (batch_size, self.layer_dim)
+
+    def test_identity_initialization(self, setup):
+        """Test that with identity initialization, the block behaves like an identity
+        function initially."""
+        block = ResNetBlockV1(
+            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
+        )
+        x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.layer_dim))
+        output = block(x, deterministic=True)
+
+        # Since weights are initialized to zero, output should be close to input after
+        # activation
+        assert jnp.allclose(output, self.act_fn(x), atol=1e-5)
+
+    def test_dropout_rate_zero(self, setup):
+        """Test with dropout rate of zero."""
+        block = ResNetBlockV1(
+            self.layer_dim, dropout_rate=0.0, act_fn=self.act_fn, rngs=self.rngs
+        )
+        x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.layer_dim))
+        output1 = block(x, deterministic=False)
+        output2 = block(x, deterministic=False)
+        # With zero dropout, outputs should be identical in stochastic mode
+        assert jnp.allclose(output1, output2)
