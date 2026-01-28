@@ -237,13 +237,17 @@ class MCDNetV0(nnx.Module):
         """Generate multiple stochastic forward passes through the network.
 
         Args:
-            x (jax.Array): Input data.
+            x (jax.Array): Input of shape (1, input_dim).
             num_samples (int): Number of stochastic samples to generate.
 
         Returns:
-            jax.Array: Array of shape (num_samples, batch_size, output_dim)
-                        containing the stochastic outputs.
+            jax.Array: Array of shape (num_samples, output_dim) with the samples.
+
+        Raises:
+            ValueError: If the input x does not have batch size 1.
         """
+        if x.shape[0] != 1:
+            raise ValueError("Input x must have batch size 1.")
 
         def single_pass(x):
             return self(x, deterministic=False)
@@ -300,13 +304,17 @@ class MCDNetV1(nnx.Module):
         """Generate multiple stochastic forward passes through the network.
 
         Args:
-            x (jax.Array): Input data.
+            x (jax.Array): Input of shape (1, input_dim).
             num_samples (int): Number of stochastic samples to generate.
 
         Returns:
-            jax.Array: Array of shape (num_samples, batch_size, output_dim)
-                        containing the stochastic outputs.
+            jax.Array: Array of shape (num_samples, output_dim) with the samples.
+
+        Raises:
+            ValueError: If the input x does not have batch size 1.
         """
+        if x.shape[0] != 1:
+            raise ValueError("Input x must have batch size 1.")
 
         def single_pass(x):
             return self(x, deterministic=False)
