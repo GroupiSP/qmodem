@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from qmodem.module import MLPBlockV0
+from qmodem.module import GaussianBlock, MLPBlockV0
 
 
 class TestMLPBlockV0:
@@ -76,3 +76,69 @@ class TestMLPBlockV0:
 
         # With zero dropout, outputs should be identical
         assert jnp.allclose(output1, output2)
+
+
+class TestGaussianBlock:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.input_dim = 32
+        self.output_dim = 2
+        self.batch_size = 10
+        self.rngs = nnx.Rngs(0)
+
+    def test_initialization(self, setup):
+        """Test that GaussianBlock initializes correctly."""
+        block = GaussianBlock(self.input_dim, self.output_dim, rngs=self.rngs)
+        assert hasattr(block, "linear_1")
+        assert hasattr(block, "linear_2")
+
+    def test_forward_pass_shape(self, setup):
+        """Test that forward pass preserves input shape."""
+        block = GaussianBlock(self.input_dim, self.output_dim, rngs=self.rngs)
+        x = jnp.ones((self.batch_size, self.input_dim))
+        output = block(x)
+        assert output.shape == (self.batch_size, self.output_dim * 2)
+
+    def test_output_dtype(self, setup):
+        """Test that output has correct dtype."""
+        block = GaussianBlock(self.input_dim, self.output_dim, rngs=self.rngs)
+        x = jnp.ones((self.batch_size, self.input_dim), dtype=jnp.float32)
+        output = block(x)
+        assert output.dtype == jnp.float32
+
+    def test_forward_pass_values(self, setup):
+        """Test that forward pass produces non-negative variance outputs."""
+        block = GaussianBlock(self.input_dim, self.output_dim, rngs=self.rngs)
+        x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.input_dim))
+        output = block(x)
+
+        var_positive = output[:, self.output_dim :]
+
+        assert jnp.all(var_positive >= 0)  # Ensure variance is non-negative
+
+    def test_distribution_has_zero_covariance(self, setup):
+        """Test that the output distribution is close to a multivariate normal with the
+        predicted mean and diagonal covariance."""
+        block = GaussianBlock(self.input_dim, self.output_dim, rngs=self.rngs)
+        x = jax.random.normal(jax.random.PRNGKey(0), (1, self.input_dim))
+        output = block(x)
+
+        mu = output[:, : self.output_dim]
+        var_positive = output[:, self.output_dim :]
+
+        # Sample from the predicted distribution
+        rng = jax.random.PRNGKey(42)
+        eps = jax.random.normal(rng, shape=(1000, self.output_dim))
+        samples = mu + jnp.sqrt(var_positive) * eps
+
+        # Compute sample mean and covariance
+        sample_mean = jnp.mean(samples, axis=0)
+        sample_cov = jnp.cov(samples, rowvar=False)
+
+        # Check that sample mean is close to predicted mean
+        assert jnp.allclose(sample_mean, jnp.mean(mu, axis=0), atol=0.1)
+
+        # Check that off-diagonal covariance terms are close to zero
+        off_diag_cov = sample_cov - jnp.diag(jnp.diag(sample_cov))
+        assert jnp.allclose(off_diag_cov, jnp.zeros_like(off_diag_cov), atol=0.1)
