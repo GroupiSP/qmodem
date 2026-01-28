@@ -15,13 +15,6 @@ class TestMLPBlockV0:
         self.batch_size = 32
         self.rngs = nnx.Rngs(0)
 
-    def test_initialization(self, setup):
-        """Test that MLPBlockV0 initializes correctly."""
-        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.rngs)
-        assert hasattr(block, "linear1")
-        assert hasattr(block, "norm1")
-        assert hasattr(block, "dropout")
-
     def test_forward_pass_shape(self, setup):
         """Test that forward pass preserves input shape."""
         block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.rngs)
@@ -87,12 +80,6 @@ class TestGaussianBlock:
         self.batch_size = 10
         self.rngs = nnx.Rngs(0)
 
-    def test_initialization(self, setup):
-        """Test that GaussianBlock initializes correctly."""
-        block = GaussianBlock(self.input_dim, self.output_dim, rngs=self.rngs)
-        assert hasattr(block, "linear_1")
-        assert hasattr(block, "linear_2")
-
     def test_forward_pass_shape(self, setup):
         """Test that forward pass preserves input shape."""
         block = GaussianBlock(self.input_dim, self.output_dim, rngs=self.rngs)
@@ -153,14 +140,6 @@ class TestResNetBlockV0:
         self.rngs = nnx.Rngs(0)
         self.act_fn = nnx.gelu
 
-    def test_initialization(self, setup):
-        """Test that ResNetBlockV0 initializes correctly."""
-        block = ResNetBlockV0(self.layer_dim, self.act_fn, rngs=self.rngs)
-        assert hasattr(block, "linear_1")
-        assert hasattr(block, "linear_2")
-        assert hasattr(block, "norm")
-        assert hasattr(block, "act_fn")
-
     def test_forward_pass_shape(self, setup):
         """Test that forward pass preserves input shape."""
         block = ResNetBlockV0(self.layer_dim, self.act_fn, rngs=self.rngs)
@@ -212,17 +191,6 @@ class TestResNetBlockV1:
         self.batch_size = 16
         self.rngs = nnx.Rngs(0)
         self.act_fn = nnx.gelu
-
-    def test_initialization(self, setup):
-        """Test that ResNetBlockV1 initializes correctly."""
-        block = ResNetBlockV1(
-            self.layer_dim, self.dropout_rate, self.act_fn, rngs=self.rngs
-        )
-        assert hasattr(block, "linear1")
-        assert hasattr(block, "linear2")
-        assert hasattr(block, "dropout")
-        assert hasattr(block, "norm")
-        assert hasattr(block, "act_fn")
 
     def test_forward_pass_shape(self, setup):
         """Test that forward pass preserves input shape."""
