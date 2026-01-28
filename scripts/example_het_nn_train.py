@@ -24,7 +24,7 @@ def main() -> None:
 
     # Training parameters.
     LR = 1e-3
-    N_EPOCHS = 50
+    N_EPOCHS = 200
     PRINT_EVERY = 10
     BATCH_SIZE = 50
     DO_CHECKPOINT = False
