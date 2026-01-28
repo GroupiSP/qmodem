@@ -222,6 +222,26 @@ class MCDNetV0(nnx.Module):
         x = self.linear2(x)
         return x
 
+    def sample(self, x: jax.Array, num_samples: int) -> jax.Array:
+        """Generate multiple stochastic forward passes through the network.
+
+        Args:
+            x (jax.Array): Input data.
+            num_samples (int): Number of stochastic samples to generate.
+
+        Returns:
+            jax.Array: Array of shape (num_samples, batch_size, output_dim)
+                        containing the stochastic outputs.
+        """
+
+        def single_pass(x):
+            return self(x, deterministic=False)
+
+        samples = jax.vmap(single_pass, in_axes=None, out_axes=0)(
+            jnp.tile(x, (num_samples, 1))
+        )
+        return samples
+
 
 class MCDNetV1(nnx.Module):
     def __init__(
@@ -261,6 +281,26 @@ class MCDNetV1(nnx.Module):
 
         x = self.linear2(x)
         return x
+
+    def sample(self, x: jax.Array, num_samples: int) -> jax.Array:
+        """Generate multiple stochastic forward passes through the network.
+
+        Args:
+            x (jax.Array): Input data.
+            num_samples (int): Number of stochastic samples to generate.
+
+        Returns:
+            jax.Array: Array of shape (num_samples, batch_size, output_dim)
+                        containing the stochastic outputs.
+        """
+
+        def single_pass(x):
+            return self(x, deterministic=False)
+
+        samples = jax.vmap(single_pass, in_axes=None, out_axes=0)(
+            jnp.tile(x, (num_samples, 1))
+        )
+        return samples
 
 
 class NNEnsemble(nnx.Module):
