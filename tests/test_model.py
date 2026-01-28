@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from qmodem import HNNV0, nll_loss
+from qmodem.module import HNNV0, MCDNetV0, nll_loss
 
 _rng_key = jax.random.PRNGKey(0)
 
@@ -11,6 +11,11 @@ _rng_key = jax.random.PRNGKey(0)
 @pytest.fixture
 def mock_hnn_v0() -> HNNV0:
     return HNNV0(dimensions=[1, 10, 10], rngs=nnx.Rngs(0))
+
+
+@pytest.fixture
+def mock_mcdnet_v0() -> MCDNetV0:
+    return MCDNetV0(rngs=nnx.Rngs(params=0, dropout=1))
 
 
 def test_hnn_v0_init(mock_hnn_v0) -> None:

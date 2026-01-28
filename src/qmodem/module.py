@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from flax import nnx
 
 
-class GaussianLayer(nnx.Module):
+class GaussianBlock(nnx.Module):
     def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
         self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
         self.linear_2 = nnx.Linear(input_dim, output_dim, rngs=rngs)
@@ -126,7 +126,7 @@ class HNNV0(nnx.Module):
 
         # Final layer is a Gaussian one (output=[mu, softplus(var)])
         self.layers.append(
-            GaussianLayer(input_dim=dimensions[-1], output_dim=1, rngs=rngs)
+            GaussianBlock(input_dim=dimensions[-1], output_dim=1, rngs=rngs)
         )
 
     def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
@@ -171,7 +171,7 @@ class HNNV1(nnx.Module):
 
         self.linear_end = nnx.Linear(dim_resnet_layers, dim_linear_end, rngs=rngs)
 
-        self.gaussian = GaussianLayer(dim_linear_end, dim_out, rngs=rngs)
+        self.gaussian = GaussianBlock(dim_linear_end, dim_out, rngs=rngs)
 
     def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
         x = self.act_fn(self.linear_start(x))
