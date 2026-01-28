@@ -84,17 +84,21 @@ class ResNetBlockV1(nnx.Module):
 
 
 class MLPBlockV0(nnx.Module):
-    def __init__(self, hidden_dim: int, dropout_rate: float, rngs: nnx.Rngs):
+    def __init__(
+        self, hidden_dim: int, dropout_rate: float, act_fn: nnx.Module, rngs: nnx.Rngs
+    ):
         """Linear layer with layer normalization and dropout in between."""
         self.linear1 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
         self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
         self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
 
+        self.act_fn = act_fn
+
     def __call__(self, x, deterministic: bool = False):
         # First sub-block
         x = self.linear1(x)
         x = self.norm1(x)
-        x = nnx.gelu(x)
+        x = self.act_fn(x)
 
         x = self.dropout(x, deterministic=deterministic)
         return x
@@ -193,6 +197,7 @@ class MCDNetV0(nnx.Module):
         output_dim: int = 1,
         num_blocks: int = 3,
         dropout_rate: float = 0.1,
+        act_fn: nnx.Module = nnx.gelu,
         *,
         rngs: nnx.Rngs,
     ):
@@ -204,9 +209,14 @@ class MCDNetV0(nnx.Module):
         self.linear1 = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
         self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
 
+        self.act_fn = act_fn
+
         # Stack ResNet Blocks
         self.blocks = nnx.List(
-            [MLPBlockV0(hidden_dim, dropout_rate, rngs=rngs) for _ in range(num_blocks)]
+            [
+                MLPBlockV0(hidden_dim, dropout_rate, act_fn=act_fn, rngs=rngs)
+                for _ in range(num_blocks)
+            ]
         )
 
         self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
@@ -214,7 +224,7 @@ class MCDNetV0(nnx.Module):
     def __call__(self, x, deterministic: bool = False):
         x = self.linear1(x)
         x = self.norm1(x)
-        x = nnx.gelu(x)
+        x = self.act_fn(x)
         # No dropout to avoid dropping important features.
 
         for block in self.blocks:
@@ -252,6 +262,7 @@ class MCDNetV1(nnx.Module):
         output_dim: int = 1,
         num_blocks: int = 3,
         dropout_rate: float = 0.1,
+        act_fn: nnx.Module = nnx.gelu,
         *,
         rngs: nnx.Rngs,
     ):
@@ -263,19 +274,21 @@ class MCDNetV1(nnx.Module):
         self.linear1 = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
         self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
 
-        # Stack ResNet Blocks
+        self.act_fn = act_fn
+
+        # Stack ResNet Blocks with dropout
         self.blocks = [
-            ResNetBlockV1(hidden_dim, dropout_rate, rngs) for _ in range(num_blocks)
+            ResNetBlockV1(hidden_dim, dropout_rate, act_fn, rngs)
+            for _ in range(num_blocks)
         ]
 
         # Final prediction layer
         self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
-        self.dropout2 = nnx.Dropout(dropout_rate, rngs=rngs)
 
     def __call__(self, x, deterministic: bool = False):
         x = self.linear1(x)
         x = self.norm1(x)
-        x = nnx.gelu(x)
+        x = self.act_fn(x)
 
         for block in self.blocks:
             x = block(x, deterministic=deterministic)
