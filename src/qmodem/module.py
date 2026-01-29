@@ -12,7 +12,7 @@ class GaussianBlock(nnx.Module):
         self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
         self.linear_2 = nnx.Linear(input_dim, output_dim, rngs=rngs)
 
-    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         mu = self.linear_1(x)
         var = self.linear_2(x)
         var_positive = nnx.softplus(var)
@@ -37,7 +37,7 @@ class ResNetBlockV0(nnx.Module):
 
         self.act_fn = act_fn
 
-    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         residual = x
         x = self.act_fn(self.linear_1(x))
         x = self.linear_2(x)
@@ -183,7 +183,7 @@ class HNNV1(nnx.Module):
 
         for resnet in self.resnets:
             # incl. already activation function
-            x = resnet(x, rngs=rngs)
+            x = resnet(x)
 
         x = self.act_fn(self.linear_end(x))
         return self.gaussian(x, rngs=rngs)
