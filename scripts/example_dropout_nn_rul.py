@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
@@ -89,7 +90,7 @@ def main() -> None:
     # Load (trained) model checkpoint.
     checkpointer = ocp.StandardCheckpointer()
 
-    model = MCDNetV0(rngs=nnx.Rngs(params=0, dropout=1))
+    model = MCDNetV0(rngs=nnx.Rngs(0))
     target_state = nnx.state(model, nnx.Param)
 
     state_restored = checkpointer.restore(
@@ -98,17 +99,20 @@ def main() -> None:
 
     nnx.update(model, state_restored)
 
+    rng_dropout = nnx.Rngs(1)
+
     @nnx.jit
-    def predict_step(model, x):
-        return model(x, deterministic=False)
+    def predict_step(model: MCDNetV0, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
+        return model(x, rngs=rngs)
 
     rul_mean_nn = jnp.empty(shape=len(vs))
     rul_std_nn = jnp.empty(shape=len(vs))
 
+    model.train()  # for MCD
     for i, v in enumerate(vs):
         predictions = jnp.array(
             [
-                predict_step(model, v).squeeze() * meta["y_max"]
+                predict_step(model, v, rng_dropout).squeeze() * meta["y_max"]
                 for _ in range(ENSEMBLE_SIZE)
             ]
         )

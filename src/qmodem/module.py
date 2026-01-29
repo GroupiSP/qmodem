@@ -69,13 +69,11 @@ class ResNetBlockV1(nnx.Module):
 
         self.act_fn = act_fn
 
-    def __call__(self, x, deterministic: bool = False):
+    def __call__(self, x, rngs: nnx.Rngs):
         residual = x
         x = self.linear1(x)
         x = self.act_fn(x)
-        x = self.dropout(
-            x, deterministic=deterministic
-        )  # apply Dropout inside the branch
+        x = self.dropout(x, rngs=rngs)  # apply Dropout inside the branch
         x = self.linear2(x)
         x = self.norm(x)  # Starts as 0 contribution due to init
         x = x + residual
@@ -94,13 +92,11 @@ class MLPBlockV0(nnx.Module):
 
         self.act_fn = act_fn
 
-    def __call__(self, x, deterministic: bool = False):
-        # First sub-block
+    def __call__(self, x, rngs: nnx.Rngs):
         x = self.linear1(x)
         x = self.norm1(x)
         x = self.act_fn(x)
-
-        x = self.dropout(x, deterministic=deterministic)
+        x = self.dropout(x, rngs=rngs)
         return x
 
 
@@ -221,14 +217,14 @@ class MCDNetV0(nnx.Module):
 
         self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
 
-    def __call__(self, x, deterministic: bool = False):
+    def __call__(self, x, rngs: nnx.Rngs):
         x = self.linear1(x)
         x = self.norm1(x)
         x = self.act_fn(x)
         # No dropout to avoid dropping important features.
 
         for block in self.blocks:
-            x = block(x, deterministic=deterministic)
+            x = block(x, rngs=rngs)
 
         x = self.linear2(x)
         return x
@@ -265,13 +261,13 @@ class MCDNetV1(nnx.Module):
         # Final prediction layer
         self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
 
-    def __call__(self, x, deterministic: bool = False):
+    def __call__(self, x, rngs: nnx.Rngs):
         x = self.linear1(x)
         x = self.norm1(x)
         x = self.act_fn(x)
 
         for block in self.blocks:
-            x = block(x, deterministic=deterministic)
+            x = block(x, rngs=rngs)
 
         x = self.linear2(x)
         return x

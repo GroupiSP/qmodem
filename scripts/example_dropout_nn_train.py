@@ -22,8 +22,7 @@ from qmodem.utils import mkdir_if_not_existent
 
 
 def create_model_and_optimizer(lr_init: float, n_epochs: int, steps_per_epoch: int):
-    rngs = nnx.Rngs(params=0, dropout=1)
-    model = MCDNetV0(rngs=rngs)
+    model = MCDNetV0(rngs=nnx.Rngs(0))
 
     # Cosine decay schedule
     total_steps = n_epochs * steps_per_epoch
@@ -109,12 +108,16 @@ def main() -> None:
         lr_init=LR, n_epochs=N_EPOCHS, steps_per_epoch=len(ds_train) // BATCH_SIZE
     )
 
-    def loss_fn(model, batch, deterministic):
-        # deterministic=False enables dropout during training
-        # NNX automatically updates the internal dropout RNG state here!
-        xs, labels = batch
-        predictions = model(xs, deterministic=deterministic)[:, 0]
-        loss = jnp.mean((predictions - labels) ** 2)
+    @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)  # Batched over samples and rngs.
+    def model_forward_batch(model: MCDNetV0, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
+        return model(x, rngs=rngs)
+
+    def loss_fn(
+        model: MCDNetV0, batch: tuple[jax.Array, jax.Array], rngs: nnx.Rngs
+    ) -> jax.Array:
+        x, y = batch
+        predictions = model_forward_batch(model, x, rngs=rngs)
+        loss = jnp.mean((predictions[:, 0] - y) ** 2)
         return loss
 
     # Define (jitted) training step and test step functions.
@@ -123,27 +126,42 @@ def main() -> None:
         model: MCDNetV0,
         optimizer: nnx.Optimizer,
         batch: tuple[jax.Array],
+        rngs: nnx.Rngs,
     ) -> None:
         """One step of the training (parameter and optimizer state update)."""
         grad_fn = nnx.value_and_grad(loss_fn, argnums=0, has_aux=False)
-        loss, grads = grad_fn(model, batch, False)
-        optimizer.update(model, grads)  # In-place updates.\
+        _, grads = grad_fn(model, batch, rngs)
+        optimizer.update(model, grads)
 
     @nnx.jit
-    def eval_step(  # TODO: check
-        model: MCDNetV0, dataset: tuple[jax.Array]
-    ) -> jax.Array:
-        """Evaluates the model over the entire data-source."""
-        return loss_fn(model, batch=dataset, deterministic=True)
+    def eval_step(model: MCDNetV0, dataset: tuple[jax.Array, jax.Array]) -> jax.Array:
+        """Evaluates the model over the entire data-source.
+
+        Not vmapped.
+        """
+        x, y = dataset
+        predictions = model(x, rngs=nnx.Rngs(0))
+        return jnp.mean((predictions[:, 0] - y) ** 2)
 
     # Monitor the validation loss for early stopping.
     early_stopper = EarlyStopper(patience=10, min_delta=1e-4)
 
     # Train the model.
-    for epoch in range(1, N_EPOCHS + 1):
-        for batch in dataloader_train:
-            train_step(model, optimizer, batch)
+    rng_dropout = nnx.Rngs(1)
+    forked_rngs_dropout = rng_dropout.fork(split=BATCH_SIZE)
+    forked_rngs_dropout_last = rng_dropout.fork(split=len(ds_train) % BATCH_SIZE)
 
+    for epoch in range(1, N_EPOCHS + 1):
+        model.train()  # set model to training mode (for dropout)
+        for batch in dataloader_train:
+            rngs = (
+                forked_rngs_dropout
+                if len(batch[0]) == BATCH_SIZE
+                else forked_rngs_dropout_last
+            )
+            train_step(model, optimizer, batch, rngs)
+
+        model.eval()  # set model to eval mode (no dropout)
         val_loss = eval_step(model, ds_validation[:])
 
         if early_stopper(val_loss):
