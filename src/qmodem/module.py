@@ -139,7 +139,7 @@ class HNNV0(nnx.Module):
             GaussianBlock(input_dim=dimensions[-1], output_dim=1, rngs=rngs)
         )
 
-    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         for layer in self.layers[:-1]:
             x = self.act_fn(layer(x))
 
@@ -281,9 +281,7 @@ class NNEnsemble(nnx.Module):
     pass
 
 
-def nll_loss(
-    model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
-) -> jax.Array:
+def nll_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
     """Negative log-liklihood loss, based on a Gaussian predictive distribution of the model.
     It implements Equation (31) in https://doi.org/10.1016/j.ymssp.2023.110796.
 
@@ -297,16 +295,14 @@ def nll_loss(
     """
 
     xs, labels = batch
-    outputs = model(xs, rngs=rngs)
+    outputs = model(xs)
     means, variances = outputs[:, 0], outputs[:, 1]
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
 
     return jnp.mean(losses)
 
 
-def mse_loss(
-    model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
-) -> jax.Array:
+def mse_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
     """Mean squared error loss.
 
     Args:
@@ -317,7 +313,7 @@ def mse_loss(
         jax.Array: loss value for the batch.
     """
     xs, labels = batch
-    outputs = model(xs, rngs=rngs)
+    outputs = model(xs)
     losses = jnp.square(outputs - labels)
 
     return jnp.mean(losses)
