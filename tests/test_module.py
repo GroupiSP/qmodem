@@ -13,18 +13,19 @@ class TestMLPBlockV0:
         self.hidden_dim = 64
         self.dropout_rate = 0.1
         self.batch_size = 32
+        self.act_fn = nnx.gelu
         self.rngs = nnx.Rngs(0)
 
     def test_forward_pass_shape(self, setup):
         """Test that forward pass preserves input shape."""
-        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.rngs)
+        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.act_fn, self.rngs)
         x = jnp.ones((self.batch_size, self.hidden_dim))
         output = block(x, deterministic=True)
         assert output.shape == x.shape
 
     def test_forward_pass_deterministic(self, setup):
         """Test that deterministic mode produces consistent outputs."""
-        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.rngs)
+        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.act_fn, self.rngs)
         x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.hidden_dim))
 
         output1 = block(x, deterministic=True)
@@ -34,7 +35,7 @@ class TestMLPBlockV0:
 
     def test_forward_pass_stochastic(self, setup):
         """Test that stochastic mode can produce different outputs."""
-        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.rngs)
+        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.act_fn, self.rngs)
         x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.hidden_dim))
 
         output1 = block(x, deterministic=False)
@@ -45,14 +46,14 @@ class TestMLPBlockV0:
 
     def test_output_dtype(self, setup):
         """Test that output has correct dtype."""
-        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.rngs)
+        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.act_fn, self.rngs)
         x = jnp.ones((self.batch_size, self.hidden_dim), dtype=jnp.float32)
         output = block(x, deterministic=True)
         assert output.dtype == jnp.float32
 
     def test_different_batch_sizes(self, setup):
         """Test forward pass with different batch sizes."""
-        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.rngs)
+        block = MLPBlockV0(self.hidden_dim, self.dropout_rate, self.act_fn, self.rngs)
 
         for batch_size in [1, 16, 32, 64]:
             x = jnp.ones((batch_size, self.hidden_dim))
@@ -61,7 +62,7 @@ class TestMLPBlockV0:
 
     def test_dropout_rate_zero(self, setup):
         """Test with dropout rate of zero."""
-        block = MLPBlockV0(self.hidden_dim, 0.0, self.rngs)
+        block = MLPBlockV0(self.hidden_dim, 0.0, self.act_fn, self.rngs)
         x = jax.random.normal(jax.random.PRNGKey(0), (self.batch_size, self.hidden_dim))
 
         output1 = block(x, deterministic=False)
