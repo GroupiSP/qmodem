@@ -58,3 +58,33 @@ class BatterySimulationSource:
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""
         return self.X[record_key], self.y[record_key]
+
+
+class BatterySimulationTimeSeriesSource:
+    def __init__(
+        self,
+        simulator: les.SimulatorSimple | les.SimulatorComplete,
+    ) -> None:
+        """Runs and access to battery simulation data as time series.
+
+        Args:
+            simulator (les.SimulatorSimple | les.SimulatorComplete): the simulator from
+                lib_eod_simulation. It needs to be configured outside of this data
+                source.
+        """
+        simulator.simulate()
+
+        # Transpose for convenience. Shape=(N_simu, N_t).
+        discharge_voltage_per_sim: np.ndarray = simulator.v_memo.T
+
+        self.X = jnp.array(discharge_voltage_per_sim)
+        self.y = jnp.array(simulator.t_eods)
+
+    def __len__(self) -> int:
+        """Number of records in the dataset, corresponding to the number of discharge
+        histories."""
+        return len(self.y)
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
+        """Retrieves record for the given record_key."""
+        return self.X[record_key], self.y[record_key]
