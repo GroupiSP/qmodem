@@ -22,9 +22,8 @@ class BatterySimulationSource:
         Args:
             simulator (les.SimulatorSimple | les.SimulatorComplete): the simulator from
                 lib_eod_simulation. It needs to be configured outside of this data
-                source. It must have `N_simu=1` (only deterministic case, work in progress
-                to extend).
-            normalize (bool): Normalizes the RUL values (divide by max(RUL)). Defaults to False.
+                source.
+                normalize (bool): Normalizes the RUL values (divide by max(RUL)). Defaults to False.
         """
         simulator.simulate()
 
