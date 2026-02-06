@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import SupportsIndex
 
@@ -59,31 +58,3 @@ class BatterySimulationSource:
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""
         return self.X[record_key], self.y[record_key]
-
-
-def make_battery_data(
-    N_simu: int = 1,
-) -> tuple[les.SimulatorSimple, BatterySimulationSource]:
-    """Makes the Grain data source for the battery simulator. Assumes a constant current
-    policy.
-
-    Args:
-        N_simu (int, optional): Number of MC simulations of the battery discharge. Defaults to 1.
-
-    Returns:
-        BatterySimulationSource: the Grain battery data-source.
-    """
-    with open(BATT_CONFIG_PATH) as fp:
-        sim_config = json.load(fp)
-
-    I_discharge = les.ConstantCurrentDischarge(sim_config["I_const_discharge"])
-
-    sim = les.SimulatorSimple(
-        N_simu,
-        sim_config["v_cut"],
-        sim_config["SoC"],
-        I_discharge,
-        sim_config["model_config"],
-    )
-
-    return sim, BatterySimulationSource(sim)
