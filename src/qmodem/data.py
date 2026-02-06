@@ -87,3 +87,10 @@ class BatterySimulationTimeSeriesSource:
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
         """Retrieves record for the given record_key."""
         return self.X[record_key], self.y[record_key]
+
+    def shuffle(self, seed: int) -> None:
+        """Shuffles the order of the records in the dataset."""
+        key = jax.random.PRNGKey(seed)
+        perm = jax.random.permutation(key, len(self.y))
+        self.X = self.X[perm]
+        self.y = self.y[perm]
