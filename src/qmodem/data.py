@@ -31,13 +31,16 @@ class BatterySimulationSource:
         simulator: les.SimulatorSimple | les.SimulatorComplete,
         normalize: bool = False,
     ) -> None:
-        """Runs and access to battery simulation data.
+        """Runs and access to battery simulation data. The histories of multiple
+        simulations are flattened into a single dataset, where each record corresponds
+        to a single time step in a discharge history. The features are the voltage at
+        that time step, and the target is the RUL at that time step.
 
         Args:
             simulator (les.SimulatorSimple | les.SimulatorComplete): the simulator from
                 lib_eod_simulation. It needs to be configured outside of this data
                 source.
-                normalize (bool): Normalizes the RUL values (divide by max(RUL)). Defaults to False.
+            normalize (bool): Normalizes the RUL values (divide by max(RUL)). Defaults to False.
         """
         simulator.simulate()
 
