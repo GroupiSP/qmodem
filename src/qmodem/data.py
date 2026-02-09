@@ -11,6 +11,20 @@ import numpy as np
 BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
 
 
+def _back_calculate_rul_linear(t_eod: float, N_t: int, dt: float) -> np.ndarray:
+    """Back-calculates RUL values for a linear degradation model.
+
+    Args:
+        t_eod (float): time of end of discharge (failure).
+        N_t (int): number of time steps in the discharge history.
+        dt (float): time step size.
+
+    Returns:
+        np.ndarray: RUL values for each time step, clipped to be non-negative.
+    """
+    return np.clip(t_eod - np.arange(N_t) * dt, a_min=0.0, a_max=None)
+
+
 class BatterySimulationSource:
     def __init__(
         self,
@@ -35,12 +49,9 @@ class BatterySimulationSource:
         ruls = np.empty(shape=(simulator.N_simu * N_t))
 
         for i in range(simulator.N_simu):
-            ruls[i * N_t : (i + 1) * N_t] = np.clip(
-                simulator.t_eods[i] - np.arange(N_t) * simulator.dt,
-                a_min=0.0,
-                a_max=None,
-            )  # clipping ensures that the failed particles have RUL=0. after their time of failure
-
+            ruls[i * N_t : (i + 1) * N_t] = _back_calculate_rul_linear(
+                t_eod=simulator.t_eods[i], N_t=N_t, dt=simulator.dt
+            )
         y = ruls
         self.y_max = np.max(y)
 
