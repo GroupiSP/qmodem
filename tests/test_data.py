@@ -12,7 +12,9 @@ def mock_simulator():
     simulator = Mock()
     simulator.N_simu = 1
     simulator.dt = 0.1
-    simulator.t_eods = np.array([1.0])
+    simulator.t_eods = np.array(
+        [10.0]
+    )  # Changed from 1.0 for clearer normalization tests
     # Create discharge voltage data: shape (1, N_t) after transpose
     simulator.v_memo = np.array(
         [4.2, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, 3.5, 3.4, 3.3]
@@ -72,8 +74,9 @@ class TestBatterySimulationTimeWindowSourceInit:
         source = BatterySimulationTimeWindowSource(
             mock_simulator, window_size=2, normalize=False
         )
-        # y_max should be close to t_eod (1.0)
-        assert float(source.y_max) <= 1.0
+        # y_max should be close to t_eod (10.0) when not normalized
+        assert float(source.y_max) > 5.0  # Should be close to 10.0
+        assert float(source.y_max) <= 10.0
 
     def test_init_normalization_enabled(self, mock_simulator):
         """Test that normalization works correctly."""
