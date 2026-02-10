@@ -80,11 +80,15 @@ class BatterySimulationTimeWindowSource:
         simulator: les.SimulatorSimple | les.SimulatorComplete,
         window_size: int,
         stride: int = 1,
+        normalize: bool = False,
     ) -> None:
         """Data source that provides time-windowed, labelled chunks of the discharge
         history. The features are the voltage values in the time window, and the target
         is the RUL at the time step immediately following the time window (sliding time
         window strategy). The last time window is returned with a RUL of 0.
+
+        This data source is compatible with Google Grain's DataLoader via random access
+        through __getitem__ and __len__ methods.
 
         Args:
             simulator (les.SimulatorSimple | les.SimulatorComplete): the simulator from
@@ -94,37 +98,74 @@ class BatterySimulationTimeWindowSource:
             stride (int): the stride of the sliding time window
                 (number of time steps to move the window at each step).
                 Defaults to 1.
+            normalize (bool): Normalizes the RUL values (divide by max(RUL)).
+                Defaults to False.
 
         Raises:
-            InputError: if the simulator's number of simulations is greater than 1.
+            ValueError: if the simulator's number of simulations is greater than 1.
+            ValueError: if window_size is greater than the number of time steps.
         """
         if simulator.N_simu > 1:
             raise ValueError(
-                "BatterySimulationTimeWindowSource only supports a single simulation. "
+                "BatterySimulationTimeWindowSource only supports a single simulation."
             )
 
         simulator.simulate()
         # Shape=(N_simu, N_t).
         discharge_voltage_per_sim: np.ndarray = simulator.v_memo.T
         N_t = discharge_voltage_per_sim.shape[1]
-        # Only one simulation, so we can take the first row.
-        self.discharge_voltage = jnp.array(discharge_voltage_per_sim[0])
-        self.ruls = _back_calculate_rul_linear(t_eod=simulator.t_eods[0], N_t=N_t)
-        self.window_size = window_size
-        self.stride = stride
-        self.N_t = N_t
 
-    def __iter__(self):
-        """Returns an iterator over the records in the dataset."""
-        for start in range(0, self.N_t - self.window_size + 1, self.stride):
-            end = start + self.window_size
-            window = self.discharge_voltage[start:end].reshape(1, -1)
-            if end < self.N_t:
-                target = self.ruls[end]
+        if window_size > N_t:
+            raise ValueError(
+                f"window_size ({window_size}) cannot be greater than "
+                f"number of time steps ({N_t})."
+            )
+
+        # Only one simulation, so we can take the first row.
+        discharge_voltage = discharge_voltage_per_sim[0]
+        ruls = _back_calculate_rul_linear(t_eod=simulator.t_eods[0], N_t=N_t)
+
+        # Pre-compute all windows and targets
+        num_windows = (N_t - window_size) // stride + 1
+        windows = []
+        targets = []
+
+        for i in range(num_windows):
+            start = i * stride
+            end = start + window_size
+            window = discharge_voltage[start:end].reshape(1, -1)
+            windows.append(window)
+
+            # Target is RUL at the next time step after window
+            if end < N_t:
+                target = ruls[end]
             else:
-                # Last window, return with RUL of 0.
-                target = jnp.array(0.0)
-            yield (window, target)
+                # Last window, return with RUL of 0
+                target = 0.0
+            targets.append(target)
+
+        self.X = jnp.array(np.array(windows))
+        self.y = jnp.array(np.array(targets))
+        self.y_max = jnp.max(self.y)
+
+        if normalize:
+            self.y = self.y / self.y_max
+
+    def __len__(self) -> int:
+        """Number of time windows in the dataset."""
+        return len(self.y)
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
+        """Retrieves window and target for the given record_key.
+
+        Args:
+            record_key (SupportsIndex): Index of the window to retrieve.
+
+        Returns:
+            tuple[jax.Array, jax.Array]: A tuple of (window, target) where window
+                has shape (1, window_size) and target is a scalar.
+        """
+        return self.X[record_key], self.y[record_key]
 
 
 # TODO: remove

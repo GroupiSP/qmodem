@@ -57,7 +57,12 @@ uv run docformatter --in-place --config ./pyproject.toml
 ### Core Components
 
 1. **Data Pipeline** (`src/qmodem/data.py`)
-   - `BatterySimulationSource`: Generates training data from battery discharge simulations
+   - `BatterySimulationSource`: Generates training data from battery discharge simulations (flattens time-steps)
+   - `BatterySimulationTimeWindowSource`: Generates time-windowed data (compatible with Grain DataLoader)
+     - Pre-computes all windows at initialization for random access
+     - Supports `__len__` and `__getitem__` for batching with IndexSampler
+     - Optional normalization of RUL values
+     - Single simulation only, 2D windows with shape `(1, window_size)`
    - Uses `lib_eod_simulation` library for physics-based battery simulations
    - Flattens multi-simulation histories into time-step records with voltage features and RUL targets
    - Configuration file: `battery_config.json` (referenced via `BATT_CONFIG_PATH`)
