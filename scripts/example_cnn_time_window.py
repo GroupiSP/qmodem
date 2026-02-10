@@ -3,7 +3,7 @@
 This script demonstrates:
 - Training on multiple discharge histories (combined time window sources)
 - Validation monitoring during training
-- Testing on the final window of a single discharge history
+- Testing on the initial window of a single discharge history
 - Minimal CNN architecture (1 conv layer, 4 filters, no pooling)
 """
 
@@ -30,7 +30,7 @@ from qmodem.utils import mkdir_if_not_existent
 
 
 def main():
-    """Train a CNN on time-windowed battery data and test on final window."""
+    """Train a CNN on time-windowed battery data and test on initial window."""
     # Directories
     ROOT_DIR = Path().cwd() / "saved" / "cnn_time_window"
     CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
@@ -254,21 +254,21 @@ def main():
     print(f"Training complete! Best validation loss: {best_val_loss:.6f}")
     print()
 
-    # Test on final window
-    print("Testing on final window of test discharge history...")
-    final_window, final_target = ds_test[len(ds_test) - 1]
+    # Test on initial window
+    print("Testing on initial window of test discharge history...")
+    initial_window, initial_target = ds_test[0]
 
     # Add batch dimension and predict
-    final_window_batch = jnp.expand_dims(final_window, axis=0)
-    prediction = model(final_window_batch)[0]
+    initial_window_batch = jnp.expand_dims(initial_window, axis=0)
+    prediction = model(initial_window_batch)[0]
 
     # Unscale prediction and target
     prediction_unscaled = prediction * ds_test.y_max
-    target_unscaled = final_target * ds_test.y_max
+    target_unscaled = initial_target * ds_test.y_max
 
-    print(f"Final window index: {len(ds_test) - 1}")
+    print(f"Initial window index: {len(ds_test) - 1}")
     print(f"Normalized prediction: {prediction:.6f}")
-    print(f"Normalized target: {final_target:.6f}")
+    print(f"Normalized target: {initial_target:.6f}")
     print(f"Unscaled prediction: {prediction_unscaled:.2f}")
     print(f"Unscaled target: {target_unscaled:.2f}")
     print(f"Absolute error: {abs(prediction_unscaled - target_unscaled):.2f}")
