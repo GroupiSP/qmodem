@@ -23,7 +23,6 @@ def _back_calculate_rul_linear(t_eod: float, N_t: int) -> np.ndarray:
     """
     dt = t_eod / N_t
     ruls = np.clip(t_eod - np.arange(N_t) * dt, a_min=0.0, a_max=None)
-    ruls[-1] = 0.0  # Ensure last RUL is exactly 0.
     return jnp.array(ruls)
 
 

@@ -35,7 +35,6 @@ def test_back_calculate_rul_linear():
     ruls = _back_calculate_rul_linear(t_eod=t_eod, N_t=100)
     assert len(ruls) == 100
     assert np.isclose(ruls[0], 10.0)
-    assert np.isclose(ruls[-1], 0.0)
 
 
 class TestBatterySimulationTimeWindowSourceInit:
@@ -67,7 +66,6 @@ class TestBatterySimulationTimeWindowSourceInit:
         source = BatterySimulationTimeWindowSource(mock_simulator, window_size=2)
         assert source.ruls.shape == (10,)
         assert source.ruls[0] == mock_simulator.t_eods
-        assert source.ruls[-1] == 0.0
 
     def test_init_discharge_voltage_and_ruls_consistent(self, mock_simulator):
         """Test that discharge voltage and RULs are consistent in length."""
