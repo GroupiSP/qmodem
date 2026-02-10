@@ -137,11 +137,11 @@ class BatterySimulationTimeWindowSource:
             windows.append(window)
 
             # Target is RUL at the next time step after window
-            if end < N_t:
-                target = ruls[end]
-            else:
-                # Last window, return with RUL of 0
+            # For the last window, always use RUL = 0
+            if i == num_windows - 1:
                 target = 0.0
+            else:
+                target = ruls[end]
             targets.append(target)
 
         self.X = jnp.array(np.array(windows))
@@ -204,3 +204,34 @@ class BatterySimulationTimeSeriesSource:
         perm = jax.random.permutation(key, len(self.y))
         self.X = self.X[perm]
         self.y = self.y[perm]
+
+
+class CombinedTimeWindowSource:
+    def __init__(self, sources: list[BatterySimulationTimeWindowSource]) -> None:
+        """Combined data source from multiple time window sources.
+
+        Combines multiple BatterySimulationTimeWindowSource instances into one dataset
+        by concatenating all windows and targets. This allows training on multiple
+        discharge histories.
+
+        Args:
+            sources (list[BatterySimulationTimeWindowSource]): List of time window
+                data sources to combine.
+        """
+        all_windows = []
+        all_targets = []
+
+        for source in sources:
+            all_windows.append(source.X)
+            all_targets.append(source.y)
+
+        self.X = jnp.concatenate(all_windows, axis=0)
+        self.y = jnp.concatenate(all_targets, axis=0)
+
+    def __len__(self) -> int:
+        """Number of records in the combined dataset."""
+        return len(self.y)
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
+        """Retrieves window and target for the given record_key."""
+        return self.X[record_key], self.y[record_key]
