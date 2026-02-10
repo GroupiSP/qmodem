@@ -1,12 +1,15 @@
 from .data import (  # noqa: F401
     BATT_CONFIG_PATH,
     BatterySimulationSource,
+    BatterySimulationTimeWindowSource,
+    CombinedTimeWindowSource,
 )
 from .module import (  # noqa: F401
     HNNV0,
     HNNV1,
     MCDNetV0,
     MCDNetV1,
+    SimpleCNN1D,
     mse_loss,
     nll_loss,
 )

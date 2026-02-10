@@ -7,6 +7,78 @@ import jax.numpy as jnp
 from flax import nnx
 
 
+class SimpleCNN1D(nnx.Module):
+    def __init__(
+        self,
+        window_size: int,
+        n_filters: int = 4,
+        kernel_size: int = 5,
+        act_fn: nnx.Module = nnx.gelu,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Simple 1D CNN for time-series RUL prediction with minimal parameters.
+
+        Architecture: Conv1D -> Activation -> Flatten -> Dense
+        No pooling layers to keep the architecture minimal.
+
+        Args:
+            window_size (int): Size of the input time window.
+            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
+            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
+            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
+            rngs (nnx.Rngs): RNGs for the flax internal modules.
+        """
+        self.window_size = window_size
+        self.n_filters = n_filters
+        self.kernel_size = kernel_size
+        self.act_fn = act_fn
+
+        # Conv1D: expects (batch, length, features) format in Flax NNX
+        # Input: (batch, window_size, 1)
+        # Output: (batch, window_size - kernel_size + 1, n_filters) with VALID padding
+        self.conv = nnx.Conv(
+            in_features=1,
+            out_features=n_filters,
+            kernel_size=(kernel_size,),
+            padding="VALID",  # No padding, output length = input_length - kernel_size + 1
+            rngs=rngs,
+        )
+
+        # Calculate output size after convolution
+        conv_output_length = window_size - kernel_size + 1
+        self.flatten_size = n_filters * conv_output_length
+
+        # Dense layer to output single RUL prediction
+        self.dense = nnx.Linear(self.flatten_size, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """Forward pass through the CNN.
+
+        Args:
+            x (jax.Array): Input with shape (batch, 1, window_size).
+                           Will be transposed to (batch, window_size, 1).
+
+        Returns:
+            jax.Array: Predicted RUL values with shape (batch,).
+        """
+        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
+        x = jnp.transpose(x, (0, 2, 1))
+
+        # Conv1D with activation
+        x = self.conv(x)
+        x = self.act_fn(x)
+
+        # Flatten: (batch, conv_output_length, n_filters) -> (batch, flatten_size)
+        x = x.reshape(x.shape[0], -1)
+
+        # Dense layer to single output
+        x = self.dense(x)
+
+        # Squeeze last dimension: (batch, 1) -> (batch,)
+        return x.squeeze(-1)
+
+
 class GaussianBlock(nnx.Module):
     def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
         self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
