@@ -167,6 +167,84 @@ class HeteroscedasticCNN1D(nnx.Module):
         return self.gaussian_block(x)
 
 
+class HeteroscedasticCNN1DV1(nnx.Module):
+    def __init__(
+        self,
+        window_size: int,
+        n_filters: int = 8,
+        kernel_size: int = 5,
+        act_fn: nnx.Module = nnx.gelu,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Heteroscedastic 1D CNN with two conv layers for RUL prediction.
+
+        Architecture: Conv1D -> Act -> Conv1D -> Act -> Flatten -> GaussianBlock
+        Outputs both mean and variance predictions.
+
+        Args:
+            window_size (int): Size of the input time window.
+            n_filters (int, optional): Number of convolutional filters per layer.
+                Defaults to 8.
+            kernel_size (int, optional): Size of the convolutional kernel.
+                Defaults to 5.
+            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
+            rngs (nnx.Rngs): RNGs for the flax internal modules.
+        """
+        self.window_size = window_size
+        self.n_filters = n_filters
+        self.kernel_size = kernel_size
+        self.act_fn = act_fn
+
+        # First conv layer: (batch, window_size, 1) -> (batch, L1, n_filters)
+        self.conv1 = nnx.Conv(
+            in_features=1,
+            out_features=n_filters,
+            kernel_size=(kernel_size,),
+            padding="VALID",
+            rngs=rngs,
+        )
+        conv1_output_length = window_size - kernel_size + 1
+
+        # Second conv layer: (batch, L1, n_filters) -> (batch, L2, n_filters)
+        self.conv2 = nnx.Conv(
+            in_features=n_filters,
+            out_features=n_filters,
+            kernel_size=(kernel_size,),
+            padding="VALID",
+            rngs=rngs,
+        )
+        conv2_output_length = conv1_output_length - kernel_size + 1
+
+        self.flatten_size = n_filters * conv2_output_length
+
+        # GaussianBlock to output mean and variance
+        self.gaussian_block = GaussianBlock(self.flatten_size, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """Forward pass through the two-layer heteroscedastic CNN.
+
+        Args:
+            x (jax.Array): Input with shape (batch, 1, window_size).
+                           Will be transposed to (batch, window_size, 1).
+
+        Returns:
+            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
+        """
+        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
+        x = jnp.transpose(x, (0, 2, 1))
+
+        # Conv1D layers with activation
+        x = self.act_fn(self.conv1(x))
+        x = self.act_fn(self.conv2(x))
+
+        # Flatten: (batch, conv2_output_length, n_filters) -> (batch, flatten_size)
+        x = x.reshape(x.shape[0], -1)
+
+        # GaussianBlock: (batch, flatten_size) -> (batch, 2)
+        return self.gaussian_block(x)
+
+
 class GaussianBlock(nnx.Module):
     def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
         self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)

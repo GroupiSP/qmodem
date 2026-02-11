@@ -8,6 +8,7 @@ from .module import (  # noqa: F401
     HNNV0,
     HNNV1,
     HeteroscedasticCNN1D,
+    HeteroscedasticCNN1DV1,
     MCDNetV0,
     MCDNetV1,
     SimpleCNN1D,

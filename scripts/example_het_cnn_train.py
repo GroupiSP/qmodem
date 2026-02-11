@@ -5,7 +5,7 @@ This script demonstrates:
 - Training on multiple discharge histories (combined time window sources)
 - Validation monitoring during training
 - Using NLL loss for heteroscedastic predictions (mean + variance)
-- Minimal CNN architecture (1 conv layer, 4 filters, no pooling)
+- Two-layer CNN architecture (2 conv layers, 8 filters each, no pooling)
 """
 
 import time
@@ -29,7 +29,7 @@ from grain.transforms import Batch
 from qmodem import (
     BatterySimulationTimeWindowSource,
     CombinedTimeWindowSource,
-    HeteroscedasticCNN1D,
+    HeteroscedasticCNN1DV1,
     nll_loss,
 )
 from qmodem.train import EarlyStopper
@@ -177,8 +177,8 @@ def main():
     # Create model
     print("Creating heteroscedastic CNN model...")
     rngs = nnx.Rngs(0)
-    model = HeteroscedasticCNN1D(
-        window_size=WINDOW_SIZE, n_filters=4, kernel_size=5, rngs=rngs
+    model = HeteroscedasticCNN1DV1(
+        window_size=WINDOW_SIZE, n_filters=8, kernel_size=5, rngs=rngs
     )
 
     # Count parameters

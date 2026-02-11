@@ -3,7 +3,7 @@
 This script:
 - Runs a deterministic simulation to get voltage trajectory
 - Runs stochastic simulations from SOCs after the first time window
-- Uses trained HeteroscedasticCNN1D to predict RUL with uncertainty
+- Uses trained HeteroscedasticCNN1DV1 to predict RUL with uncertainty
 - Compares predictions using 95% CI plots and CRPS metric
 - Plots CDFs of simulator and CNN predictions
 """
@@ -24,7 +24,7 @@ from _shared import (
     read_json,
     restore_model_from_checkpoint,
 )
-from qmodem import HeteroscedasticCNN1D
+from qmodem import HeteroscedasticCNN1DV1
 from qmodem.metrics import cdf, crps
 
 
@@ -88,8 +88,8 @@ def main() -> None:
     print("Loading trained heteroscedastic CNN model...")
     model = restore_model_from_checkpoint(
         ckpt_dir / "trained_state",
-        lambda: HeteroscedasticCNN1D(
-            window_size=WINDOW_SIZE, n_filters=4, kernel_size=5, rngs=nnx.Rngs(0)
+        lambda: HeteroscedasticCNN1DV1(
+            window_size=WINDOW_SIZE, n_filters=8, kernel_size=5, rngs=nnx.Rngs(0)
         ),
     )
     model.eval()
