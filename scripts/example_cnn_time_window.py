@@ -8,12 +8,14 @@ This script demonstrates:
 """
 
 import json
+import time
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import optax
+import orbax.checkpoint as ocp
 from flax import nnx
 from grain import DataLoader
 from grain.samplers import IndexSampler
@@ -96,7 +98,9 @@ def main():
         print(f"  Simulation {i + 1}/{N_SIMU_TRAIN}: {len(source)} windows")
 
     ds_train = CombinedTimeWindowSource(train_sources)
+    y_max_train = float(jnp.max(jnp.array([s.y_max for s in train_sources])))
     print(f"Total training windows: {len(ds_train)}")
+    print(f"Training y_max: {y_max_train:.2f}")
     print()
 
     # Create validation data
@@ -144,9 +148,9 @@ def main():
     print(f"Test y_max: {ds_test.y_max:.2f} (for unscaling)")
     print()
 
-    # Save y_max for later unscaling
+    # Save training y_max for later unscaling (used by prediction scripts)
     with open(METADATA_DIR / "y_max.json", "w") as f:
-        json.dump({"y_max": float(ds_test.y_max)}, f)
+        json.dump({"y_max": y_max_train, "window_size": WINDOW_SIZE}, f)
 
     # Create DataLoaders
     sampler_train = IndexSampler(
@@ -252,6 +256,16 @@ def main():
 
     print("=" * 70)
     print(f"Training complete! Best validation loss: {best_val_loss:.6f}")
+    print()
+
+    # Checkpoint the trained model
+    print("Saving checkpoint...")
+    ckpt_dir = ocp.test_utils.erase_and_create_empty(CHECKPOINT_DIR)
+    checkpointer = ocp.StandardCheckpointer()
+    _, model_state = nnx.split(model)
+    checkpointer.save(ckpt_dir / "trained_state", model_state)
+    time.sleep(0.5)  # Prevent shutdown from breaking checkpointing.
+    print(f"Checkpoint saved to {CHECKPOINT_DIR}")
     print()
 
     # Test on initial window
