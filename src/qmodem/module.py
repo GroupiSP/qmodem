@@ -7,6 +7,45 @@ import jax.numpy as jnp
 from flax import nnx
 
 
+def _build_cnn_backbone(
+    window_size: int,
+    n_filters: int,
+    kernel_size: int,
+    rngs: nnx.Rngs,
+) -> dict:
+    """Build shared CNN backbone components (Conv1D, Flatten).
+
+    Args:
+        window_size (int): Size of the input time window.
+        n_filters (int): Number of convolutional filters.
+        kernel_size (int): Size of the convolutional kernel.
+        rngs (nnx.Rngs): RNGs for the flax internal modules.
+
+    Returns:
+        dict: Dictionary containing 'conv' layer, 'conv_output_length', and 'flatten_size'.
+    """
+    # Conv1D: expects (batch, length, features) format in Flax NNX
+    # Input: (batch, window_size, 1)
+    # Output: (batch, window_size - kernel_size + 1, n_filters) with VALID padding
+    conv = nnx.Conv(
+        in_features=1,
+        out_features=n_filters,
+        kernel_size=(kernel_size,),
+        padding="VALID",  # No padding, output length = input_length - kernel_size + 1
+        rngs=rngs,
+    )
+
+    # Calculate output size after convolution
+    conv_output_length = window_size - kernel_size + 1
+    flatten_size = n_filters * conv_output_length
+
+    return {
+        "conv": conv,
+        "conv_output_length": conv_output_length,
+        "flatten_size": flatten_size,
+    }
+
+
 class SimpleCNN1D(nnx.Module):
     def __init__(
         self,
@@ -34,20 +73,10 @@ class SimpleCNN1D(nnx.Module):
         self.kernel_size = kernel_size
         self.act_fn = act_fn
 
-        # Conv1D: expects (batch, length, features) format in Flax NNX
-        # Input: (batch, window_size, 1)
-        # Output: (batch, window_size - kernel_size + 1, n_filters) with VALID padding
-        self.conv = nnx.Conv(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",  # No padding, output length = input_length - kernel_size + 1
-            rngs=rngs,
-        )
-
-        # Calculate output size after convolution
-        conv_output_length = window_size - kernel_size + 1
-        self.flatten_size = n_filters * conv_output_length
+        # Build CNN backbone
+        backbone = _build_cnn_backbone(window_size, n_filters, kernel_size, rngs)
+        self.conv = backbone["conv"]
+        self.flatten_size = backbone["flatten_size"]
 
         # Dense layer to output single RUL prediction
         self.dense = nnx.Linear(self.flatten_size, 1, rngs=rngs)
@@ -77,6 +106,65 @@ class SimpleCNN1D(nnx.Module):
 
         # Squeeze last dimension: (batch, 1) -> (batch,)
         return x.squeeze(-1)
+
+
+class HeteroscedasticCNN1D(nnx.Module):
+    def __init__(
+        self,
+        window_size: int,
+        n_filters: int = 4,
+        kernel_size: int = 5,
+        act_fn: nnx.Module = nnx.gelu,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Heteroscedastic 1D CNN for time-series RUL prediction with uncertainty.
+
+        Architecture: Conv1D -> Activation -> Flatten -> GaussianBlock
+        Outputs both mean and variance predictions.
+
+        Args:
+            window_size (int): Size of the input time window.
+            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
+            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
+            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
+            rngs (nnx.Rngs): RNGs for the flax internal modules.
+        """
+        self.window_size = window_size
+        self.n_filters = n_filters
+        self.kernel_size = kernel_size
+        self.act_fn = act_fn
+
+        # Build CNN backbone
+        backbone = _build_cnn_backbone(window_size, n_filters, kernel_size, rngs)
+        self.conv = backbone["conv"]
+        self.flatten_size = backbone["flatten_size"]
+
+        # GaussianBlock to output mean and variance
+        self.gaussian_block = GaussianBlock(self.flatten_size, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """Forward pass through the heteroscedastic CNN.
+
+        Args:
+            x (jax.Array): Input with shape (batch, 1, window_size).
+                           Will be transposed to (batch, window_size, 1).
+
+        Returns:
+            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
+        """
+        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
+        x = jnp.transpose(x, (0, 2, 1))
+
+        # Conv1D with activation
+        x = self.conv(x)
+        x = self.act_fn(x)
+
+        # Flatten: (batch, conv_output_length, n_filters) -> (batch, flatten_size)
+        x = x.reshape(x.shape[0], -1)
+
+        # GaussianBlock: (batch, flatten_size) -> (batch, 2)
+        return self.gaussian_block(x)
 
 
 class GaussianBlock(nnx.Module):

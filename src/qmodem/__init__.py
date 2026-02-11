@@ -7,6 +7,7 @@ from .data import (  # noqa: F401
 from .module import (  # noqa: F401
     HNNV0,
     HNNV1,
+    HeteroscedasticCNN1D,
     MCDNetV0,
     MCDNetV1,
     SimpleCNN1D,

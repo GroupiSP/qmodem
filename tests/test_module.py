@@ -3,7 +3,14 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from qmodem.module import GaussianBlock, MLPBlockV0, ResNetBlockV0, ResNetBlockV1
+from qmodem.module import (
+    GaussianBlock,
+    HeteroscedasticCNN1D,
+    MLPBlockV0,
+    ResNetBlockV0,
+    ResNetBlockV1,
+    SimpleCNN1D,
+)
 
 
 class TestMLPBlockV0:
@@ -295,3 +302,242 @@ class TestResNetBlockV1:
         output2 = block(x, rngs=rngs_dropout)
         # With zero dropout, outputs should be identical in stochastic mode
         assert jnp.allclose(output1, output2)
+
+
+class TestSimpleCNN1D:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.window_size = 48
+        self.n_filters = 4
+        self.kernel_size = 5
+        self.batch_size = 16
+        self.rngs = nnx.Rngs(0)
+
+    def test_forward_pass_shape(self, setup):
+        """Test that forward pass produces correct output shape."""
+        model = SimpleCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        # Input: (batch, 1, window_size)
+        x = jnp.ones((self.batch_size, 1, self.window_size))
+        output = model(x)
+        # Output: (batch,)
+        assert output.shape == (self.batch_size,)
+
+    def test_output_dtype(self, setup):
+        """Test that output has correct dtype."""
+        model = SimpleCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        x = jnp.ones((self.batch_size, 1, self.window_size), dtype=jnp.float32)
+        output = model(x)
+        assert output.dtype == jnp.float32
+
+    def test_parameter_count(self, setup):
+        """Test that parameter count is as expected."""
+        model = SimpleCNN1D(
+            window_size=48,
+            n_filters=4,
+            kernel_size=5,
+            rngs=nnx.Rngs(0),
+        )
+        # Conv: (1 * 5 + 1) * 4 = 24 params
+        # Dense: (44 * 4 + 1) * 1 = 177 params
+        # Total: 201 params
+        params = nnx.state(model, nnx.Param)
+        total_params = sum(p.size for p in jax.tree.leaves(params))
+        assert total_params == 201
+
+    def test_different_window_sizes(self, setup):
+        """Test forward pass with different window sizes."""
+        for window_size in [24, 48, 96]:
+            model = SimpleCNN1D(
+                window_size,
+                self.n_filters,
+                self.kernel_size,
+                rngs=nnx.Rngs(0),
+            )
+            x = jnp.ones((self.batch_size, 1, window_size))
+            output = model(x)
+            assert output.shape == (self.batch_size,)
+
+    def test_different_batch_sizes(self, setup):
+        """Test forward pass with different batch sizes."""
+        model = SimpleCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        for batch_size in [1, 8, 16, 32]:
+            x = jnp.ones((batch_size, 1, self.window_size))
+            output = model(x)
+            assert output.shape == (batch_size,)
+
+    def test_gradient_computation(self, setup):
+        """Test that gradients can be computed through the model."""
+        model = SimpleCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        target = jnp.ones((self.batch_size,))
+
+        def loss_fn(model):
+            pred = model(x)
+            return jnp.mean((pred - target) ** 2)
+
+        loss, grads = nnx.value_and_grad(loss_fn)(model)
+        assert jnp.isfinite(loss)
+        # Check that gradients exist and are finite
+        grad_params = nnx.state(grads, nnx.Param)
+        assert all(jnp.all(jnp.isfinite(g)) for g in jax.tree.leaves(grad_params))
+
+
+class TestHeteroscedasticCNN1D:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.window_size = 48
+        self.n_filters = 4
+        self.kernel_size = 5
+        self.batch_size = 16
+        self.rngs = nnx.Rngs(0)
+
+    def test_forward_pass_shape(self, setup):
+        """Test that forward pass produces correct output shape."""
+        model = HeteroscedasticCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        # Input: (batch, 1, window_size)
+        x = jnp.ones((self.batch_size, 1, self.window_size))
+        output = model(x)
+        # Output: (batch, 2) - concatenated [mu, var_positive]
+        assert output.shape == (self.batch_size, 2)
+
+    def test_output_dtype(self, setup):
+        """Test that output has correct dtype."""
+        model = HeteroscedasticCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        x = jnp.ones((self.batch_size, 1, self.window_size), dtype=jnp.float32)
+        output = model(x)
+        assert output.dtype == jnp.float32
+
+    def test_split_mu_and_var(self, setup):
+        """Test that mu and var_positive can be split correctly."""
+        model = HeteroscedasticCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        output = model(x)
+
+        # Split output into mu and var_positive
+        mu = output[:, 0]
+        var_positive = output[:, 1]
+
+        assert mu.shape == (self.batch_size,)
+        assert var_positive.shape == (self.batch_size,)
+
+    def test_variance_is_positive(self, setup):
+        """Test that variance output is always positive."""
+        model = HeteroscedasticCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        output = model(x)
+
+        var_positive = output[:, 1]
+        assert jnp.all(var_positive >= 0)
+
+    def test_parameter_count(self, setup):
+        """Test that parameter count is as expected."""
+        model = HeteroscedasticCNN1D(
+            window_size=48,
+            n_filters=4,
+            kernel_size=5,
+            rngs=nnx.Rngs(0),
+        )
+        # Conv: (1 * 5 + 1) * 4 = 24 params
+        # GaussianBlock (2 Linear layers): 2 * (44 * 4 * 1 + 1) = 354 params
+        # Total: 378 params
+        params = nnx.state(model, nnx.Param)
+        total_params = sum(p.size for p in jax.tree.leaves(params))
+        assert total_params == 378
+
+    def test_different_window_sizes(self, setup):
+        """Test forward pass with different window sizes."""
+        for window_size in [24, 48, 96]:
+            model = HeteroscedasticCNN1D(
+                window_size,
+                self.n_filters,
+                self.kernel_size,
+                rngs=nnx.Rngs(0),
+            )
+            x = jnp.ones((self.batch_size, 1, window_size))
+            output = model(x)
+            assert output.shape == (self.batch_size, 2)
+
+    def test_different_batch_sizes(self, setup):
+        """Test forward pass with different batch sizes."""
+        model = HeteroscedasticCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        for batch_size in [1, 8, 16, 32]:
+            x = jnp.ones((batch_size, 1, self.window_size))
+            output = model(x)
+            assert output.shape == (batch_size, 2)
+
+    def test_gradient_computation(self, setup):
+        """Test that gradients can be computed through the model."""
+        model = HeteroscedasticCNN1D(
+            self.window_size,
+            self.n_filters,
+            self.kernel_size,
+            rngs=self.rngs,
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        target = jnp.ones((self.batch_size,))
+
+        def loss_fn(model):
+            output = model(x)
+            mu = output[:, 0]
+            return jnp.mean((mu - target) ** 2)
+
+        loss, grads = nnx.value_and_grad(loss_fn)(model)
+        assert jnp.isfinite(loss)
+        # Check that gradients exist and are finite
+        grad_params = nnx.state(grads, nnx.Param)
+        assert all(jnp.all(jnp.isfinite(g)) for g in jax.tree.leaves(grad_params))
