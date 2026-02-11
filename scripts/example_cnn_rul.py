@@ -7,8 +7,6 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import numpy as np
-from flax import nnx
-
 from _shared import (
     create_battery_and_policy,
     get_run_dirs,
@@ -16,6 +14,8 @@ from _shared import (
     read_json,
     restore_model_state,
 )
+from flax import nnx
+
 from qmodem import SimpleCNN1D
 from qmodem.data import _back_calculate_rul_linear
 
@@ -29,7 +29,7 @@ def main() -> None:
     V_CUT = 2.5
 
     # Load training y_max for unscaling predictions
-    meta = read_json(METADATA_DIR / "y_max.json")
+    meta = read_json(METADATA_DIR / "meta.json")
     y_max = meta["y_max"]
     window_size = meta["window_size"]
 

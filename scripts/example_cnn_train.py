@@ -14,17 +14,17 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import optax
 import orbax.checkpoint as ocp
-from flax import nnx
-from grain import DataLoader
-from grain.samplers import IndexSampler
-from grain.transforms import Batch
-
 from _shared import (
     create_battery_and_policy,
     get_run_dirs,
     make_simulator_config,
     write_json,
 )
+from flax import nnx
+from grain import DataLoader
+from grain.samplers import IndexSampler
+from grain.transforms import Batch
+
 from qmodem import (
     BatterySimulationTimeWindowSource,
     CombinedTimeWindowSource,
@@ -146,7 +146,7 @@ def main():
 
     # Save training y_max for later unscaling (used by prediction scripts)
     write_json(
-        METADATA_DIR / "y_max.json",
+        METADATA_DIR / "meta.json",
         {"y_max": y_max_train, "window_size": WINDOW_SIZE},
     )
 
