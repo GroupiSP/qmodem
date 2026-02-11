@@ -38,7 +38,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load metadata
-    metadata = read_json(metadata_dir / "y_max.json")
+    metadata = read_json(metadata_dir / "meta.json")
     y_max = metadata["y_max"]
     WINDOW_SIZE = metadata["window_size"]
 
