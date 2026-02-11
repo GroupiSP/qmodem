@@ -1,22 +1,23 @@
-import json
-from pathlib import Path
-
 import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
-import orbax.checkpoint as ocp
 from flax import nnx
 
-from qmodem import BATT_CONFIG_PATH, MCDNetV0
+from _shared import (
+    create_battery_and_policy,
+    get_run_dirs,
+    make_simulator_config,
+    read_json,
+    restore_model_state,
+)
+from qmodem import MCDNetV0
 from qmodem.metrics import cdf, crps
 
 
 def main() -> None:
     # Directories
-    ROOT_DIR = Path().cwd() / "saved" / "MLPV0"
-    CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
-    METADATA_DIR = ROOT_DIR / "metadata"
+    _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs("MLPV0")
 
     # Battery simulator parameters.
     N_SIMU = 1000
@@ -28,28 +29,19 @@ def main() -> None:
     # ENSEMBLE_SIZE = 20
 
     # For uncscaling we need the max(RUL) found during training, saved as metadata.
-    with open(METADATA_DIR / "meta.json", "r") as fp:
-        meta = json.load(fp)
+    meta = read_json(METADATA_DIR / "meta.json")
+    battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
-    # Create battery model.
-    with open(BATT_CONFIG_PATH) as fp:
-        battery_config = json.load(fp)
-
-    battery = les.BatteryModel(battery_config)
-
-    # Create a current discharge policy.
-    discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
-
-    sim_config = {
-        "N_simu": N_SIMU,
-        "v_cut": V_CUT,
-        "SoC_0": 1.0,
-        "dt": 10.0,
-        "omega_std": OMEGA_STD,
-        "eta_std": ETA_STD,
-        "I": discharge_policy,
-        "battery": battery,
-    }
+    sim_config = make_simulator_config(
+        n_simu=N_SIMU,
+        v_cut=V_CUT,
+        soc_0=1.0,
+        dt=10.0,
+        omega_std=OMEGA_STD,
+        eta_std=ETA_STD,
+        discharge_policy=discharge_policy,
+        battery=battery,
+    )
     sim = les.SimulatorSimple(sim_config)
 
     sim.simulate()
@@ -60,16 +52,8 @@ def main() -> None:
     print(f"RUL reference samples shape: {rul_ref_samples.shape}")
 
     # Load (trained) model checkpoint.
-    checkpointer = ocp.StandardCheckpointer()
-
     model = MCDNetV0(rngs=nnx.Rngs(0))
-    target_state = nnx.state(model, nnx.Param)
-
-    state_restored = checkpointer.restore(
-        CHECKPOINT_DIR / "trained_state", target=target_state
-    )
-
-    nnx.update(model, state_restored)
+    restore_model_state(CHECKPOINT_DIR / "trained_state", model)
 
     # Run one more simulation to get the test data for RUL prediction.
     sim = les.SimulatorSimple(sim_config)

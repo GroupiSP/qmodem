@@ -1,6 +1,4 @@
-import json
 import time
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -12,13 +10,17 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
+from _shared import (
+    create_battery_and_policy,
+    get_run_dirs,
+    make_simulator_config,
+    write_json,
+)
 from qmodem import (
-    BATT_CONFIG_PATH,
     BatterySimulationSource,
     MCDNetV0,
 )
 from qmodem.train import EarlyStopper
-from qmodem.utils import mkdir_if_not_existent
 
 
 def create_model_and_optimizer(lr_init: float, n_epochs: int, steps_per_epoch: int):
@@ -38,11 +40,7 @@ def create_model_and_optimizer(lr_init: float, n_epochs: int, steps_per_epoch: i
 
 def main() -> None:
     # Directories
-    ROOT_DIR = Path().cwd() / "saved" / "MLPV0"
-    CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
-    METADATA_DIR = ROOT_DIR / "metadata"
-    # Ensure exist for all directories.
-    mkdir_if_not_existent([CHECKPOINT_DIR, METADATA_DIR])
+    _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs("MLPV0", create=True)
 
     # Training parameters.
     LR = 1e-3
@@ -61,29 +59,23 @@ def main() -> None:
     OMEGA_STD = 1e-3
     ETA_STD = 1e-2
 
-    # Create battery model.
-    with open(BATT_CONFIG_PATH) as fp:
-        battery_config = json.load(fp)
-
-    battery = les.BatteryModel(battery_config)
-
-    # Create a current discharge policy.
-    discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
+    battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
     # Create the battery simulators (1 for train and 1 for validation).
-    simulator_train_config = {
-        "N_simu": N_SIMU_TRAIN_DS,
-        "v_cut": V_CUT,
-        "SoC_0": SOC_0,
-        "dt": DT,
-        "omega_std": OMEGA_STD,
-        "eta_std": ETA_STD,
-        "I": discharge_policy,
-        "battery": battery,
+    simulator_train_config = make_simulator_config(
+        n_simu=N_SIMU_TRAIN_DS,
+        v_cut=V_CUT,
+        soc_0=SOC_0,
+        dt=DT,
+        omega_std=OMEGA_STD,
+        eta_std=ETA_STD,
+        discharge_policy=discharge_policy,
+        battery=battery,
+    )
+    simulator_validation_config = {
+        **simulator_train_config,
+        "N_simu": N_SIMU_VAL_DS,
     }
-
-    simulator_validation_config = simulator_train_config.copy()
-    simulator_validation_config["N_simu"] = N_SIMU_VAL_DS
 
     sim_train = les.SimulatorSimple(simulator_train_config)
     simulator_validation = les.SimulatorSimple(simulator_validation_config)
@@ -177,8 +169,7 @@ def main() -> None:
 
     # Save metadata (in this case, the y_max used for scaling).
     metadata = {"y_max": ds_train.y_max}
-    with open(METADATA_DIR / "meta.json", "w") as fp:
-        json.dump(metadata, fp)
+    write_json(METADATA_DIR / "meta.json", metadata)
 
     # Checkpoint the trained model.
     if DO_CHECKPOINT:

@@ -1,4 +1,3 @@
-import json
 import time
 from pathlib import Path
 
@@ -11,8 +10,8 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
+from _shared import create_battery_and_policy, make_simulator_config
 from qmodem import (
-    BATT_CONFIG_PATH,
     HNNV1,
     BatterySimulationSource,
     nll_loss,
@@ -39,29 +38,23 @@ def main() -> None:
     OMEGA_STD = 1e-3
     ETA_STD = 1e-2
 
-    # Create battery model.
-    with open(BATT_CONFIG_PATH) as fp:
-        battery_config = json.load(fp)
-
-    battery = les.BatteryModel(battery_config)
-
-    # Create a current discharge policy.
-    discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
+    battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
     # Create the battery simulators (1 for train and 1 for validation).
-    simulator_train_config = {
-        "N_simu": N_SIMU_TRAIN_DS,
-        "v_cut": V_CUT,
-        "SoC_0": SOC_0,
-        "dt": DT,
-        "omega_std": OMEGA_STD,
-        "eta_std": ETA_STD,
-        "I": discharge_policy,
-        "battery": battery,
+    simulator_train_config = make_simulator_config(
+        n_simu=N_SIMU_TRAIN_DS,
+        v_cut=V_CUT,
+        soc_0=SOC_0,
+        dt=DT,
+        omega_std=OMEGA_STD,
+        eta_std=ETA_STD,
+        discharge_policy=discharge_policy,
+        battery=battery,
+    )
+    simulator_test_config = {
+        **simulator_train_config,
+        "N_simu": N_SIMU_TEST_DS,
     }
-
-    simulator_test_config = simulator_train_config.copy()
-    simulator_test_config["N_simu"] = N_SIMU_TEST_DS
 
     sim_train = les.SimulatorSimple(simulator_train_config)
     sim_test = les.SimulatorSimple(simulator_test_config)

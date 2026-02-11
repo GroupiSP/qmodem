@@ -3,54 +3,49 @@
 Requires a trained CNN checkpoint from `example_cnn_time_window.py`.
 """
 
-import json
-from pathlib import Path
-
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import numpy as np
-import orbax.checkpoint as ocp
 from flax import nnx
 
-from qmodem import BATT_CONFIG_PATH, SimpleCNN1D
+from _shared import (
+    create_battery_and_policy,
+    get_run_dirs,
+    make_simulator_config,
+    read_json,
+    restore_model_state,
+)
+from qmodem import SimpleCNN1D
 from qmodem.data import _back_calculate_rul_linear
 
 
 def main() -> None:
     # Directories
-    ROOT_DIR = Path().cwd() / "saved" / "cnn_time_window"
-    CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
-    METADATA_DIR = ROOT_DIR / "metadata"
+    _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs("cnn_time_window")
 
     # Must match training parameters
     CURRENT_AMPLITUDE = -2.8 * 0.75
     V_CUT = 2.5
 
     # Load training y_max for unscaling predictions
-    with open(METADATA_DIR / "y_max.json") as f:
-        meta = json.load(f)
+    meta = read_json(METADATA_DIR / "y_max.json")
     y_max = meta["y_max"]
     window_size = meta["window_size"]
 
-    # Create battery model
-    with open(BATT_CONFIG_PATH) as f:
-        battery_config = json.load(f)
-
-    battery = les.BatteryModel(battery_config)
-    discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
+    battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
     # Run a deterministic simulation (no noise) for the true RUL curve
-    sim_config = {
-        "N_simu": 1,
-        "v_cut": V_CUT,
-        "SoC_0": 1.0,
-        "dt": 10.0,
-        "omega_std": 0.0,
-        "eta_std": 0.0,
-        "I": discharge_policy,
-        "battery": battery,
-    }
+    sim_config = make_simulator_config(
+        n_simu=1,
+        v_cut=V_CUT,
+        soc_0=1.0,
+        dt=10.0,
+        omega_std=0.0,
+        eta_std=0.0,
+        discharge_policy=discharge_policy,
+        battery=battery,
+    )
 
     sim_det = les.SimulatorSimple(sim_config)
     sim_det.simulate()
@@ -72,13 +67,7 @@ def main() -> None:
     model = SimpleCNN1D(
         window_size=window_size, n_filters=4, kernel_size=5, rngs=nnx.Rngs(0)
     )
-    target_state = nnx.state(model, nnx.Param)
-
-    checkpointer = ocp.StandardCheckpointer()
-    state_restored = checkpointer.restore(
-        CHECKPOINT_DIR / "trained_state", target=target_state
-    )
-    nnx.update(model, state_restored)
+    restore_model_state(CHECKPOINT_DIR / "trained_state", model)
     print("Model loaded successfully!")
 
     # Predict RUL for each window position (stride=1 for smooth curve)

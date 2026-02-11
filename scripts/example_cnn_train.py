@@ -7,9 +7,7 @@ This script demonstrates:
 - Minimal CNN architecture (1 conv layer, 4 filters, no pooling)
 """
 
-import json
 import time
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -21,23 +19,26 @@ from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
+from _shared import (
+    create_battery_and_policy,
+    get_run_dirs,
+    make_simulator_config,
+    write_json,
+)
 from qmodem import (
-    BATT_CONFIG_PATH,
     BatterySimulationTimeWindowSource,
     CombinedTimeWindowSource,
     SimpleCNN1D,
 )
 from qmodem.train import EarlyStopper
-from qmodem.utils import mkdir_if_not_existent
 
 
 def main():
     """Train a CNN on time-windowed battery data and test on initial window."""
     # Directories
-    ROOT_DIR = Path().cwd() / "saved" / "cnn_time_window"
-    CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
-    METADATA_DIR = ROOT_DIR / "metadata"
-    mkdir_if_not_existent([CHECKPOINT_DIR, METADATA_DIR])
+    _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs(
+        "cnn_time_window", create=True
+    )
 
     # Training parameters
     LR = 1e-3
@@ -60,12 +61,7 @@ def main():
     OMEGA_STD = 1e-3
     ETA_STD = 1e-2
 
-    # Load battery configuration
-    with open(BATT_CONFIG_PATH) as f:
-        battery_config = json.load(f)
-
-    battery = les.BatteryModel(battery_config)
-    discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
+    battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
     print("=" * 70)
     print("CNN Training on Time-Windowed Battery Data")
@@ -80,16 +76,16 @@ def main():
     print("Creating training dataset...")
     train_sources = []
     for i in range(N_SIMU_TRAIN):
-        sim_config = {
-            "N_simu": 1,
-            "v_cut": V_CUT,
-            "SoC_0": SOC_0,
-            "dt": DT,
-            "omega_std": OMEGA_STD,
-            "eta_std": ETA_STD,
-            "I": discharge_policy,
-            "battery": battery,
-        }
+        sim_config = make_simulator_config(
+            n_simu=1,
+            v_cut=V_CUT,
+            soc_0=SOC_0,
+            dt=DT,
+            omega_std=OMEGA_STD,
+            eta_std=ETA_STD,
+            discharge_policy=discharge_policy,
+            battery=battery,
+        )
         simulator = les.SimulatorSimple(sim_config)
         source = BatterySimulationTimeWindowSource(
             simulator, window_size=WINDOW_SIZE, stride=STRIDE, normalize=True
@@ -107,16 +103,16 @@ def main():
     print("Creating validation dataset...")
     val_sources = []
     for i in range(N_SIMU_VAL):
-        sim_config = {
-            "N_simu": 1,
-            "v_cut": V_CUT,
-            "SoC_0": SOC_0,
-            "dt": DT,
-            "omega_std": OMEGA_STD,
-            "eta_std": ETA_STD,
-            "I": discharge_policy,
-            "battery": battery,
-        }
+        sim_config = make_simulator_config(
+            n_simu=1,
+            v_cut=V_CUT,
+            soc_0=SOC_0,
+            dt=DT,
+            omega_std=OMEGA_STD,
+            eta_std=ETA_STD,
+            discharge_policy=discharge_policy,
+            battery=battery,
+        )
         simulator = les.SimulatorSimple(sim_config)
         source = BatterySimulationTimeWindowSource(
             simulator, window_size=WINDOW_SIZE, stride=STRIDE, normalize=True
@@ -130,16 +126,16 @@ def main():
 
     # Create test data: single simulation
     print("Creating test dataset (single simulation)...")
-    test_sim_config = {
-        "N_simu": 1,
-        "v_cut": V_CUT,
-        "SoC_0": SOC_0,
-        "dt": DT,
-        "omega_std": OMEGA_STD,
-        "eta_std": ETA_STD,
-        "I": discharge_policy,
-        "battery": battery,
-    }
+    test_sim_config = make_simulator_config(
+        n_simu=1,
+        v_cut=V_CUT,
+        soc_0=SOC_0,
+        dt=DT,
+        omega_std=OMEGA_STD,
+        eta_std=ETA_STD,
+        discharge_policy=discharge_policy,
+        battery=battery,
+    )
     test_simulator = les.SimulatorSimple(test_sim_config)
     ds_test = BatterySimulationTimeWindowSource(
         test_simulator, window_size=WINDOW_SIZE, stride=STRIDE, normalize=True
@@ -149,8 +145,10 @@ def main():
     print()
 
     # Save training y_max for later unscaling (used by prediction scripts)
-    with open(METADATA_DIR / "y_max.json", "w") as f:
-        json.dump({"y_max": y_max_train, "window_size": WINDOW_SIZE}, f)
+    write_json(
+        METADATA_DIR / "y_max.json",
+        {"y_max": y_max_train, "window_size": WINDOW_SIZE},
+    )
 
     # Create DataLoaders
     sampler_train = IndexSampler(

@@ -4,37 +4,31 @@ This demonstrates how to create time-windowed battery simulation data and use it
 batching for training.
 """
 
-import json
-
 import lib_eod_simulation as les
 from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
-from qmodem.data import BATT_CONFIG_PATH, BatterySimulationTimeWindowSource
+from _shared import create_battery_and_policy, make_simulator_config
+from qmodem.data import BatterySimulationTimeWindowSource
 
 
 def main():
     """Demonstrates BatterySimulationTimeWindowSource with Grain DataLoader."""
-    # Load battery configuration
-    with open(BATT_CONFIG_PATH) as f:
-        batt_config = json.load(f)
-
     # Create discharge policy and battery
-    discharge_policy = les.ConstantCurrentDischarge(-2.8)
-    battery = les.BatteryModel(batt_config)
+    battery, discharge_policy = create_battery_and_policy(-2.8)
 
     # Create simulator configuration (single simulation for time window source)
-    simulator_config = {
-        "N_simu": 1,  # Must be 1 for time window source
-        "v_cut": 2.5,
-        "SoC_0": 1.0,
-        "dt": 10.0,
-        "omega_std": 1e-3,
-        "eta_std": 1e-2,
-        "I": discharge_policy,
-        "battery": battery,
-    }
+    simulator_config = make_simulator_config(
+        n_simu=1,  # Must be 1 for time window source
+        v_cut=2.5,
+        soc_0=1.0,
+        dt=10.0,
+        omega_std=1e-3,
+        eta_std=1e-2,
+        discharge_policy=discharge_policy,
+        battery=battery,
+    )
 
     simulator = les.SimulatorSimple(simulator_config)
 

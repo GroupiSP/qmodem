@@ -1,14 +1,17 @@
-import json
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
-import orbax.checkpoint as ocp
 from flax import nnx
 
-from qmodem import BATT_CONFIG_PATH, HNNV1
+from _shared import (
+    create_battery_and_policy,
+    make_simulator_config,
+    restore_model_from_checkpoint,
+)
+from qmodem import HNNV1
 
 
 def main() -> None:
@@ -21,39 +24,28 @@ def main() -> None:
     OMEGA_STD = 1e-3
     ETA_STD = 1e-2
 
-    # Create battery model.
-    with open(BATT_CONFIG_PATH) as fp:
-        battery_config = json.load(fp)
-
-    battery = les.BatteryModel(battery_config)
-
-    # Create a current discharge policy.
-    discharge_policy = les.ConstantCurrentDischarge(CURRENT_AMPLITUDE)
+    battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
     # Create the battery simulator.
-    simulator_config = {
-        "N_simu": N_SIMU,
-        "v_cut": V_CUT,
-        "SoC_0": SOC_0,
-        "dt": DT,
-        "omega_std": OMEGA_STD,
-        "eta_std": ETA_STD,
-        "I": discharge_policy,
-        "battery": battery,
-    }
+    simulator_config = make_simulator_config(
+        n_simu=N_SIMU,
+        v_cut=V_CUT,
+        soc_0=SOC_0,
+        dt=DT,
+        omega_std=OMEGA_STD,
+        eta_std=ETA_STD,
+        discharge_policy=discharge_policy,
+        battery=battery,
+    )
 
     sim = les.SimulatorSimple(simulator_config)
 
     # Load (trained) model checkpoint.
     ckpt_dir = Path().cwd() / "checkpoints/"
-    checkpointer = ocp.StandardCheckpointer()
-
-    abstract_model = nnx.eval_shape(lambda: HNNV1(rngs=nnx.Rngs(0)))
-    graphdef, abstract_state = nnx.split(abstract_model)
-
-    state_restored = checkpointer.restore(ckpt_dir / "trained_state", abstract_state)
-
-    model = nnx.merge(graphdef, state_restored)
+    model = restore_model_from_checkpoint(
+        ckpt_dir / "trained_state",
+        lambda: HNNV1(rngs=nnx.Rngs(0)),
+    )
 
     # Run simulations.
     sim.simulate()
