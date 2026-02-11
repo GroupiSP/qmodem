@@ -137,12 +137,20 @@ class BatterySimulationTimeWindowSource:
             windows.append(window)
 
             # Target is RUL at the next time step after window
-            # For the last window, always use RUL = 0
-            if i == num_windows - 1:
-                target = 0.0
-            else:
+            if end < N_t:
                 target = ruls[end]
+            else:
+                target = 0.0
             targets.append(target)
+
+        # Add a final backwards-extended window that reaches the true end of
+        # the voltage trace, so the model sees near-EoD voltage patterns.
+        last_regular_end = (num_windows - 1) * stride + window_size
+        if last_regular_end < N_t:
+            start = N_t - window_size
+            window = discharge_voltage[start:N_t].reshape(1, -1)
+            windows.append(window)
+            targets.append(0.0)
 
         self.X = jnp.array(np.array(windows))
         self.y = jnp.array(np.array(targets))

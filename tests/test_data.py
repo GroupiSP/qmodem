@@ -100,8 +100,8 @@ class TestBatterySimulationTimeWindowSourceAccess:
         source = BatterySimulationTimeWindowSource(
             mock_simulator, window_size=2, stride=3
         )
-        # (10 - 2) // 3 + 1 = 8 // 3 + 1 = 2 + 1 = 3
-        assert len(source) == 3
+        # (10 - 2) // 3 + 1 = 3 regular windows + 1 final backwards-extended window
+        assert len(source) == 4
 
     def test_getitem_returns_window_and_target(self, mock_simulator):
         """Test __getitem__ returns correct window and target."""
@@ -148,7 +148,8 @@ class TestBatterySimulationTimeWindowSourceAccess:
         # First window: indices 0-1
         # Second window: indices 3-4
         # Third window: indices 6-7
-        assert len(source) == 3
+        # Fourth window (final backwards-extended): indices 8-9
+        assert len(source) == 4
         first_window, _ = source[0]
         expected_first = mock_simulator.v_memo[0:2].reshape(1, -1)
         np.testing.assert_array_almost_equal(first_window, expected_first)
