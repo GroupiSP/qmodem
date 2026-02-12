@@ -531,6 +531,7 @@ def nll_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
     xs, labels = batch
     outputs = model(xs)
     means, variances = outputs[:, 0], outputs[:, 1]
+    variances = jnp.clip(variances, min=1e-6)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
 
     return jnp.mean(losses)
