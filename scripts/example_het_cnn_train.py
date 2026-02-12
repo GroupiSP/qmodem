@@ -55,6 +55,7 @@ def main():
     N_SIMU_VAL = 3  # Number of discharge histories for validation
     WINDOW_SIZE = 48  # ~1/10 of typical history length (~486)
     STRIDE = 24  # 50% overlap between windows
+    N_RUL_SAMPLES = 10  # Forward sims per window for heteroscedastic targets
 
     # Battery simulation parameters
     CURRENT_AMPLITUDE = -2.8 * 0.75
@@ -66,11 +67,22 @@ def main():
 
     battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
+    # Configuration for forward RUL simulations (used by data source)
+    rul_sim_config = {
+        "battery": battery,
+        "discharge_policy": discharge_policy,
+        "v_cut": V_CUT,
+        "dt": DT,
+        "omega_std": OMEGA_STD,
+        "eta_std": ETA_STD,
+    }
+
     print("=" * 70)
     print("Heteroscedastic CNN Training on Time-Windowed Battery Data")
     print("=" * 70)
     print(f"Window size: {WINDOW_SIZE}")
     print(f"Stride: {STRIDE}")
+    print(f"RUL samples per window: {N_RUL_SAMPLES}")
     print(f"Training simulations: {N_SIMU_TRAIN}")
     print(f"Validation simulations: {N_SIMU_VAL}")
     print()
@@ -91,7 +103,12 @@ def main():
         )
         simulator = les.SimulatorSimple(sim_config)
         source = BatterySimulationTimeWindowSource(
-            simulator, window_size=WINDOW_SIZE, stride=STRIDE, normalize=True
+            simulator,
+            window_size=WINDOW_SIZE,
+            stride=STRIDE,
+            normalize=True,
+            n_rul_samples=N_RUL_SAMPLES,
+            rul_sim_config=rul_sim_config,
         )
         train_sources.append(source)
         print(f"  Simulation {i + 1}/{N_SIMU_TRAIN}: {len(source)} windows")
@@ -118,7 +135,12 @@ def main():
         )
         simulator = les.SimulatorSimple(sim_config)
         source = BatterySimulationTimeWindowSource(
-            simulator, window_size=WINDOW_SIZE, stride=STRIDE, normalize=True
+            simulator,
+            window_size=WINDOW_SIZE,
+            stride=STRIDE,
+            normalize=True,
+            n_rul_samples=N_RUL_SAMPLES,
+            rul_sim_config=rul_sim_config,
         )
         val_sources.append(source)
         print(f"  Simulation {i + 1}/{N_SIMU_VAL}: {len(source)} windows")
@@ -141,7 +163,12 @@ def main():
     )
     test_simulator = les.SimulatorSimple(test_sim_config)
     ds_test = BatterySimulationTimeWindowSource(
-        test_simulator, window_size=WINDOW_SIZE, stride=STRIDE, normalize=True
+        test_simulator,
+        window_size=WINDOW_SIZE,
+        stride=STRIDE,
+        normalize=True,
+        n_rul_samples=N_RUL_SAMPLES,
+        rul_sim_config=rul_sim_config,
     )
     print(f"Test windows: {len(ds_test)}")
     print(f"Test y_max: {ds_test.y_max:.2f} (for unscaling)")

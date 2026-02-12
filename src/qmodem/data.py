@@ -81,11 +81,23 @@ class BatterySimulationTimeWindowSource:
         window_size: int,
         stride: int = 1,
         normalize: bool = False,
+        n_rul_samples: int = 1,
+        rul_sim_config: dict | None = None,
     ) -> None:
         """Data source that provides time-windowed, labelled chunks of the discharge
         history. The features are the voltage values in the time window, and the target
-        is the RUL at the time step immediately following the time window (sliding time
-        window strategy). The last time window is returned with a RUL of 0.
+        is the RUL at the time step immediately following the time window.
+
+        When ``n_rul_samples > 1``, RUL targets are obtained by running stochastic
+        forward simulations from the SoC at each window endpoint. Each voltage window
+        is replicated ``n_rul_samples`` times, each paired with a different sampled
+        RUL target. This produces position-dependent (heteroscedastic) target variance:
+        windows at high SoC have large RUL spread, windows near end-of-discharge have
+        small spread.
+
+        When ``n_rul_samples == 1`` (default), a single forward simulation is run per
+        window position and ``rul_sim_config`` must still be provided, unless the
+        caller wants the legacy linear back-calculation (pass ``rul_sim_config=None``).
 
         This data source is compatible with Google Grain's DataLoader via random access
         through __getitem__ and __len__ methods.
@@ -100,15 +112,26 @@ class BatterySimulationTimeWindowSource:
                 Defaults to 1.
             normalize (bool): Normalizes the RUL values (divide by max(RUL)).
                 Defaults to False.
+            n_rul_samples (int): number of stochastic forward simulations to run per
+                window position for RUL target sampling. Each window is replicated
+                this many times. Defaults to 1.
+            rul_sim_config (dict | None): simulator configuration dict used to run
+                forward RUL simulations. Must contain keys: ``battery``,
+                ``discharge_policy``, ``v_cut``, ``dt``, ``omega_std``, ``eta_std``.
+                Required when ``n_rul_samples >= 1`` and forward simulation is desired.
+                When None, falls back to linear RUL back-calculation (legacy behavior).
 
         Raises:
             ValueError: if the simulator's number of simulations is greater than 1.
             ValueError: if window_size is greater than the number of time steps.
+            ValueError: if n_rul_samples > 1 but rul_sim_config is None.
         """
         if simulator.N_simu > 1:
             raise ValueError(
                 "BatterySimulationTimeWindowSource only supports a single simulation."
             )
+        if n_rul_samples > 1 and rul_sim_config is None:
+            raise ValueError("rul_sim_config is required when n_rul_samples > 1.")
 
         simulator.simulate()
         # Shape=(N_simu, N_t).
@@ -123,41 +146,96 @@ class BatterySimulationTimeWindowSource:
 
         # Only one simulation, so we can take the first row.
         discharge_voltage = discharge_voltage_per_sim[0]
-        ruls = _back_calculate_rul_linear(t_eod=simulator.t_eods[0], N_t=N_t)
 
-        # Pre-compute all windows and targets
+        # Determine window positions
         num_windows = (N_t - window_size) // stride + 1
-        windows = []
-        targets = []
-
+        window_positions: list[tuple[int, int]] = []
         for i in range(num_windows):
             start = i * stride
             end = start + window_size
-            window = discharge_voltage[start:end].reshape(1, -1)
-            windows.append(window)
-
-            # Target is RUL at the next time step after window
-            if end < N_t:
-                target = ruls[end]
-            else:
-                target = 0.0
-            targets.append(target)
+            window_positions.append((start, end))
 
         # Add a final backwards-extended window that reaches the true end of
         # the voltage trace, so the model sees near-EoD voltage patterns.
         last_regular_end = (num_windows - 1) * stride + window_size
         if last_regular_end < N_t:
-            start = N_t - window_size
-            window = discharge_voltage[start:N_t].reshape(1, -1)
-            windows.append(window)
-            targets.append(0.0)
+            window_positions.append((N_t - window_size, N_t))
 
+        # Compute RUL targets
+        if rul_sim_config is not None:
+            soc_trajectory: np.ndarray = simulator.soc_memo.T[0]
+            targets_per_window = self._simulate_rul_targets(
+                window_positions, N_t, soc_trajectory, n_rul_samples, rul_sim_config
+            )
+        else:
+            ruls = _back_calculate_rul_linear(t_eod=simulator.t_eods[0], N_t=N_t)
+            targets_per_window = []
+            for _start, end in window_positions:
+                target = float(ruls[end]) if end < N_t else 0.0
+                targets_per_window.append([target])
+
+        # Build replicated windows and targets
+        windows = []
+        targets = []
+        for (start, end), rul_samples in zip(window_positions, targets_per_window):
+            window = discharge_voltage[start:end].reshape(1, -1)
+            for rul in rul_samples:
+                windows.append(window)
+                targets.append(rul)
+
+        self.n_rul_samples = n_rul_samples if rul_sim_config is not None else 1
         self.X = jnp.array(np.array(windows))
         self.y = jnp.array(np.array(targets))
         self.y_max = jnp.max(self.y)
 
         if normalize:
             self.y = self.y / self.y_max
+
+    @staticmethod
+    def _simulate_rul_targets(
+        window_positions: list[tuple[int, int]],
+        n_t: int,
+        soc_trajectory: np.ndarray,
+        n_rul_samples: int,
+        rul_sim_config: dict,
+    ) -> list[list[float]]:
+        """Run stochastic forward simulations to obtain RUL targets per window.
+
+        Args:
+            window_positions: list of (start, end) index pairs for each window.
+            n_t: total number of time steps in the primary simulation.
+            soc_trajectory: SoC values at each time step from the primary simulation.
+            n_rul_samples: number of forward simulations per window position.
+            rul_sim_config: configuration dict with keys: battery, discharge_policy,
+                v_cut, dt, omega_std, eta_std.
+
+        Returns:
+            List of lists, where each inner list contains ``n_rul_samples`` sampled
+            RUL values for that window position.
+        """
+        targets_per_window: list[list[float]] = []
+        for _start, end in window_positions:
+            if end >= n_t:
+                # Final window at end-of-discharge: RUL is 0
+                targets_per_window.append([0.0] * n_rul_samples)
+                continue
+
+            soc_at_end = float(soc_trajectory[end])
+            sim_config = {
+                "N_simu": n_rul_samples,
+                "v_cut": rul_sim_config["v_cut"],
+                "SoC_0": soc_at_end,
+                "dt": rul_sim_config["dt"],
+                "omega_std": rul_sim_config["omega_std"],
+                "eta_std": rul_sim_config["eta_std"],
+                "I": rul_sim_config["discharge_policy"],
+                "battery": rul_sim_config["battery"],
+            }
+            fwd_sim = les.SimulatorSimple(sim_config)
+            fwd_sim.simulate()
+            targets_per_window.append(list(fwd_sim.t_eods))
+
+        return targets_per_window
 
     def __len__(self) -> int:
         """Number of time windows in the dataset."""

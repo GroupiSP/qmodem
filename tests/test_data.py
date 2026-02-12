@@ -157,3 +157,129 @@ class TestBatterySimulationTimeWindowSourceAccess:
         second_window, _ = source[1]
         expected_second = mock_simulator.v_memo[3:5].reshape(1, -1)
         np.testing.assert_array_almost_equal(second_window, expected_second)
+
+
+class TestBatterySimulationTimeWindowSourceForwardSim:
+    """Tests for forward-simulated RUL targets (n_rul_samples > 1)."""
+
+    @pytest.fixture
+    def battery_setup(self):
+        """Create real battery and discharge policy for forward sim tests."""
+        import json
+
+        import lib_eod_simulation as les
+
+        from qmodem import BATT_CONFIG_PATH
+
+        with open(BATT_CONFIG_PATH, "r") as f:
+            config = json.load(f)
+        battery = les.BatteryModel(config)
+        discharge_policy = les.ConstantCurrentDischarge(-2.8 * 0.75)
+        return battery, discharge_policy
+
+    @pytest.fixture
+    def real_simulator(self, battery_setup):
+        """Create a real single-simulation simulator."""
+        import lib_eod_simulation as les
+
+        battery, discharge_policy = battery_setup
+        sim_config = {
+            "N_simu": 1,
+            "v_cut": 2.5,
+            "SoC_0": 1.0,
+            "dt": 10.0,
+            "omega_std": 1e-3,
+            "eta_std": 1e-2,
+            "I": discharge_policy,
+            "battery": battery,
+        }
+        return les.SimulatorSimple(sim_config)
+
+    @pytest.fixture
+    def rul_sim_config(self, battery_setup):
+        """Create rul_sim_config dict for forward simulations."""
+        battery, discharge_policy = battery_setup
+        return {
+            "battery": battery,
+            "discharge_policy": discharge_policy,
+            "v_cut": 2.5,
+            "dt": 10.0,
+            "omega_std": 1e-3,
+            "eta_std": 1e-2,
+        }
+
+    def test_raises_without_rul_sim_config(self, real_simulator):
+        """n_rul_samples > 1 without rul_sim_config must raise ValueError."""
+        with pytest.raises(ValueError, match="rul_sim_config is required"):
+            BatterySimulationTimeWindowSource(
+                real_simulator,
+                window_size=48,
+                stride=48,
+                n_rul_samples=5,
+                rul_sim_config=None,
+            )
+
+    def test_window_replication(self, real_simulator, rul_sim_config):
+        """Each unique window position must appear exactly n_rul_samples times."""
+        n_rul_samples = 5
+        stride = 100
+        window_size = 48
+        source = BatterySimulationTimeWindowSource(
+            real_simulator,
+            window_size=window_size,
+            stride=stride,
+            n_rul_samples=n_rul_samples,
+            rul_sim_config=rul_sim_config,
+        )
+
+        # Group windows by content and verify each group has n_rul_samples entries
+        windows_np = np.array(source.X)
+        unique_windows, counts = np.unique(
+            windows_np.reshape(len(windows_np), -1), axis=0, return_counts=True
+        )
+        assert np.all(counts == n_rul_samples), (
+            f"Expected all windows to appear {n_rul_samples} times, "
+            f"got counts: {counts}"
+        )
+        assert len(source) == len(unique_windows) * n_rul_samples
+
+    def test_rul_variance_diminishes_with_later_windows(
+        self, real_simulator, rul_sim_config
+    ):
+        """Per-window-position RUL target variance must decrease for later windows."""
+        from scipy.stats import spearmanr
+
+        n_rul_samples = 100
+        stride = 100
+        window_size = 48
+        source = BatterySimulationTimeWindowSource(
+            real_simulator,
+            window_size=window_size,
+            stride=stride,
+            n_rul_samples=n_rul_samples,
+            rul_sim_config=rul_sim_config,
+        )
+
+        # Group targets by window position
+        targets_np = np.array(source.y)
+        n_positions = len(targets_np) // n_rul_samples
+
+        # Need at least 4 positions for a meaningful trend check
+        assert n_positions >= 4, f"Only {n_positions} window positions, need >= 4"
+
+        variances = []
+        for i in range(n_positions):
+            pos_targets = targets_np[i * n_rul_samples : (i + 1) * n_rul_samples]
+            variances.append(float(np.var(pos_targets)))
+
+        # The last position (RUL=0) has variance=0 trivially.
+        # Check that non-final variances have a strong negative correlation
+        # with position index (later positions → lower variance).
+        non_final_variances = variances[:-1]
+        positions = list(range(len(non_final_variances)))
+        corr, _pvalue = spearmanr(positions, non_final_variances)
+        assert corr < -0.8, (
+            f"Expected strong negative Spearman correlation between "
+            f"window position and RUL variance, got r={corr:.3f}. "
+            f"Variances: {[f'{v:.1f}' for v in non_final_variances]}"
+        )
