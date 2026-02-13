@@ -15,8 +15,6 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import numpy as np
-from flax import nnx
-
 from _shared import (
     create_battery_and_policy,
     get_run_dirs,
@@ -24,6 +22,8 @@ from _shared import (
     read_json,
     restore_model_from_checkpoint,
 )
+from flax import nnx
+
 from qmodem import HeteroscedasticCNN1DV1
 from qmodem.metrics import cdf, crps
 
@@ -41,6 +41,7 @@ def main() -> None:
     metadata = read_json(metadata_dir / "meta.json")
     y_max = metadata["y_max"]
     WINDOW_SIZE = metadata["window_size"]
+    STRIDE_SIZE = WINDOW_SIZE // 2
 
     # Battery simulator parameters
     N_SIMU = 100  # Number of stochastic simulations
@@ -105,8 +106,8 @@ def main() -> None:
     # Extract non-overlapping windows from deterministic voltages
     # Each window [start, start+WINDOW_SIZE-1] predicts RUL at index (start+WINDOW_SIZE)
     num_windows = (len(vs_det) - WINDOW_SIZE) // WINDOW_SIZE + 1
+    start_idx = 0
     for i in range(num_windows):
-        start_idx = i * WINDOW_SIZE
         end_idx = start_idx + WINDOW_SIZE
         target_idx = end_idx  # The time step the CNN will predict RUL for
 
@@ -125,6 +126,8 @@ def main() -> None:
         cnn_means.append(pred[0])
         cnn_vars.append(pred[1])
         cnn_prediction_indices.append(target_idx)
+
+        start_idx += STRIDE_SIZE
 
     # Add final prediction using a window extended backwards to cover the end-of-discharge
     last_target_idx = len(vs_det) - 1
