@@ -8,18 +8,17 @@ This script demonstrates:
 - Two-layer CNN architecture (2 conv layers, 8 filters each, no pooling)
 """
 
+import pickle
 import time
 
 import jax
 import jax.numpy as jnp
-import lib_eod_simulation as les
 import optax
 import orbax.checkpoint as ocp
 from _shared import (
     create_battery_and_policy,
     get_run_dirs,
     make_simulator_config,
-    write_json,
 )
 from flax import nnx
 from grain import DataLoader
@@ -28,8 +27,7 @@ from grain.transforms import Batch
 
 from qmodem import (
     BatterySimulationTimeWindowSource,
-    CombinedTimeWindowSource,
-    HeteroscedasticCNN1DV1,
+    HeteroscedasticCNN1D,
     nll_loss,
 )
 from qmodem.train import EarlyStopper
@@ -39,9 +37,7 @@ def main():
     """Train a heteroscedastic CNN on time-windowed battery data and test on initial
     window."""
     # Directories
-    _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs(
-        "het_cnn_time_window", create=True
-    )
+    _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs("het_cnn_train", create=True)
 
     # Training parameters
     LR = 1e-3
@@ -51,134 +47,55 @@ def main():
     PRINT_EVERY = 10
 
     # Data parameters
-    N_SIMU_TRAIN = 10  # Number of discharge histories for training
-    N_SIMU_VAL = 3  # Number of discharge histories for validation
-    WINDOW_SIZE = 48  # ~1/10 of typical history length (~486)
-    STRIDE = 24  # 50% overlap between windows
-    N_RUL_SAMPLES = 10  # Forward sims per window for heteroscedastic targets
+    N_SIMU_TRAIN = 100  # Number of discharge histories for training
+    N_SIMU_VAL = 20  # Number of discharge histories for validation
+    WINDOW_SIZE = 30
+    STRIDE = 15  # 50% overlap between windows
 
     # Battery simulation parameters
     CURRENT_AMPLITUDE = -2.8 * 0.75
     V_CUT = 2.5
-    SOC_0 = 1.0
     DT = 10.0
-    OMEGA_STD = 1e-3
-    ETA_STD = 1e-2
+    OMEGA_STD = 3e-3
+    ETA_STD = 3e-2
 
     battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
-
-    # Configuration for forward RUL simulations (used by data source)
-    rul_sim_config = {
-        "battery": battery,
-        "discharge_policy": discharge_policy,
-        "v_cut": V_CUT,
-        "dt": DT,
-        "omega_std": OMEGA_STD,
-        "eta_std": ETA_STD,
-    }
 
     print("=" * 70)
     print("Heteroscedastic CNN Training on Time-Windowed Battery Data")
     print("=" * 70)
     print(f"Window size: {WINDOW_SIZE}")
     print(f"Stride: {STRIDE}")
-    print(f"RUL samples per window: {N_RUL_SAMPLES}")
     print(f"Training simulations: {N_SIMU_TRAIN}")
     print(f"Validation simulations: {N_SIMU_VAL}")
     print()
 
     # Create training data: combine multiple simulations
     print("Creating training dataset...")
-    train_sources = []
-    for i in range(N_SIMU_TRAIN):
-        sim_config = make_simulator_config(
-            n_simu=1,
-            v_cut=V_CUT,
-            soc_0=SOC_0,
-            dt=DT,
-            omega_std=OMEGA_STD,
-            eta_std=ETA_STD,
-            discharge_policy=discharge_policy,
-            battery=battery,
-        )
-        simulator = les.SimulatorSimple(sim_config)
-        source = BatterySimulationTimeWindowSource(
-            simulator,
-            window_size=WINDOW_SIZE,
-            stride=STRIDE,
-            normalize=True,
-            n_rul_samples=N_RUL_SAMPLES,
-            rul_sim_config=rul_sim_config,
-        )
-        train_sources.append(source)
-        print(f"  Simulation {i + 1}/{N_SIMU_TRAIN}: {len(source)} windows")
-
-    ds_train = CombinedTimeWindowSource(train_sources)
-    y_max_train = float(jnp.max(jnp.array([s.y_max for s in train_sources])))
-    print(f"Total training windows: {len(ds_train)}")
-    print(f"Training y_max: {y_max_train:.2f}")
-    print()
-
-    # Create validation data
-    print("Creating validation dataset...")
-    val_sources = []
-    for i in range(N_SIMU_VAL):
-        sim_config = make_simulator_config(
-            n_simu=1,
-            v_cut=V_CUT,
-            soc_0=SOC_0,
-            dt=DT,
-            omega_std=OMEGA_STD,
-            eta_std=ETA_STD,
-            discharge_policy=discharge_policy,
-            battery=battery,
-        )
-        simulator = les.SimulatorSimple(sim_config)
-        source = BatterySimulationTimeWindowSource(
-            simulator,
-            window_size=WINDOW_SIZE,
-            stride=STRIDE,
-            normalize=True,
-            n_rul_samples=N_RUL_SAMPLES,
-            rul_sim_config=rul_sim_config,
-        )
-        val_sources.append(source)
-        print(f"  Simulation {i + 1}/{N_SIMU_VAL}: {len(source)} windows")
-
-    ds_val = CombinedTimeWindowSource(val_sources)
-    print(f"Total validation windows: {len(ds_val)}")
-    print()
-
-    # Create test data: single simulation
-    print("Creating test dataset (single simulation)...")
-    test_sim_config = make_simulator_config(
+    shared_sim_config = make_simulator_config(
         n_simu=1,
         v_cut=V_CUT,
-        soc_0=SOC_0,
+        soc_0=1.0,
         dt=DT,
         omega_std=OMEGA_STD,
         eta_std=ETA_STD,
         discharge_policy=discharge_policy,
         battery=battery,
     )
-    test_simulator = les.SimulatorSimple(test_sim_config)
-    ds_test = BatterySimulationTimeWindowSource(
-        test_simulator,
-        window_size=WINDOW_SIZE,
-        stride=STRIDE,
-        normalize=True,
-        n_rul_samples=N_RUL_SAMPLES,
-        rul_sim_config=rul_sim_config,
+
+    ds_train = BatterySimulationTimeWindowSource(
+        shared_sim_config, n_hists=N_SIMU_TRAIN, window_size=WINDOW_SIZE, stride=STRIDE
     )
-    print(f"Test windows: {len(ds_test)}")
-    print(f"Test y_max: {ds_test.y_max:.2f} (for unscaling)")
+    print(f"Total training windows: {len(ds_train)}")
     print()
 
-    # Save training y_max for later unscaling (used by prediction scripts)
-    write_json(
-        METADATA_DIR / "meta.json",
-        {"y_max": y_max_train, "window_size": WINDOW_SIZE},
+    # Create validation data
+    print("Creating validation dataset...")
+    ds_val = BatterySimulationTimeWindowSource(
+        shared_sim_config, n_hists=N_SIMU_VAL, window_size=WINDOW_SIZE, stride=STRIDE
     )
+    print(f"Total validation windows: {len(ds_val)}")
+    print()
 
     # Create DataLoaders
     sampler_train = IndexSampler(
@@ -204,9 +121,7 @@ def main():
     # Create model
     print("Creating heteroscedastic CNN model...")
     rngs = nnx.Rngs(0)
-    model = HeteroscedasticCNN1DV1(
-        window_size=WINDOW_SIZE, n_filters=8, kernel_size=5, rngs=rngs
-    )
+    model = HeteroscedasticCNN1D(rngs=rngs)
 
     # Count parameters
     n_params = sum(p.size for p in jax.tree.leaves(nnx.state(model, nnx.Param)))
@@ -291,47 +206,31 @@ def main():
     checkpointer.save(ckpt_dir / "trained_state", model_state)
     time.sleep(0.5)  # Prevent shutdown from breaking checkpointing.
     print(f"Checkpoint saved to {CHECKPOINT_DIR}")
+
+    # Save metadata
+    # Pickle the simulator config
+    metadata = {
+        "simulator_config": shared_sim_config,
+        "training_params": {
+            "window_size": WINDOW_SIZE,
+            "stride": STRIDE,
+            "n_simu_train": N_SIMU_TRAIN,
+            "n_simu_val": N_SIMU_VAL,
+        },
+        "model_params": {
+            "n_filters": 4,
+            "kernel_size": 5,
+        },
+        "scaling_params": {
+            "y_max": ds_train.y_max.item(),
+        },
+    }
+    with open(METADATA_DIR / "metadata.pkl", "wb") as f:
+        pickle.dump(metadata, f)
+
     print()
+    print(f"Metadata saved to {METADATA_DIR}")
 
-    # Test on initial window
-    print("Testing on initial window of test discharge history...")
-    model.eval()
-    initial_window, initial_target = ds_test[0]
-
-    # Add batch dimension and predict
-    initial_window_batch = jnp.expand_dims(initial_window, axis=0)
-    prediction = model(initial_window_batch)[0]  # Shape: (2,) = [mu, var]
-
-    # Extract mean and variance
-    pred_mean = prediction[0]
-    pred_var = prediction[1]
-
-    # Unscale prediction and target
-    pred_mean_unscaled = pred_mean * ds_test.y_max
-    pred_std_unscaled = jnp.sqrt(pred_var) * ds_test.y_max
-    target_unscaled = initial_target * ds_test.y_max
-
-    print("Initial window index: 0")
-    print(f"Normalized prediction (mean): {pred_mean:.6f}")
-    print(f"Normalized target: {initial_target:.6f}")
-    print(f"Unscaled prediction (mean): {pred_mean_unscaled:.2f}")
-    print(f"Unscaled prediction (std): {pred_std_unscaled:.2f}")
-    print(f"Unscaled target: {target_unscaled:.2f}")
-    print(f"Absolute error: {abs(pred_mean_unscaled - target_unscaled):.2f}")
-    print()
-
-    # Additional test: evaluate NLL on all test windows
-    print("Evaluating on all test windows...")
-    test_losses = []
-    for i in range(len(ds_test)):
-        window, target = ds_test[i]
-        batch = (jnp.expand_dims(window, axis=0), jnp.expand_dims(target, axis=0))
-        loss = eval_step(model, batch)
-        test_losses.append(loss)
-
-    test_nll = jnp.mean(jnp.array(test_losses))
-
-    print(f"Test NLL (normalized): {test_nll:.6f}")
     print()
     print("Done!")
 

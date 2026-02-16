@@ -318,7 +318,6 @@ class TestSimpleCNN1D:
     def test_forward_pass_shape(self, setup):
         """Test that forward pass produces correct output shape."""
         model = SimpleCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -332,7 +331,6 @@ class TestSimpleCNN1D:
     def test_output_dtype(self, setup):
         """Test that output has correct dtype."""
         model = SimpleCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -344,27 +342,25 @@ class TestSimpleCNN1D:
     def test_parameter_count(self, setup):
         """Test that parameter count is as expected."""
         model = SimpleCNN1D(
-            window_size=48,
             n_filters=4,
             kernel_size=5,
             rngs=nnx.Rngs(0),
         )
         # Conv: (1 * 5 + 1) * 4 = 24 params
-        # Dense: (44 * 4 + 1) * 1 = 177 params
-        # Total: 201 params
+        # Dense: (4 + 1) * 1 = 5 params
+        # Total: 29 params
         params = nnx.state(model, nnx.Param)
         total_params = sum(p.size for p in jax.tree.leaves(params))
-        assert total_params == 201
+        assert total_params == 29
 
-    def test_different_window_sizes(self, setup):
-        """Test forward pass with different window sizes."""
+    def test_variable_window_sizes(self, setup):
+        """Test that a single model handles different window sizes."""
+        model = SimpleCNN1D(
+            self.n_filters,
+            self.kernel_size,
+            rngs=nnx.Rngs(0),
+        )
         for window_size in [24, 48, 96]:
-            model = SimpleCNN1D(
-                window_size,
-                self.n_filters,
-                self.kernel_size,
-                rngs=nnx.Rngs(0),
-            )
             x = jnp.ones((self.batch_size, 1, window_size))
             output = model(x)
             assert output.shape == (self.batch_size,)
@@ -372,7 +368,6 @@ class TestSimpleCNN1D:
     def test_different_batch_sizes(self, setup):
         """Test forward pass with different batch sizes."""
         model = SimpleCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -385,7 +380,6 @@ class TestSimpleCNN1D:
     def test_gradient_computation(self, setup):
         """Test that gradients can be computed through the model."""
         model = SimpleCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -419,7 +413,6 @@ class TestHeteroscedasticCNN1D:
     def test_forward_pass_shape(self, setup):
         """Test that forward pass produces correct output shape."""
         model = HeteroscedasticCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -433,7 +426,6 @@ class TestHeteroscedasticCNN1D:
     def test_output_dtype(self, setup):
         """Test that output has correct dtype."""
         model = HeteroscedasticCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -445,7 +437,6 @@ class TestHeteroscedasticCNN1D:
     def test_split_mu_and_var(self, setup):
         """Test that mu and var_positive can be split correctly."""
         model = HeteroscedasticCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -465,7 +456,6 @@ class TestHeteroscedasticCNN1D:
     def test_variance_is_positive(self, setup):
         """Test that variance output is always positive."""
         model = HeteroscedasticCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -481,27 +471,25 @@ class TestHeteroscedasticCNN1D:
     def test_parameter_count(self, setup):
         """Test that parameter count is as expected."""
         model = HeteroscedasticCNN1D(
-            window_size=48,
             n_filters=4,
             kernel_size=5,
             rngs=nnx.Rngs(0),
         )
         # Conv: (1 * 5 + 1) * 4 = 24 params
-        # GaussianBlock (2 Linear layers): 2 * (44 * 4 * 1 + 1) = 354 params
-        # Total: 378 params
+        # GaussianBlock (2 Linear layers): 2 * (4 * 1 + 1) = 10 params
+        # Total: 34 params
         params = nnx.state(model, nnx.Param)
         total_params = sum(p.size for p in jax.tree.leaves(params))
-        assert total_params == 378
+        assert total_params == 34
 
-    def test_different_window_sizes(self, setup):
-        """Test forward pass with different window sizes."""
+    def test_variable_window_sizes(self, setup):
+        """Test that a single model handles different window sizes."""
+        model = HeteroscedasticCNN1D(
+            self.n_filters,
+            self.kernel_size,
+            rngs=nnx.Rngs(0),
+        )
         for window_size in [24, 48, 96]:
-            model = HeteroscedasticCNN1D(
-                window_size,
-                self.n_filters,
-                self.kernel_size,
-                rngs=nnx.Rngs(0),
-            )
             x = jnp.ones((self.batch_size, 1, window_size))
             output = model(x)
             assert output.shape == (self.batch_size, 2)
@@ -509,7 +497,6 @@ class TestHeteroscedasticCNN1D:
     def test_different_batch_sizes(self, setup):
         """Test forward pass with different batch sizes."""
         model = HeteroscedasticCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -522,7 +509,6 @@ class TestHeteroscedasticCNN1D:
     def test_gradient_computation(self, setup):
         """Test that gradients can be computed through the model."""
         model = HeteroscedasticCNN1D(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -557,7 +543,6 @@ class TestHeteroscedasticCNN1DV1:
     def test_forward_pass_shape(self, setup):
         """Test that forward pass produces correct output shape."""
         model = HeteroscedasticCNN1DV1(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -569,7 +554,6 @@ class TestHeteroscedasticCNN1DV1:
     def test_output_dtype(self, setup):
         """Test that output has correct dtype."""
         model = HeteroscedasticCNN1DV1(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -581,7 +565,6 @@ class TestHeteroscedasticCNN1DV1:
     def test_variance_is_positive(self, setup):
         """Test that variance output is always positive."""
         model = HeteroscedasticCNN1DV1(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -596,28 +579,26 @@ class TestHeteroscedasticCNN1DV1:
     def test_parameter_count(self, setup):
         """Test that parameter count is as expected."""
         model = HeteroscedasticCNN1DV1(
-            window_size=48,
             n_filters=8,
             kernel_size=5,
             rngs=nnx.Rngs(0),
         )
         # Conv1: (1 * 5 + 1) * 8 = 48 params
         # Conv2: (8 * 5 + 1) * 8 = 328 params
-        # GaussianBlock: flatten_size = 8 * 40 = 320; 2 * (320 + 1) = 642 params
-        # Total: 1018 params
+        # GaussianBlock: 2 * (8 * 1 + 1) = 18 params
+        # Total: 394 params
         params = nnx.state(model, nnx.Param)
         total_params = sum(p.size for p in jax.tree.leaves(params))
-        assert total_params == 1018
+        assert total_params == 394
 
-    def test_different_window_sizes(self, setup):
-        """Test forward pass with different window sizes."""
+    def test_variable_window_sizes(self, setup):
+        """Test that a single model handles different window sizes."""
+        model = HeteroscedasticCNN1DV1(
+            self.n_filters,
+            self.kernel_size,
+            rngs=nnx.Rngs(0),
+        )
         for window_size in [24, 48, 96]:
-            model = HeteroscedasticCNN1DV1(
-                window_size,
-                self.n_filters,
-                self.kernel_size,
-                rngs=nnx.Rngs(0),
-            )
             x = jnp.ones((self.batch_size, 1, window_size))
             output = model(x)
             assert output.shape == (self.batch_size, 2)
@@ -625,7 +606,6 @@ class TestHeteroscedasticCNN1DV1:
     def test_different_batch_sizes(self, setup):
         """Test forward pass with different batch sizes."""
         model = HeteroscedasticCNN1DV1(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,
@@ -638,7 +618,6 @@ class TestHeteroscedasticCNN1DV1:
     def test_gradient_computation(self, setup):
         """Test that gradients can be computed through the model."""
         model = HeteroscedasticCNN1DV1(
-            self.window_size,
             self.n_filters,
             self.kernel_size,
             rngs=self.rngs,

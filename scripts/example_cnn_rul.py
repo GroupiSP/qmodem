@@ -64,9 +64,7 @@ def main() -> None:
 
     # Load trained CNN model
     print("Loading trained model...")
-    model = SimpleCNN1D(
-        window_size=window_size, n_filters=4, kernel_size=5, rngs=nnx.Rngs(0)
-    )
+    model = SimpleCNN1D(n_filters=4, kernel_size=5, rngs=nnx.Rngs(0))
     restore_model_state(CHECKPOINT_DIR / "trained_state", model)
     print("Model loaded successfully!")
 

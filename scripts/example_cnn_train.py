@@ -174,7 +174,7 @@ def main():
     # Create model
     print("Creating CNN model...")
     rngs = nnx.Rngs(0)
-    model = SimpleCNN1D(window_size=WINDOW_SIZE, n_filters=4, kernel_size=5, rngs=rngs)
+    model = SimpleCNN1D(n_filters=4, kernel_size=5, rngs=rngs)
 
     # Count parameters
     n_params = sum(p.size for p in jax.tree.leaves(nnx.state(model, nnx.Param)))
