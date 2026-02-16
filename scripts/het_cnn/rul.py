@@ -9,25 +9,29 @@ This script:
 """
 
 import pickle
+import sys
 from pathlib import Path
 
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import numpy as np
-from _shared import (
+from flax import nnx
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _shared import (  # noqa: E402
     get_run_dirs,
     restore_model_from_checkpoint,
 )
-from flax import nnx
+
+from _seeds import TEST_SEED  # noqa: E402
 
 from qmodem import HeteroscedasticCNN1D
 from qmodem.data import _back_calculate_rul_linear
 
 
 def main() -> None:
-    # Numpy random seed for reproducibility of stochastic simulations
-    np.random.seed(0)
+    np.random.seed(TEST_SEED)
 
     # Directories
     root_dir, _, METADATA_DIR = get_run_dirs("het_cnn_train", create=False)

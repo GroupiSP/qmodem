@@ -9,18 +9,25 @@ This script demonstrates:
 """
 
 import pickle
+import sys
 import time
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import orbax.checkpoint as ocp
-from _shared import (
+from flax import nnx
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _shared import (  # noqa: E402
     create_battery_and_policy,
     get_run_dirs,
     make_simulator_config,
 )
-from flax import nnx
+
+from _seeds import TRAIN_SEED  # noqa: E402
 from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
@@ -36,6 +43,7 @@ from qmodem.train import EarlyStopper
 def main():
     """Train a heteroscedastic CNN on time-windowed battery data and test on initial
     window."""
+    np.random.seed(TRAIN_SEED)
     # Directories
     _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs("het_cnn_train", create=True)
 
