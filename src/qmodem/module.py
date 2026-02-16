@@ -131,6 +131,76 @@ class HeteroscedasticCNN1D(nnx.Module):
         return self.gaussian_block(x)
 
 
+class MCDCNN1D(nnx.Module):
+    def __init__(
+        self,
+        n_filters: int = 4,
+        kernel_size: int = 5,
+        dropout_rate: float = 0.1,
+        act_fn: nnx.Module = nnx.gelu,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """MC Dropout 1D CNN for time-series RUL prediction with uncertainty.
+
+        Architecture: Conv1D -> Activation -> Dropout -> Global Average Pooling ->
+        GaussianBlock. Combines aleatoric uncertainty (GaussianBlock) with epistemic
+        uncertainty (MC Dropout). Accepts variable-length input windows.
+
+        Args:
+            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
+            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
+            dropout_rate (float, optional): Dropout rate. Defaults to 0.1.
+            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
+            rngs (nnx.Rngs): RNGs for the flax internal modules.
+        """
+        self.n_filters = n_filters
+        self.kernel_size = kernel_size
+        self.dropout_rate = dropout_rate
+        self.act_fn = act_fn
+
+        self.conv = nnx.Conv(
+            in_features=1,
+            out_features=n_filters,
+            kernel_size=(kernel_size,),
+            padding="VALID",
+            rngs=rngs,
+        )
+
+        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
+
+        # GaussianBlock to output mean and variance
+        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
+        """Forward pass through the MC Dropout CNN.
+
+        Args:
+            x (jax.Array): Input with shape (batch, 1, window_size).
+                           Will be transposed to (batch, window_size, 1).
+                           Accepts variable-length windows.
+            rngs (nnx.Rngs, optional): RNGs for dropout sampling. When ``None``,
+                the dropout layer uses its internal RNG state (required inside
+                ``@nnx.jit``).
+
+        Returns:
+            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
+        """
+        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
+        x = jnp.transpose(x, (0, 2, 1))
+
+        # Conv1D with activation and dropout
+        x = self.conv(x)
+        x = self.act_fn(x)
+        x = self.dropout(x) if rngs is None else self.dropout(x, rngs=rngs)
+
+        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
+        x = jnp.mean(x, axis=1)
+
+        # GaussianBlock: (batch, n_filters) -> (batch, 2)
+        return self.gaussian_block(x)
+
+
 class HeteroscedasticCNN1DV1(nnx.Module):
     def __init__(
         self,
@@ -489,6 +559,32 @@ def nll_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
 
     xs, labels = batch
     outputs = model(xs)
+    means, variances = outputs[:, 0], outputs[:, 1]
+    variances = jnp.clip(variances, min=1e-6)
+    losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
+
+    return jnp.mean(losses)
+
+
+def nll_loss_mcd(
+    model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
+) -> jax.Array:
+    """NLL loss for models that require RNGs at call time (e.g. MC Dropout).
+
+    Same formulation as :func:`nll_loss` but forwards ``rngs`` to the model's
+    forward pass so that stochastic layers (dropout) receive fresh random keys.
+
+    Args:
+        model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
+        batch (jax.Array): batched input data.
+        rngs (nnx.Rngs, optional): passed to the forward method of the model.
+            When ``None``, dropout uses its internal RNG state.
+
+    Returns:
+        jax.Array: loss value for the batch.
+    """
+    xs, labels = batch
+    outputs = model(xs) if rngs is None else model(xs, rngs=rngs)
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
