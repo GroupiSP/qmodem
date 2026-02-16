@@ -39,9 +39,9 @@ def main() -> None:
     N_EVAL_POINTS = 15  # Number of evaluation time points along the trajectory
 
     # Directories
-    root_dir, _, METADATA_DIR = get_run_dirs("het_cnn_train", create=False)
+    root_dir, _, METADATA_DIR = get_run_dirs("het_cnn/train", create=False)
     ckpt_dir = root_dir / "checkpoints"
-    output_dir = Path("saved/het_cnn_crps_over_time")
+    output_dir = Path("saved/het_cnn/crps_over_time")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load metadata

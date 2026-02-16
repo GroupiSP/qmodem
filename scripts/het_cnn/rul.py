@@ -19,12 +19,11 @@ import numpy as np
 from flax import nnx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _seeds import TEST_SEED  # noqa: E402
 from _shared import (  # noqa: E402
     get_run_dirs,
     restore_model_from_checkpoint,
 )
-
-from _seeds import TEST_SEED  # noqa: E402
 
 from qmodem import HeteroscedasticCNN1D
 from qmodem.data import _back_calculate_rul_linear
@@ -34,11 +33,11 @@ def main() -> None:
     np.random.seed(TEST_SEED)
 
     # Directories
-    root_dir, _, METADATA_DIR = get_run_dirs("het_cnn_train", create=False)
+    root_dir, _, METADATA_DIR = get_run_dirs("het_cnn/train", create=False)
     ckpt_dir = root_dir / "checkpoints"
 
     # Create output directory for plots
-    output_dir = Path("saved/het_cnn_rul")
+    output_dir = Path("saved/het_cnn/rul")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load metadata
