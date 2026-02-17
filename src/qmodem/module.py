@@ -757,14 +757,15 @@ class BayesCNN1D(nnx.Module):
         # GaussianBlock to output mean and variance
         self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
 
-    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """Forward pass through the Bayesian CNN.
 
         Args:
             x: Input with shape ``(batch, 1, window_size)``.
                 Will be transposed to ``(batch, window_size, 1)``.
                 Accepts variable-length windows.
-            key: JAX PRNG key for weight sampling.
+            rngs: RNGs for weight sampling. The ``params`` stream is used
+                to draw a key for the Bayesian convolution layer.
 
         Returns:
             Concatenated ``[mu, var_positive]`` with shape ``(batch, 2)``.
@@ -773,7 +774,7 @@ class BayesCNN1D(nnx.Module):
         x = jnp.transpose(x, (0, 2, 1))
 
         # Bayesian Conv1D with activation
-        x = self.conv(x, key=key)
+        x = self.conv(x, key=rngs.params())
         x = self.act_fn(x)
 
         # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
@@ -840,7 +841,7 @@ def nll_loss_mcd(
 
 
 def nll_loss_bayes(
-    model: nnx.Module, batch: jax.Array, *, key: jax.Array, n_train: int
+    model: nnx.Module, batch: jax.Array, *, rngs: nnx.Rngs, n_train: int
 ) -> jax.Array:
     """ELBO NLL loss for Bayesian models (Bayes by Backprop).
 
@@ -853,14 +854,14 @@ def nll_loss_bayes(
         model (nnx.Module): Bayesian model with Gaussian output and
             ``kl_divergence()`` method.
         batch (jax.Array): batched input data ``(xs, labels)``.
-        key (jax.Array): JAX PRNG key for weight sampling.
+        rngs (nnx.Rngs): RNGs for weight sampling (forwarded to the model).
         n_train (int): Total number of training samples (for KL scaling).
 
     Returns:
         jax.Array: scalar ELBO loss value.
     """
     xs, labels = batch
-    outputs = model(xs, key=key)
+    outputs = model(xs, rngs=rngs)
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
     nll = jnp.mean(

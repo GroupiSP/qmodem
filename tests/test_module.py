@@ -845,7 +845,7 @@ class TestBayesCNN1D:
         """Test that forward pass produces correct output shape."""
         model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
         x = jnp.ones((self.batch_size, 1, self.window_size))
-        output = model(x, key=self.key)
+        output = model(x, rngs=nnx.Rngs(params=42))
         assert output.shape == (self.batch_size, 2)
 
     @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
@@ -853,7 +853,7 @@ class TestBayesCNN1D:
         """Test that output has correct dtype."""
         model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
         x = jnp.ones((self.batch_size, 1, self.window_size), dtype=jnp.float32)
-        output = model(x, key=self.key)
+        output = model(x, rngs=nnx.Rngs(params=42))
         assert output.dtype == jnp.float32
 
     @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
@@ -863,7 +863,7 @@ class TestBayesCNN1D:
         x = jax.random.normal(
             jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
         )
-        output = model(x, key=self.key)
+        output = model(x, rngs=nnx.Rngs(params=42))
         var_positive = output[:, 1]
         assert jnp.all(var_positive >= 0)
 
@@ -890,8 +890,8 @@ class TestBayesCNN1D:
         x = jax.random.normal(
             jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
         )
-        out1 = model(x, key=jax.random.PRNGKey(1))
-        out2 = model(x, key=jax.random.PRNGKey(2))
+        out1 = model(x, rngs=nnx.Rngs(params=1))
+        out2 = model(x, rngs=nnx.Rngs(params=2))
         assert not jnp.allclose(out1, out2)
 
     @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
@@ -908,7 +908,7 @@ class TestBayesCNN1D:
         model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=nnx.Rngs(0))
         for window_size in [24, 48, 96]:
             x = jnp.ones((self.batch_size, 1, window_size))
-            output = model(x, key=self.key)
+            output = model(x, rngs=nnx.Rngs(params=42))
             assert output.shape == (self.batch_size, 2)
 
     @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
@@ -917,7 +917,7 @@ class TestBayesCNN1D:
         model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
         for batch_size in [1, 8, 16, 32]:
             x = jnp.ones((batch_size, 1, self.window_size))
-            output = model(x, key=self.key)
+            output = model(x, rngs=nnx.Rngs(params=42))
             assert output.shape == (batch_size, 2)
 
     @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
@@ -927,10 +927,9 @@ class TestBayesCNN1D:
         x = jax.random.normal(
             jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
         )
-        key = self.key
 
         def loss_fn(model):
-            output = model(x, key=key)
+            output = model(x, rngs=nnx.Rngs(params=42))
             mu = output[:, 0]
             return jnp.mean(mu**2) + model.kl_divergence()
 

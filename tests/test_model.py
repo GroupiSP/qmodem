@@ -252,7 +252,9 @@ def test_nll_loss_bayes(mock_bayes_cnn1d, batch) -> None:
     - the output is scalar
     """
     key = jax.random.PRNGKey(42)
-    loss_value = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=100)
+    loss_value = nll_loss_bayes(
+        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=100
+    )
     assert isinstance(loss_value, jax.Array)
     assert jnp.isscalar(loss_value)
 
@@ -264,10 +266,10 @@ def test_nll_loss_bayes_stochastic(mock_bayes_cnn1d) -> None:
         jax.random.normal(shape=[10], key=_rng_key),
     )
     loss1 = nll_loss_bayes(
-        mock_bayes_cnn1d, batch, key=jax.random.PRNGKey(0), n_train=100
+        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=0), n_train=100
     )
     loss2 = nll_loss_bayes(
-        mock_bayes_cnn1d, batch, key=jax.random.PRNGKey(1), n_train=100
+        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=1), n_train=100
     )
     assert not jnp.allclose(loss1, loss2)
 
@@ -283,7 +285,9 @@ def test_nll_loss_bayes_includes_kl(mock_bayes_cnn1d) -> None:
         jax.random.normal(shape=[10, 1, 30], key=_rng_key),
         jax.random.normal(shape=[10], key=_rng_key),
     )
-    elbo_loss = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=100)
+    elbo_loss = nll_loss_bayes(
+        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=100
+    )
     kl = mock_bayes_cnn1d.kl_divergence()
     assert kl > 0, "KL divergence should be positive"
     # The ELBO loss is NLL + KL/N, so it should be finite
@@ -297,7 +301,11 @@ def test_nll_loss_bayes_kl_scaling(mock_bayes_cnn1d) -> None:
         jax.random.normal(shape=[10, 1, 30], key=_rng_key),
         jax.random.normal(shape=[10], key=_rng_key),
     )
-    loss_small_n = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=10)
-    loss_large_n = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=10_000)
+    loss_small_n = nll_loss_bayes(
+        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=10
+    )
+    loss_large_n = nll_loss_bayes(
+        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=10_000
+    )
     # Larger n_train => smaller KL/N term => smaller total loss
     assert loss_small_n > loss_large_n
