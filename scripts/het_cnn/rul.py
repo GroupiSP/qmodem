@@ -26,7 +26,6 @@ from _shared import (  # noqa: E402
 )
 
 from qmodem import HeteroscedasticCNN1D
-from qmodem.data import _back_calculate_rul_linear
 
 
 def main() -> None:
@@ -59,10 +58,7 @@ def main() -> None:
     sim_0.simulate()
 
     dt = metadata["simulator_config"]["dt"]
-    t_eod = sim_0._t_eods[0]
     N_t = sim_0.v_memo.shape[0]
-    ts_rul_true = np.arange(N_t) * dt
-    rul_true = _back_calculate_rul_linear(t_eod, N_t)
 
     # Load trained model
     print("Loading trained heteroscedastic CNN model...")
@@ -95,20 +91,6 @@ def main() -> None:
             pred[1] * y_max_train**2
         )  # Variance is the first element, scaled by y_max^2
 
-    fig0, ax0 = plt.subplots(figsize=(10, 6))
-    ax0.plot(ts_rul_true, rul_true, label="True RUL (linear degradation)")
-    ax0.plot(
-        ts_pred, pred_means, label="Predicted RUL (Heteroscedastic CNN)", marker="o"
-    )
-    ax0.set_xlabel("Time [s]")
-    ax0.set_ylabel("RUL [s]")
-    ax0.set_title("Heteroscedastic CNN RUL Mean Predictions")
-    ax0.set_ylim(bottom=0.0)
-    ax0.legend()
-    ax0.grid(True, alpha=0.3)
-
-    fig0.savefig(output_dir / "rul_point_prediction.png", dpi=150, bbox_inches="tight")
-
     print(
         "Part 2. Running stochastic simulations from intermediate SOCs and comparing with CNN predictions..."
     )
@@ -125,16 +107,39 @@ def main() -> None:
         sim_config["N_simu"] = N_SIMU
         sim = les.SimulatorSimple(sim_config)
         sim.simulate()
-        ruls_true.append(sim.p_rul)
+        rul_true = les.expected_RUL(sim)
+        ruls_true.append(
+            rul_true
+        )  # Use the expected RUL from the simulator as the "true" RUL at this point
         # Calculate 95% confidence intervals for the true RUL distribution using the variance from the simulator
-        ruls_true_lowers.append(rul_true[i] - 1.96 * np.sqrt(les.variance_RUL(sim)))
-        ruls_true_uppers.append(rul_true[i] + 1.96 * np.sqrt(les.variance_RUL(sim)))
+        ruls_true_lowers.append(rul_true - 1.96 * np.sqrt(les.variance_RUL(sim)))
+        ruls_true_uppers.append(rul_true + 1.96 * np.sqrt(les.variance_RUL(sim)))
+
+    print("Part 3. Plotting results...")
+
+    fig0, ax0 = plt.subplots(figsize=(10, 6))
+    ax0.plot(
+        np.arange(0, N_t, N_t // 10) * dt,
+        ruls_true,
+        label="True RUL",
+    )
+    ax0.plot(
+        ts_pred, pred_means, label="Predicted RUL (Heteroscedastic CNN)", marker="o"
+    )
+    ax0.set_xlabel("Time [s]")
+    ax0.set_ylabel("RUL [s]")
+    ax0.set_title("Heteroscedastic CNN RUL Mean Predictions")
+    ax0.set_ylim(bottom=0.0)
+    ax0.legend()
+    ax0.grid(True, alpha=0.3)
+
+    fig0.savefig(output_dir / "rul_point_prediction.png", dpi=150, bbox_inches="tight")
 
     fig1, ax1 = plt.subplots(figsize=(10, 6))
     prop_cycle = plt.rcParams["axes.prop_cycle"]
     colors = prop_cycle.by_key()["color"]
     ax1.plot(
-        ts_rul_true, rul_true, label="True RUL (linear degradation)", color=colors[0]
+        np.arange(0, N_t, N_t // 10) * dt, ruls_true, label="True RUL", color=colors[0]
     )
     ax1.fill_between(
         np.arange(0, N_t, N_t // 10) * dt,
