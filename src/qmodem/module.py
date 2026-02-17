@@ -540,6 +540,253 @@ class MCDNetV1(nnx.Module):
         return x
 
 
+class StandardBayesConv1D(nnx.Module):
+    """Bayesian 1D convolution with shared perturbation (reparameterisation trick).
+
+    Each kernel and bias weight follows q(w) = N(μ, softplus(ρ)²). A single noise draw ε
+    is shared across every sample in the batch.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        kernel_size: int,
+        *,
+        padding: str = "VALID",
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Initialise the variational parameters of the kernel and bias distributions.
+
+        Args:
+            in_features: Number of input channels.
+            out_features: Number of output channels (filters).
+            kernel_size: Spatial size of the 1-D convolution kernel.
+            padding: Convolution padding mode (``"VALID"`` or ``"SAME"``).
+            rngs: RNGs for parameter initialisation.
+        """
+        self.in_features = in_features
+        self.out_features = out_features
+        self.kernel_size = kernel_size
+        self.padding = padding
+
+        k_shape = (kernel_size, in_features, out_features)
+        self.kernel_mu = nnx.Param(jax.random.normal(rngs.params(), k_shape) * 0.1)
+        self.kernel_rho = nnx.Param(jnp.full(k_shape, -3.0))
+        self.bias_mu = nnx.Param(jnp.zeros(out_features))
+        self.bias_rho = nnx.Param(jnp.full(out_features, -3.0))
+
+    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+        """Forward pass: sample one set of weights and convolve the batch.
+
+        Args:
+            x: Input with shape ``(batch, length, in_features)``.
+            key: JAX PRNG key for weight sampling.
+
+        Returns:
+            Convolved output with shape ``(batch, L_out, out_features)``.
+        """
+        k1, k2 = jax.random.split(key)
+        k_sigma = jax.nn.softplus(self.kernel_rho.value)
+        b_sigma = jax.nn.softplus(self.bias_rho.value)
+
+        eps_k = jax.random.normal(k1, self.kernel_mu.value.shape)
+        eps_b = jax.random.normal(k2, self.bias_mu.value.shape)
+
+        kernel = self.kernel_mu.value + k_sigma * eps_k
+        bias = self.bias_mu.value + b_sigma * eps_b
+
+        out = jax.lax.conv_general_dilated(
+            x,
+            kernel,
+            window_strides=(1,),
+            padding=self.padding,
+            dimension_numbers=("NHC", "HIO", "NHC"),
+        )
+        return out + bias
+
+    def kl_divergence(self) -> jax.Array:
+        """KL(q ‖ p) with unit-normal prior p = N(0, 1)."""
+
+        def _kl(mu: jax.Array, rho: jax.Array) -> jax.Array:
+            sigma = jax.nn.softplus(rho)
+            return -0.5 * jnp.sum(1.0 + 2.0 * jnp.log(sigma) - mu**2 - sigma**2)
+
+        return _kl(self.kernel_mu.value, self.kernel_rho.value) + _kl(
+            self.bias_mu.value, self.bias_rho.value
+        )
+
+
+class FlipoutConv1D(nnx.Module):
+    """Bayesian 1D convolution with Flipout (Wen et al., 2018).
+
+    Each sample gets a pseudo-independent perturbation via per-sample random
+    sign vectors on input and output channels::
+
+        y_i = conv(x_i, μ) + b_μ  +  r_i ⊙ [conv(s_i ⊙ x_i, σ ⊙ ε) + σ_b ⊙ ε_b]
+
+    where s_i ∈ {±1}^in and r_i ∈ {±1}^out are Rademacher draws.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        kernel_size: int,
+        *,
+        padding: str = "VALID",
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Initialise the variational parameters of the kernel and bias distributions.
+
+        Args:
+            in_features: Number of input channels.
+            out_features: Number of output channels (filters).
+            kernel_size: Spatial size of the 1-D convolution kernel.
+            padding: Convolution padding mode (``"VALID"`` or ``"SAME"``).
+            rngs: RNGs for parameter initialisation.
+        """
+        self.in_features = in_features
+        self.out_features = out_features
+        self.kernel_size = kernel_size
+        self.padding = padding
+
+        k_shape = (kernel_size, in_features, out_features)
+        self.kernel_mu = nnx.Param(jax.random.normal(rngs.params(), k_shape) * 0.1)
+        self.kernel_rho = nnx.Param(jnp.full(k_shape, -3.0))
+        self.bias_mu = nnx.Param(jnp.zeros(out_features))
+        self.bias_rho = nnx.Param(jnp.full(out_features, -3.0))
+
+    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+        """Forward pass with per-sample sign-flipped perturbations.
+
+        Args:
+            x: Input with shape ``(batch, length, in_features)``.
+            key: JAX PRNG key for weight and sign sampling.
+
+        Returns:
+            Convolved output with shape ``(batch, L_out, out_features)``.
+        """
+        k1, k2, k3, k4 = jax.random.split(key, 4)
+        batch = x.shape[0]
+        k_sigma = jax.nn.softplus(self.kernel_rho.value)
+        b_sigma = jax.nn.softplus(self.bias_rho.value)
+
+        # Deterministic mean path
+        mean_out = (
+            jax.lax.conv_general_dilated(
+                x,
+                self.kernel_mu.value,
+                window_strides=(1,),
+                padding=self.padding,
+                dimension_numbers=("NHC", "HIO", "NHC"),
+            )
+            + self.bias_mu.value
+        )
+
+        # Shared base noise
+        eps_k = jax.random.normal(k1, self.kernel_mu.value.shape)
+        eps_b = jax.random.normal(k2, self.bias_mu.value.shape)
+
+        # Per-sample sign flips on input/output channels
+        s = jax.random.rademacher(k3, (batch, 1, self.in_features)).astype(x.dtype)
+        r = jax.random.rademacher(k4, (batch, 1, self.out_features)).astype(x.dtype)
+
+        perturb = jax.lax.conv_general_dilated(
+            s * x,
+            k_sigma * eps_k,
+            window_strides=(1,),
+            padding=self.padding,
+            dimension_numbers=("NHC", "HIO", "NHC"),
+        )
+        perturb = r * (perturb + b_sigma * eps_b)
+        return mean_out + perturb
+
+    def kl_divergence(self) -> jax.Array:
+        """KL(q ‖ p) with unit-normal prior p = N(0, 1)."""
+
+        def _kl(mu: jax.Array, rho: jax.Array) -> jax.Array:
+            sigma = jax.nn.softplus(rho)
+            return -0.5 * jnp.sum(1.0 + 2.0 * jnp.log(sigma) - mu**2 - sigma**2)
+
+        return _kl(self.kernel_mu.value, self.kernel_rho.value) + _kl(
+            self.bias_mu.value, self.bias_rho.value
+        )
+
+
+BayesConvCls = type[StandardBayesConv1D] | type[FlipoutConv1D]
+
+
+class BayesCNN1D(nnx.Module):
+    def __init__(
+        self,
+        conv_cls: BayesConvCls,
+        n_filters: int = 4,
+        kernel_size: int = 5,
+        act_fn: nnx.Module = nnx.gelu,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Bayesian 1D CNN for time-series RUL prediction with uncertainty.
+
+        Architecture: BayesConv1D -> Activation -> Global Average Pooling ->
+        GaussianBlock. Bayesian version of :class:`HeteroscedasticCNN1D`,
+        trainable with ELBO loss (Bayes by Backprop). Accepts variable-length
+        input windows.
+
+        Args:
+            conv_cls: Bayesian convolution layer class
+                (:class:`StandardBayesConv1D` or :class:`FlipoutConv1D`).
+            n_filters: Number of convolutional filters. Defaults to 4.
+            kernel_size: Size of the convolutional kernel. Defaults to 5.
+            act_fn: Activation function. Defaults to ``nnx.gelu``.
+            rngs: RNGs for the flax internal modules.
+        """
+        self.n_filters = n_filters
+        self.kernel_size = kernel_size
+        self.act_fn = act_fn
+
+        self.conv = conv_cls(
+            in_features=1,
+            out_features=n_filters,
+            kernel_size=kernel_size,
+            padding="VALID",
+            rngs=rngs,
+        )
+
+        # GaussianBlock to output mean and variance
+        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+        """Forward pass through the Bayesian CNN.
+
+        Args:
+            x: Input with shape ``(batch, 1, window_size)``.
+                Will be transposed to ``(batch, window_size, 1)``.
+                Accepts variable-length windows.
+            key: JAX PRNG key for weight sampling.
+
+        Returns:
+            Concatenated ``[mu, var_positive]`` with shape ``(batch, 2)``.
+        """
+        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
+        x = jnp.transpose(x, (0, 2, 1))
+
+        # Bayesian Conv1D with activation
+        x = self.conv(x, key=key)
+        x = self.act_fn(x)
+
+        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
+        x = jnp.mean(x, axis=1)
+
+        # GaussianBlock: (batch, n_filters) -> (batch, 2)
+        return self.gaussian_block(x)
+
+    def kl_divergence(self) -> jax.Array:
+        """Total KL divergence across all Bayesian layers."""
+        return self.conv.kl_divergence()
+
+
 class NNEnsemble(nnx.Module):
     pass
 
@@ -590,6 +837,37 @@ def nll_loss_mcd(
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
 
     return jnp.mean(losses)
+
+
+def nll_loss_bayes(
+    model: nnx.Module, batch: jax.Array, *, key: jax.Array, n_train: int
+) -> jax.Array:
+    """ELBO NLL loss for Bayesian models (Bayes by Backprop).
+
+    Combines the Gaussian NLL data fit with the KL divergence regulariser
+    scaled by ``1 / n_train``::
+
+        L = NLL + KL(q ‖ p) / N
+
+    Args:
+        model (nnx.Module): Bayesian model with Gaussian output and
+            ``kl_divergence()`` method.
+        batch (jax.Array): batched input data ``(xs, labels)``.
+        key (jax.Array): JAX PRNG key for weight sampling.
+        n_train (int): Total number of training samples (for KL scaling).
+
+    Returns:
+        jax.Array: scalar ELBO loss value.
+    """
+    xs, labels = batch
+    outputs = model(xs, key=key)
+    means, variances = outputs[:, 0], outputs[:, 1]
+    variances = jnp.clip(variances, min=1e-6)
+    nll = jnp.mean(
+        0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
+    )
+    kl = model.kl_divergence() / n_train
+    return nll + kl
 
 
 def mse_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:

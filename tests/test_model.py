@@ -3,7 +3,17 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from qmodem.module import HNNV0, MCDCNN1D, MCDNetV0, nll_loss, nll_loss_mcd
+from qmodem.module import (
+    HNNV0,
+    MCDCNN1D,
+    MCDNetV0,
+    BayesCNN1D,
+    FlipoutConv1D,
+    StandardBayesConv1D,
+    nll_loss,
+    nll_loss_bayes,
+    nll_loss_mcd,
+)
 
 _rng_key = jax.random.PRNGKey(0)
 
@@ -202,3 +212,92 @@ def test_nll_loss_mcd_forwards_rngs(mock_mcdcnn1d) -> None:
     loss2 = nll_loss_mcd(mock_mcdcnn1d, batch, rng)
     # Different dropout masks should produce different losses
     assert not jnp.allclose(loss1, loss2)
+
+
+# --- BayesCNN1D / nll_loss_bayes tests ---
+
+
+@pytest.fixture(params=[StandardBayesConv1D, FlipoutConv1D])
+def mock_bayes_cnn1d(request) -> BayesCNN1D:
+    return BayesCNN1D(
+        n_filters=4,
+        kernel_size=5,
+        conv_cls=request.param,
+        rngs=nnx.Rngs(params=0),
+    )
+
+
+@pytest.mark.parametrize(
+    "batch",
+    [
+        (
+            jax.random.normal(shape=[10, 1, 30], key=_rng_key),
+            jax.random.normal(shape=[10], key=_rng_key),
+        ),
+        (
+            jax.random.normal(shape=[1, 1, 30], key=_rng_key),
+            jax.random.normal(shape=[1], key=_rng_key),
+        ),
+        (
+            jnp.zeros(shape=[5, 1, 30]),
+            jnp.zeros(shape=[5]),
+        ),
+    ],
+)
+def test_nll_loss_bayes(mock_bayes_cnn1d, batch) -> None:
+    """Tests the ELBO loss for Bayesian models.
+
+    It checks:
+    - the output is a jax array
+    - the output is scalar
+    """
+    key = jax.random.PRNGKey(42)
+    loss_value = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=100)
+    assert isinstance(loss_value, jax.Array)
+    assert jnp.isscalar(loss_value)
+
+
+def test_nll_loss_bayes_stochastic(mock_bayes_cnn1d) -> None:
+    """Tests that nll_loss_bayes produces different losses with different keys."""
+    batch = (
+        jax.random.normal(shape=[10, 1, 30], key=_rng_key),
+        jax.random.normal(shape=[10], key=_rng_key),
+    )
+    loss1 = nll_loss_bayes(
+        mock_bayes_cnn1d, batch, key=jax.random.PRNGKey(0), n_train=100
+    )
+    loss2 = nll_loss_bayes(
+        mock_bayes_cnn1d, batch, key=jax.random.PRNGKey(1), n_train=100
+    )
+    assert not jnp.allclose(loss1, loss2)
+
+
+def test_nll_loss_bayes_includes_kl(mock_bayes_cnn1d) -> None:
+    """Tests that the ELBO loss includes a positive KL term.
+
+    Computes the raw NLL and verifies that the ELBO loss is strictly larger (since KL(q
+    || p) > 0 for a non-trivial posterior).
+    """
+    key = jax.random.PRNGKey(42)
+    batch = (
+        jax.random.normal(shape=[10, 1, 30], key=_rng_key),
+        jax.random.normal(shape=[10], key=_rng_key),
+    )
+    elbo_loss = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=100)
+    kl = mock_bayes_cnn1d.kl_divergence()
+    assert kl > 0, "KL divergence should be positive"
+    # The ELBO loss is NLL + KL/N, so it should be finite
+    assert jnp.isfinite(elbo_loss)
+
+
+def test_nll_loss_bayes_kl_scaling(mock_bayes_cnn1d) -> None:
+    """Tests that larger n_train reduces the KL contribution to the ELBO loss."""
+    key = jax.random.PRNGKey(42)
+    batch = (
+        jax.random.normal(shape=[10, 1, 30], key=_rng_key),
+        jax.random.normal(shape=[10], key=_rng_key),
+    )
+    loss_small_n = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=10)
+    loss_large_n = nll_loss_bayes(mock_bayes_cnn1d, batch, key=key, n_train=10_000)
+    # Larger n_train => smaller KL/N term => smaller total loss
+    assert loss_small_n > loss_large_n

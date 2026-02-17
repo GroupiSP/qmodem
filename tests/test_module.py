@@ -4,6 +4,8 @@ import pytest
 from flax import nnx
 
 from qmodem.module import (
+    BayesCNN1D,
+    FlipoutConv1D,
     GaussianBlock,
     HeteroscedasticCNN1D,
     HeteroscedasticCNN1DV1,
@@ -11,6 +13,7 @@ from qmodem.module import (
     ResNetBlockV0,
     ResNetBlockV1,
     SimpleCNN1D,
+    StandardBayesConv1D,
 )
 
 
@@ -631,6 +634,305 @@ class TestHeteroscedasticCNN1DV1:
             output = model(x)
             mu = output[:, 0]
             return jnp.mean((mu - target) ** 2)
+
+        loss, grads = nnx.value_and_grad(loss_fn)(model)
+        assert jnp.isfinite(loss)
+        grad_params = nnx.state(grads, nnx.Param)
+        assert all(jnp.all(jnp.isfinite(g)) for g in jax.tree.leaves(grad_params))
+
+
+class TestStandardBayesConv1D:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.in_features = 1
+        self.out_features = 4
+        self.kernel_size = 5
+        self.batch_size = 16
+        self.length = 48
+        self.rngs = nnx.Rngs(0)
+        self.key = jax.random.PRNGKey(42)
+
+    def test_forward_pass_shape(self, setup):
+        """Test that forward pass produces correct output shape."""
+        layer = StandardBayesConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jnp.ones((self.batch_size, self.length, self.in_features))
+        output = layer(x, key=self.key)
+        expected_length = self.length - self.kernel_size + 1
+        assert output.shape == (self.batch_size, expected_length, self.out_features)
+
+    def test_output_dtype(self, setup):
+        """Test that output has correct dtype."""
+        layer = StandardBayesConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jnp.ones(
+            (self.batch_size, self.length, self.in_features), dtype=jnp.float32
+        )
+        output = layer(x, key=self.key)
+        assert output.dtype == jnp.float32
+
+    def test_stochastic_forward(self, setup):
+        """Test that different keys produce different outputs."""
+        layer = StandardBayesConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0),
+            (self.batch_size, self.length, self.in_features),
+        )
+        out1 = layer(x, key=jax.random.PRNGKey(1))
+        out2 = layer(x, key=jax.random.PRNGKey(2))
+        assert not jnp.allclose(out1, out2)
+
+    def test_parameter_count(self, setup):
+        """Test that parameter count is 2x a deterministic nnx.Conv."""
+        bayes_layer = StandardBayesConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        det_layer = nnx.Conv(
+            in_features=self.in_features,
+            out_features=self.out_features,
+            kernel_size=(self.kernel_size,),
+            padding="VALID",
+            rngs=self.rngs,
+        )
+        bayes_params = sum(
+            p.size for p in jax.tree.leaves(nnx.state(bayes_layer, nnx.Param))
+        )
+        det_params = sum(
+            p.size for p in jax.tree.leaves(nnx.state(det_layer, nnx.Param))
+        )
+        assert bayes_params == 2 * det_params
+
+    def test_kl_divergence_positive(self, setup):
+        """Test that KL divergence is non-negative."""
+        layer = StandardBayesConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        kl = layer.kl_divergence()
+        assert jnp.isfinite(kl)
+        assert kl >= 0.0
+
+    def test_gradient_computation(self, setup):
+        """Test that gradients can be computed through the layer."""
+        layer = StandardBayesConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0),
+            (self.batch_size, self.length, self.in_features),
+        )
+
+        def loss_fn(layer):
+            return jnp.mean(layer(x, key=self.key))
+
+        loss, grads = nnx.value_and_grad(loss_fn)(layer)
+        assert jnp.isfinite(loss)
+        grad_params = nnx.state(grads, nnx.Param)
+        assert all(jnp.all(jnp.isfinite(g)) for g in jax.tree.leaves(grad_params))
+
+
+class TestFlipoutConv1D:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.in_features = 1
+        self.out_features = 4
+        self.kernel_size = 5
+        self.batch_size = 16
+        self.length = 48
+        self.rngs = nnx.Rngs(0)
+        self.key = jax.random.PRNGKey(42)
+
+    def test_forward_pass_shape(self, setup):
+        """Test that forward pass produces correct output shape."""
+        layer = FlipoutConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jnp.ones((self.batch_size, self.length, self.in_features))
+        output = layer(x, key=self.key)
+        expected_length = self.length - self.kernel_size + 1
+        assert output.shape == (self.batch_size, expected_length, self.out_features)
+
+    def test_output_dtype(self, setup):
+        """Test that output has correct dtype."""
+        layer = FlipoutConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jnp.ones(
+            (self.batch_size, self.length, self.in_features), dtype=jnp.float32
+        )
+        output = layer(x, key=self.key)
+        assert output.dtype == jnp.float32
+
+    def test_stochastic_forward(self, setup):
+        """Test that different keys produce different outputs."""
+        layer = FlipoutConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0),
+            (self.batch_size, self.length, self.in_features),
+        )
+        out1 = layer(x, key=jax.random.PRNGKey(1))
+        out2 = layer(x, key=jax.random.PRNGKey(2))
+        assert not jnp.allclose(out1, out2)
+
+    def test_parameter_count(self, setup):
+        """Test that parameter count is 2x a deterministic nnx.Conv."""
+        bayes_layer = FlipoutConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        det_layer = nnx.Conv(
+            in_features=self.in_features,
+            out_features=self.out_features,
+            kernel_size=(self.kernel_size,),
+            padding="VALID",
+            rngs=self.rngs,
+        )
+        bayes_params = sum(
+            p.size for p in jax.tree.leaves(nnx.state(bayes_layer, nnx.Param))
+        )
+        det_params = sum(
+            p.size for p in jax.tree.leaves(nnx.state(det_layer, nnx.Param))
+        )
+        assert bayes_params == 2 * det_params
+
+    def test_kl_divergence_positive(self, setup):
+        """Test that KL divergence is non-negative."""
+        layer = FlipoutConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        kl = layer.kl_divergence()
+        assert jnp.isfinite(kl)
+        assert kl >= 0.0
+
+    def test_gradient_computation(self, setup):
+        """Test that gradients can be computed through the layer."""
+        layer = FlipoutConv1D(
+            self.in_features, self.out_features, self.kernel_size, rngs=self.rngs
+        )
+        x = jax.random.normal(
+            jax.random.PRNGKey(0),
+            (self.batch_size, self.length, self.in_features),
+        )
+
+        def loss_fn(layer):
+            return jnp.mean(layer(x, key=self.key))
+
+        loss, grads = nnx.value_and_grad(loss_fn)(layer)
+        assert jnp.isfinite(loss)
+        grad_params = nnx.state(grads, nnx.Param)
+        assert all(jnp.all(jnp.isfinite(g)) for g in jax.tree.leaves(grad_params))
+
+
+class TestBayesCNN1D:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.window_size = 48
+        self.n_filters = 4
+        self.kernel_size = 5
+        self.batch_size = 16
+        self.rngs = nnx.Rngs(0)
+        self.key = jax.random.PRNGKey(42)
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_forward_pass_shape(self, setup, conv_cls):
+        """Test that forward pass produces correct output shape."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jnp.ones((self.batch_size, 1, self.window_size))
+        output = model(x, key=self.key)
+        assert output.shape == (self.batch_size, 2)
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_output_dtype(self, setup, conv_cls):
+        """Test that output has correct dtype."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jnp.ones((self.batch_size, 1, self.window_size), dtype=jnp.float32)
+        output = model(x, key=self.key)
+        assert output.dtype == jnp.float32
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_variance_is_positive(self, setup, conv_cls):
+        """Test that variance output is always positive."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        output = model(x, key=self.key)
+        var_positive = output[:, 1]
+        assert jnp.all(var_positive >= 0)
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_parameter_count(self, setup, conv_cls):
+        """Test conv params are 2x those of HeteroscedasticCNN1D's conv layer."""
+        bayes_model = BayesCNN1D(conv_cls, n_filters=4, kernel_size=5, rngs=nnx.Rngs(0))
+        det_model = HeteroscedasticCNN1D(n_filters=4, kernel_size=5, rngs=nnx.Rngs(0))
+        bayes_params = sum(
+            p.size for p in jax.tree.leaves(nnx.state(bayes_model, nnx.Param))
+        )
+        det_params = sum(
+            p.size for p in jax.tree.leaves(nnx.state(det_model, nnx.Param))
+        )
+        # GaussianBlock is shared (10 params); conv is doubled (24 → 48)
+        det_conv_params = det_params - 10  # 24
+        bayes_conv_params = bayes_params - 10  # 48
+        assert bayes_conv_params == 2 * det_conv_params
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_stochastic_forward(self, setup, conv_cls):
+        """Test that different keys produce different outputs."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        out1 = model(x, key=jax.random.PRNGKey(1))
+        out2 = model(x, key=jax.random.PRNGKey(2))
+        assert not jnp.allclose(out1, out2)
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_kl_divergence_positive(self, setup, conv_cls):
+        """Test that KL divergence is non-negative."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
+        kl = model.kl_divergence()
+        assert jnp.isfinite(kl)
+        assert kl >= 0.0
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_variable_window_sizes(self, setup, conv_cls):
+        """Test that a single model handles different window sizes."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=nnx.Rngs(0))
+        for window_size in [24, 48, 96]:
+            x = jnp.ones((self.batch_size, 1, window_size))
+            output = model(x, key=self.key)
+            assert output.shape == (self.batch_size, 2)
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_different_batch_sizes(self, setup, conv_cls):
+        """Test forward pass with different batch sizes."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
+        for batch_size in [1, 8, 16, 32]:
+            x = jnp.ones((batch_size, 1, self.window_size))
+            output = model(x, key=self.key)
+            assert output.shape == (batch_size, 2)
+
+    @pytest.mark.parametrize("conv_cls", [StandardBayesConv1D, FlipoutConv1D])
+    def test_gradient_computation(self, setup, conv_cls):
+        """Test that gradients can be computed through the model."""
+        model = BayesCNN1D(conv_cls, self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        key = self.key
+
+        def loss_fn(model):
+            output = model(x, key=key)
+            mu = output[:, 0]
+            return jnp.mean(mu**2) + model.kl_divergence()
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         assert jnp.isfinite(loss)

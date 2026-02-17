@@ -6,14 +6,18 @@ from .data import (  # noqa: F401
 from .module import (  # noqa: F401
     HNNV0,
     HNNV1,
+    BayesCNN1D,
+    FlipoutConv1D,
     HeteroscedasticCNN1D,
     HeteroscedasticCNN1DV1,
     MCDCNN1D,
     MCDNetV0,
     MCDNetV1,
     SimpleCNN1D,
+    StandardBayesConv1D,
     mse_loss,
     nll_loss,
+    nll_loss_bayes,
     nll_loss_mcd,
 )
 
