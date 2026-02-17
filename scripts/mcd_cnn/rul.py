@@ -95,19 +95,22 @@ def main() -> None:
         X = discharge_voltage[start:end].reshape(1, -1)
         x_input = jnp.expand_dims(X, 0)
 
-        # MC sampling: N forward passes, one sample per pass
-        mc_samples = []
+        # MC sampling: N forward passes, collect μ_out and full samples separately
+        mu_samples = []
+        full_samples = []
         for _ in range(N_MC_PASSES):
             pred = model(x_input, rngs=rng_dropout)[0]  # Shape: (2,)
             mu = float(pred[0]) * y_max_train
             var = float(pred[1]) * y_max_train**2
             std = np.sqrt(max(var, 1e-12))
+            mu_samples.append(mu)
             sample = np.clip(np.random.normal(mu, std), 0, None)
-            mc_samples.append(sample)
+            full_samples.append(sample)
 
-        mc_samples = np.array(mc_samples)
-        pred_means.append(np.mean(mc_samples))
-        pred_stds.append(np.std(mc_samples))
+        # Point prediction: average of μ_out (epistemic uncertainty only)
+        pred_means.append(np.mean(mu_samples))
+        # Uncertainty: std of full predictive samples (epistemic + aleatoric)
+        pred_stds.append(np.std(full_samples))
 
     fig0, ax0 = plt.subplots(figsize=(10, 6))
     ax0.plot(ts_rul_true, rul_true, label="True RUL (linear degradation)")
