@@ -107,13 +107,13 @@ def main() -> None:
         sim_config["N_simu"] = N_SIMU
         sim = les.SimulatorSimple(sim_config)
         sim.simulate()
-        rul_true = les.expected_RUL(sim)
+        t_eods = sim.t_eods
         ruls_true.append(
-            rul_true
+            np.mean(t_eods)
         )  # Use the expected RUL from the simulator as the "true" RUL at this point
         # Calculate 95% confidence intervals for the true RUL distribution using the variance from the simulator
-        ruls_true_lowers.append(rul_true - 1.96 * np.sqrt(les.variance_RUL(sim)))
-        ruls_true_uppers.append(rul_true + 1.96 * np.sqrt(les.variance_RUL(sim)))
+        ruls_true_lowers.append(np.percentile(t_eods, 2.5))
+        ruls_true_uppers.append(np.percentile(t_eods, 97.5))
 
     print("Part 3. Plotting results...")
 
