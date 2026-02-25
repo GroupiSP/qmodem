@@ -32,7 +32,6 @@ from _shared import (  # noqa: E402
 )
 
 from qmodem import BayesCNN1D, FlipoutConv1D
-from qmodem.data import _back_calculate_rul_linear
 
 
 def main() -> None:
@@ -67,10 +66,7 @@ def main() -> None:
     sim_0.simulate()
 
     dt = metadata["simulator_config"]["dt"]
-    t_eod = sim_0._t_eods[0]
     N_t = sim_0.v_memo.shape[0]
-    ts_rul_true = np.arange(N_t) * dt
-    rul_true = _back_calculate_rul_linear(t_eod, N_t)
 
     # Load trained model
     print("Loading trained Bayesian CNN model...")
@@ -93,7 +89,8 @@ def main() -> None:
 
     ts_pred = []
     pred_means = []  # Bayesian predictive mean: avg of μ_out
-    pred_stds = []  # Std of full predictive samples (epistemic + aleatoric)
+    pred_lowers = []  # 2.5th percentile of full predictive samples
+    pred_uppers = []  # 97.5th percentile of full predictive samples
     for start in range(0, N_t - window_size, stride):
         end = start + window_size
         ts_pred.append(end * dt)
@@ -115,22 +112,9 @@ def main() -> None:
 
         # Point prediction: average of μ_out (Bayesian predictive mean)
         pred_means.append(np.mean(mu_samples))
-        # Uncertainty: std of full predictive samples
-        pred_stds.append(np.std(full_samples))
-
-    fig0, ax0 = plt.subplots(figsize=(10, 6))
-    ax0.plot(ts_rul_true, rul_true, label="True RUL (linear degradation)")
-    ax0.plot(
-        ts_pred, pred_means, label="Predicted RUL (Bayesian CNN Flipout)", marker="o"
-    )
-    ax0.set_xlabel("Time [s]")
-    ax0.set_ylabel("RUL [s]")
-    ax0.set_title("Bayesian CNN (Flipout) RUL Mean Predictions")
-    ax0.set_ylim(bottom=0.0)
-    ax0.legend()
-    ax0.grid(True, alpha=0.3)
-
-    fig0.savefig(output_dir / "rul_point_prediction.png", dpi=150, bbox_inches="tight")
+        # Uncertainty: 95% confidence intervals of full predictive samples
+        pred_lowers.append(np.percentile(full_samples, 2.5))
+        pred_uppers.append(np.percentile(full_samples, 97.5))
 
     print(
         "Part 2. Running stochastic simulations from intermediate SOCs and comparing "
@@ -148,15 +132,31 @@ def main() -> None:
         sim_config["N_simu"] = N_SIMU
         sim = les.SimulatorSimple(sim_config)
         sim.simulate()
-        ruls_true.append(sim.p_rul)
-        ruls_true_lowers.append(rul_true[i] - 1.96 * np.sqrt(les.variance_RUL(sim)))
-        ruls_true_uppers.append(rul_true[i] + 1.96 * np.sqrt(les.variance_RUL(sim)))
+        t_eods = sim.t_eods
+        ruls_true.append(np.mean(t_eods))
+        ruls_true_lowers.append(np.percentile(t_eods, 2.5))
+        ruls_true_uppers.append(np.percentile(t_eods, 97.5))
+
+    print("Part 3. Plotting results...")
+    fig0, ax0 = plt.subplots(figsize=(10, 6))
+    ax0.plot(np.arange(0, N_t, N_t // 10) * dt, ruls_true, label="True RUL")
+    ax0.plot(
+        ts_pred, pred_means, label="Predicted RUL (Bayesian CNN Flipout)", marker="o"
+    )
+    ax0.set_xlabel("Time [s]")
+    ax0.set_ylabel("RUL [s]")
+    ax0.set_title("Bayesian CNN (Flipout) RUL Mean Predictions")
+    ax0.set_ylim(bottom=0.0)
+    ax0.legend()
+    ax0.grid(True, alpha=0.3)
+
+    fig0.savefig(output_dir / "rul_point_prediction.png", dpi=150, bbox_inches="tight")
 
     fig1, ax1 = plt.subplots(figsize=(10, 6))
     prop_cycle = plt.rcParams["axes.prop_cycle"]
     colors = prop_cycle.by_key()["color"]
     ax1.plot(
-        ts_rul_true, rul_true, label="True RUL (linear degradation)", color=colors[0]
+        np.arange(0, N_t, N_t // 10) * dt, ruls_true, label="True RUL", color=colors[0]
     )
     ax1.fill_between(
         np.arange(0, N_t, N_t // 10) * dt,
@@ -175,8 +175,8 @@ def main() -> None:
     )
     ax1.fill_between(
         ts_pred,
-        np.array(pred_means) - 1.96 * np.array(pred_stds),
-        np.array(pred_means) + 1.96 * np.array(pred_stds),
+        pred_lowers,
+        pred_uppers,
         color=colors[1],
         alpha=0.2,
         label="Predicted RUL 95% CI",
