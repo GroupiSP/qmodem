@@ -788,10 +788,6 @@ class BayesCNN1D(nnx.Module):
         return self.conv.kl_divergence()
 
 
-class NNEnsemble(nnx.Module):
-    pass
-
-
 def nll_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
     """Negative log-liklihood loss, based on a Gaussian predictive distribution of the model.
     It implements Equation (31) in https://doi.org/10.1016/j.ymssp.2023.110796.
