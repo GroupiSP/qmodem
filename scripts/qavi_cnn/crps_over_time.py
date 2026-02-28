@@ -147,6 +147,31 @@ def main() -> None:
     pqc_circuits = [_make_pqc(n_qubits, n_pqc_layers) for _ in range(n_filters)]
     batched_circuits = [jax.vmap(c, in_axes=(None, 0)) for c in pqc_circuits]
 
+    def generator_forward(q_params_list, pp_list, z_batch):
+        """PQCs → post-processors → assemble kernel/bias (batched)."""
+        kernels = []
+        biases = []
+        for i in range(n_filters):
+            expvals = batched_circuits[i](q_params_list[i], z_batch)
+            expvals = jnp.stack(expvals, axis=-1)
+            weights = pp_list[i](expvals)
+            kernels.append(weights[:, :kernel_size])
+            biases.append(weights[:, kernel_size:])
+        kernel = jnp.stack(kernels, axis=-1)[:, :, jnp.newaxis, :]
+        bias = jnp.concatenate(biases, axis=-1)
+        return kernel, bias
+
+    @jax.jit
+    def predict_window(q_params_list, pp_list, model, z_batch, x_input):
+        """JIT'd batched prediction: returns (N_WEIGHT_SAMPLES, 2)."""
+        kernels, biases = generator_forward(q_params_list, pp_list, z_batch)
+
+        def _single(kernel, bias):
+            return model(x_input, kernel, bias)
+
+        outputs = jax.vmap(_single)(kernels, biases)  # (N_W, 1, 2)
+        return outputs[:, 0, :]  # (N_W, 2)
+
     # Load trained model
     print("Loading trained QAVI CNN model...")
     q_params_list, pp_list, model = load_all_components(ckpt_dir, metadata)
@@ -185,31 +210,27 @@ def main() -> None:
         window = discharge_voltage[start:idx].reshape(1, -1)
         x_input = jnp.expand_dims(window, 0)
 
-        pred_samples = []
-        for i in range(N_WEIGHT_SAMPLES):
-            key = jax.random.fold_in(base_key, k * N_WEIGHT_SAMPLES + i)
-            z = jax.random.uniform(key, (1,), minval=0.0, maxval=2.0 * jnp.pi)
+        # Pre-generate z values for this eval point
+        z_all = jnp.stack(
+            [
+                jax.random.uniform(
+                    jax.random.fold_in(base_key, k * N_WEIGHT_SAMPLES + i),
+                    (),
+                    minval=0.0,
+                    maxval=2.0 * jnp.pi,
+                )
+                for i in range(N_WEIGHT_SAMPLES)
+            ]
+        )
 
-            kernels_i = []
-            biases_i = []
-            for f_idx in range(n_filters):
-                expvals = batched_circuits[f_idx](q_params_list[f_idx], z)
-                expvals = jnp.stack(expvals, axis=-1)
-                weights = pp_list[f_idx](expvals)
-                kernels_i.append(weights[0, :kernel_size])
-                biases_i.append(weights[0, kernel_size:])
-
-            kernel = jnp.stack(kernels_i, axis=-1)[:, jnp.newaxis, :]  # (5, 1, 4)
-            bias = jnp.concatenate(biases_i)  # (4,)
-
-            pred = model(x_input, kernel, bias)[0]
-            mu = float(pred[0]) * y_max_train
-            var = float(pred[1]) * y_max_train**2
-            std = np.sqrt(max(var, 1e-12))
-            sample = np.clip(np.random.normal(mu, std), 0, None)
-            pred_samples.append(sample)
-
-        pred_samples = np.array(pred_samples)
+        # Batched prediction: all weight samples in one JIT'd call
+        preds = predict_window(
+            q_params_list, pp_list, model, z_all, x_input
+        )  # (N_WEIGHT_SAMPLES, 2)
+        mus = np.array(preds[:, 0]) * y_max_train
+        vars_ = np.array(preds[:, 1]) * y_max_train**2
+        stds = np.sqrt(np.clip(vars_, 1e-12, None))
+        pred_samples = np.clip(np.random.normal(mus, stds), 0, None)
 
         # --- Reference distribution (stochastic simulations from SoC at t) ---
         ref_config = metadata["simulator_config"].copy()

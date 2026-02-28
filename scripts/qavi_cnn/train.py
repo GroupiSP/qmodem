@@ -389,6 +389,56 @@ def make_gen_step(gen_optimizer: optax.GradientTransformation):
 
 
 # ---------------------------------------------------------------------------
+# JIT'd helpers for disc pre-computation and validation
+# ---------------------------------------------------------------------------
+@jax.jit
+def compute_mu_preds(
+    q_params_list: tuple[jax.Array, ...],
+    pp_list: tuple[PostProcessor, ...],
+    model: QAVICNN1D,
+    z_batch: jax.Array,
+    x_batch: jax.Array,
+) -> jax.Array:
+    """JIT'd computation of mu predictions for the discriminator step."""
+    kernels, biases = generator_forward(q_params_list, pp_list, z_batch)
+
+    def _single(kernel, bias):
+        return model(x_batch, kernel, bias)
+
+    outputs = jax.vmap(_single)(kernels, biases)  # (batch_w, batch_size, 2)
+    return outputs[:, :, 0]
+
+
+@jax.jit
+def val_step(
+    q_params_list: tuple[jax.Array, ...],
+    pp_list: tuple[PostProcessor, ...],
+    model: QAVICNN1D,
+    disc: Discriminator,
+    z_batch: jax.Array,
+    x_batch: jax.Array,
+    y_batch: jax.Array,
+) -> jax.Array:
+    """JIT'd validation step computing generator loss."""
+    pp_splits = [nnx.split(pp) for pp in pp_list]
+    pp_graphdefs = tuple(s[0] for s in pp_splits)
+    pp_states = tuple(s[1] for s in pp_splits)
+    model_graphdef, model_state = nnx.split(model)
+
+    return gen_loss_fn(
+        q_params_list,
+        pp_states,
+        pp_graphdefs,
+        model_state,
+        model_graphdef,
+        disc,
+        z_batch,
+        x_batch,
+        y_batch,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -441,7 +491,7 @@ def main():
     dataloader_train = DataLoader(
         data_source=ds_train,
         sampler=sampler_train,
-        operations=[Batch(batch_size=BATCH_SIZE)],
+        operations=[Batch(batch_size=BATCH_SIZE, drop_remainder=True)],
         worker_count=0,
     )
 
@@ -451,7 +501,7 @@ def main():
     dataloader_val = DataLoader(
         data_source=ds_val,
         sampler=sampler_val,
-        operations=[Batch(batch_size=BATCH_SIZE)],
+        operations=[Batch(batch_size=BATCH_SIZE, drop_remainder=True)],
         worker_count=0,
     )
 
@@ -540,15 +590,8 @@ def main():
                 k1, (BATCH_W,), minval=0.0, maxval=2.0 * jnp.pi
             )
 
-            # Generate weights for discriminator step (no grad)
-            kernels, biases = generator_forward(q_params_list, pp_list, z_batch)
-
-            # DDM predictions for discriminator
-            def _single(kernel, bias):
-                return model(x_batch, kernel, bias)
-
-            outputs = jax.vmap(_single)(kernels, biases)  # (batch_w, batch_size, 2)
-            mu_preds = outputs[:, :, 0]
+            # Generate mu predictions for discriminator step (JIT'd)
+            mu_preds = compute_mu_preds(q_params_list, pp_list, model, z_batch, x_batch)
 
             # Discriminator step
             d_loss, disc, disc_opt_state = disc_step(
@@ -586,24 +629,10 @@ def main():
                 key, (BATCH_W,), minval=0.0, maxval=2.0 * jnp.pi
             )
 
-            # Split modules for the functional loss computation
-            pp_splits = [nnx.split(pp) for pp in pp_list]
-            pp_graphdefs = tuple(s[0] for s in pp_splits)
-            pp_states = tuple(s[1] for s in pp_splits)
-            model_graphdef, model_state = nnx.split(model)
-
-            val_loss = gen_loss_fn(
-                q_params_list,
-                pp_states,
-                pp_graphdefs,
-                model_state,
-                model_graphdef,
-                disc,
-                z_batch,
-                x_batch,
-                y_batch,
+            v_loss = val_step(
+                q_params_list, pp_list, model, disc, z_batch, x_batch, y_batch
             )
-            val_losses.append(float(val_loss))
+            val_losses.append(float(v_loss))
             global_step += 1
 
         mean_val = np.mean(val_losses)
