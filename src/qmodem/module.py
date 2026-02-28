@@ -788,6 +788,74 @@ class BayesCNN1D(nnx.Module):
         return self.conv.kl_divergence()
 
 
+class QAVICNN1D(nnx.Module):
+    """1D CNN for QAVI-based RUL prediction with externally provided conv weights.
+
+    Architecture: functional Conv1D (no internal conv parameters) -> Activation ->
+    Global Average Pooling -> GaussianBlock.  Convolution kernel and bias are
+    generated externally by PQC generators and passed into the forward call.
+    Only the :class:`GaussianBlock` head carries trainable parameters.
+    """
+
+    def __init__(
+        self,
+        n_filters: int = 4,
+        kernel_size: int = 5,
+        act_fn: nnx.Module = nnx.gelu,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Initialise the QAVI CNN.
+
+        Args:
+            n_filters: Number of convolutional filters. Defaults to 4.
+            kernel_size: Size of the convolutional kernel. Defaults to 5.
+            act_fn: Activation function. Defaults to ``nnx.gelu``.
+            rngs: RNGs for the GaussianBlock parameters.
+        """
+        self.n_filters = n_filters
+        self.kernel_size = kernel_size
+        self.act_fn = act_fn
+
+        # GaussianBlock to output mean and variance
+        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array, kernel: jax.Array, bias: jax.Array) -> jax.Array:
+        """Forward pass with externally provided conv weights.
+
+        Args:
+            x: Input with shape ``(batch, 1, window_size)``.
+                Will be transposed to ``(batch, window_size, 1)``.
+            kernel: Convolution kernel with shape
+                ``(kernel_size, 1, n_filters)``.
+            bias: Bias vector with shape ``(n_filters,)``.
+
+        Returns:
+            Concatenated ``[mu, var_positive]`` with shape ``(batch, 2)``.
+        """
+        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
+        x = jnp.transpose(x, (0, 2, 1))
+
+        # Functional Conv1D with externally provided weights
+        x = (
+            jax.lax.conv_general_dilated(
+                x,
+                kernel,
+                window_strides=(1,),
+                padding="VALID",
+                dimension_numbers=("NHC", "HIO", "NHC"),
+            )
+            + bias
+        )
+        x = self.act_fn(x)
+
+        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
+        x = jnp.mean(x, axis=1)
+
+        # GaussianBlock: (batch, n_filters) -> (batch, 2)
+        return self.gaussian_block(x)
+
+
 def nll_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
     """Negative log-liklihood loss, based on a Gaussian predictive distribution of the model.
     It implements Equation (31) in https://doi.org/10.1016/j.ymssp.2023.110796.

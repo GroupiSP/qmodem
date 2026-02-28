@@ -13,6 +13,7 @@ from .module import (  # noqa: F401
     MCDCNN1D,
     MCDNetV0,
     MCDNetV1,
+    QAVICNN1D,
     SimpleCNN1D,
     StandardBayesConv1D,
     mse_loss,

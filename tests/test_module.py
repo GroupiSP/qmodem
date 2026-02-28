@@ -10,6 +10,7 @@ from qmodem.module import (
     HeteroscedasticCNN1D,
     HeteroscedasticCNN1DV1,
     MLPBlockV0,
+    QAVICNN1D,
     ResNetBlockV0,
     ResNetBlockV1,
     SimpleCNN1D,
@@ -932,6 +933,81 @@ class TestBayesCNN1D:
             output = model(x, rngs=nnx.Rngs(params=42))
             mu = output[:, 0]
             return jnp.mean(mu**2) + model.kl_divergence()
+
+        loss, grads = nnx.value_and_grad(loss_fn)(model)
+        assert jnp.isfinite(loss)
+        grad_params = nnx.state(grads, nnx.Param)
+        assert all(jnp.all(jnp.isfinite(g)) for g in jax.tree.leaves(grad_params))
+
+
+class TestQAVICNN1D:
+    @pytest.fixture
+    def setup(self):
+        """Setup common test parameters."""
+        self.n_filters = 4
+        self.kernel_size = 5
+        self.batch_size = 8
+        self.window_size = 30
+        self.rngs = nnx.Rngs(params=0)
+
+    def test_forward_pass_shape(self, setup):
+        """Test that forward pass produces correct output shape."""
+        model = QAVICNN1D(self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jnp.ones((self.batch_size, 1, self.window_size))
+        kernel = jnp.ones((self.kernel_size, 1, self.n_filters))
+        bias = jnp.zeros(self.n_filters)
+
+        output = model(x, kernel, bias)
+        assert output.shape == (self.batch_size, 2)
+
+    def test_gaussian_output(self, setup):
+        """Test that output has positive variance (second column)."""
+        model = QAVICNN1D(self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        kernel = jax.random.normal(
+            jax.random.PRNGKey(1), (self.kernel_size, 1, self.n_filters)
+        )
+        bias = jnp.zeros(self.n_filters)
+
+        output = model(x, kernel, bias)
+        variances = output[:, 1]
+        assert jnp.all(variances > 0)
+
+    def test_variable_window_size(self, setup):
+        """Test that the model accepts different window sizes."""
+        model = QAVICNN1D(self.n_filters, self.kernel_size, rngs=self.rngs)
+
+        for ws in [10, 30, 50]:
+            x = jnp.ones((self.batch_size, 1, ws))
+            kernel = jnp.ones((self.kernel_size, 1, self.n_filters))
+            bias = jnp.zeros(self.n_filters)
+            output = model(x, kernel, bias)
+            assert output.shape == (self.batch_size, 2)
+
+    def test_no_conv_params(self, setup):
+        """Test that model has no conv parameters — only GaussianBlock params."""
+        model = QAVICNN1D(self.n_filters, self.kernel_size, rngs=self.rngs)
+        n_params = sum(p.size for p in jax.tree.leaves(nnx.state(model, nnx.Param)))
+        # GaussianBlock has 2 Linear(n_filters, 1): (4+1) * 2 = 10
+        expected = (self.n_filters + 1) * 2
+        assert n_params == expected
+
+    def test_gradient_computation(self, setup):
+        """Test that gradients can be computed through the model."""
+        model = QAVICNN1D(self.n_filters, self.kernel_size, rngs=self.rngs)
+        x = jax.random.normal(
+            jax.random.PRNGKey(0), (self.batch_size, 1, self.window_size)
+        )
+        kernel = jax.random.normal(
+            jax.random.PRNGKey(1), (self.kernel_size, 1, self.n_filters)
+        )
+        bias = jnp.zeros(self.n_filters)
+
+        def loss_fn(model):
+            output = model(x, kernel, bias)
+            return jnp.mean(output[:, 0] ** 2)
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         assert jnp.isfinite(loss)
