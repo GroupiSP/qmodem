@@ -21,8 +21,7 @@ def _back_calculate_rul_linear(t_eod: float, N_t: int) -> np.ndarray:
     Returns:
         np.ndarray: RUL values for each time step, clipped to be non-negative.
     """
-    dt = t_eod / N_t
-    ruls = np.clip(t_eod - np.arange(N_t) * dt, a_min=0.0, a_max=None)
+    ruls = np.linspace(t_eod, 0.0, N_t)
     return jnp.array(ruls)
 
 
@@ -137,6 +136,11 @@ class BatterySimulationTimeWindowSource:
                 end = start + window_size
                 self.X.append(discharge_voltage[start:end].reshape(1, -1))
                 self.y.append(float(ruls[end]) if end < N_t else 0.0)
+
+            # Handle the last window if it doesn't fit perfectly.
+            if end < N_t:
+                self.X.append(discharge_voltage[-window_size:].reshape(1, -1))
+                self.y.append(0.0)
 
         self.X = jnp.array(self.X)
         self.y_max = jnp.max(jnp.array(self.y))

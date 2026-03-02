@@ -91,6 +91,14 @@ def main() -> None:
             pred[1] * y_max_train**2
         )  # Variance is the first element, scaled by y_max^2
 
+    # Cover the last part of the trajectory if it doesn't fit a full window
+    if end < N_t:
+        ts_pred.append(N_t * dt)
+        X = discharge_voltage[-window_size:].reshape(1, -1)
+        pred = model(jnp.expand_dims(X, 0))[0]
+        pred_means.append(pred[0] * y_max_train)
+        pred_vars.append(pred[1] * y_max_train**2)
+
     print(
         "Part 2. Running stochastic simulations from intermediate SOCs and comparing with CNN predictions..."
     )
@@ -129,7 +137,7 @@ def main() -> None:
     ax0.set_xlabel("Time [s]")
     ax0.set_ylabel("RUL [s]")
     ax0.set_title("Heteroscedastic CNN RUL Mean Predictions")
-    # ax0.set_ylim(bottom=0.0)
+    ax0.set_ylim(bottom=0.0)
     ax0.legend()
     ax0.grid(True, alpha=0.3)
 
@@ -167,7 +175,7 @@ def main() -> None:
     ax1.set_xlabel("Time [s]")
     ax1.set_ylabel("RUL [s]")
     ax1.set_title("Heteroscedastic CNN RUL Predictions with Uncertainty")
-    # ax1.set_ylim(bottom=0.0)
+    ax1.set_ylim(bottom=0.0)
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
