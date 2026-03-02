@@ -110,6 +110,27 @@ def main() -> None:
         pred_lowers.append(np.percentile(full_samples, 2.5))
         pred_uppers.append(np.percentile(full_samples, 97.5))
 
+    # Cover the last part of the trajectory if it doesn't fit a full window
+    if end < N_t:
+        ts_pred.append(N_t * dt)
+        X = discharge_voltage[-window_size:].reshape(1, -1)
+        x_input = jnp.expand_dims(X, 0)
+
+        mu_samples = []
+        full_samples = []
+        for _ in range(N_MC_PASSES):
+            pred = model(x_input, rngs=rng_dropout)[0]
+            mu = float(pred[0]) * y_max_train
+            var = float(pred[1]) * y_max_train**2
+            std = np.sqrt(max(var, 1e-12))
+            mu_samples.append(mu)
+            sample = np.clip(np.random.normal(mu, std), 0, None)
+            full_samples.append(sample)
+
+        pred_means.append(np.mean(mu_samples))
+        pred_lowers.append(np.percentile(full_samples, 2.5))
+        pred_uppers.append(np.percentile(full_samples, 97.5))
+
     print(
         "Part 2. Running stochastic simulations from intermediate SOCs and comparing with CNN predictions..."
     )
