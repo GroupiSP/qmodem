@@ -50,7 +50,7 @@ def main():
     LR = 1e-2
     N_EPOCHS = 500
     BATCH_SIZE = 32
-    PATIENCE = 300
+    PATIENCE = 50
     PRINT_EVERY = 10
 
     # Data parameters
