@@ -81,7 +81,7 @@ def main() -> None:
 
     discharge_voltage = sim_0.v_memo.flatten()  # shape (N_t,)
     socs = sim_0.soc_memo.flatten()  # shape (N_t,)
-    t_eod = sim_0._t_eods[0]
+    t_eod = sim_0.t_eods[0]
     N_t = len(discharge_voltage)
 
     print(f"Trajectory length: {N_t} steps, t_eod={t_eod:.1f}s")
