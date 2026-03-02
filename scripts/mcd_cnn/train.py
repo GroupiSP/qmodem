@@ -33,8 +33,8 @@ from grain.samplers import IndexSampler
 from grain.transforms import Batch
 
 from qmodem import (
-    BatterySimulationTimeWindowSource,
     MCDCNN1D,
+    BatterySimulationTimeWindowSource,
     nll_loss_mcd,
 )
 from qmodem.train import EarlyStopper
@@ -48,10 +48,10 @@ def main():
     _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs("mcd_cnn/train", create=True)
 
     # Training parameters
-    LR = 1e-3
-    N_EPOCHS = 200
+    LR = 1e-2
+    N_EPOCHS = 500
     BATCH_SIZE = 32
-    PATIENCE = 20
+    PATIENCE = 50
     PRINT_EVERY = 10
 
     # Data parameters
