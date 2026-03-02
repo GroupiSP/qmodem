@@ -46,7 +46,7 @@ from grain import DataLoader  # noqa: E402
 from grain.samplers import IndexSampler  # noqa: E402
 from grain.transforms import Batch  # noqa: E402
 
-from qmodem import BatterySimulationTimeWindowSource, QAVICNN1D  # noqa: E402
+from qmodem import QAVICNN1D, BatterySimulationTimeWindowSource  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Hyperparameters
@@ -62,10 +62,10 @@ KERNEL_SIZE = 5
 # Training
 LR_GEN = 0.01
 LR_DISC = 0.001
-N_EPOCHS = 200
+N_EPOCHS = 500
 BATCH_SIZE = 32
 BATCH_W = 32  # weight samples per step
-PATIENCE = 20
+PATIENCE = 50
 PRINT_EVERY = 10
 
 # Data
