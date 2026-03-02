@@ -856,14 +856,20 @@ class QAVICNN1D(nnx.Module):
         return self.gaussian_block(x)
 
 
-def nll_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
-    """Negative log-liklihood loss, based on a Gaussian predictive distribution of the model.
-    It implements Equation (31) in https://doi.org/10.1016/j.ymssp.2023.110796.
+def nll_loss(model: nnx.Module, batch: jax.Array, beta: float = 0.0) -> jax.Array:
+    """Negative log-likelihood loss based on a Gaussian predictive distribution.
+
+    Implements the standard NLL (Equation (31) in
+    https://doi.org/10.1016/j.ymssp.2023.110796) when ``beta=0``. When
+    ``beta>0``, applies variance weighting as proposed in
+    https://arxiv.org/pdf/2203.09168 (beta-NLL).
 
     Args:
         model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
         batch (jax.Array): batched input data.
-        rngs (nnx.Rngs): passed to the forward method of the model.
+        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
+            ``0.5`` is the value recommended in the beta-NLL paper. Defaults to
+            ``0.0``.
 
     Returns:
         jax.Array: loss value for the batch.
@@ -874,6 +880,9 @@ def nll_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
+
+    if beta > 0:
+        losses = losses * jax.lax.stop_gradient(variances) ** beta
 
     return jnp.mean(losses)
 

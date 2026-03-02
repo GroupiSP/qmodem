@@ -47,10 +47,10 @@ def main():
     _root_dir, CHECKPOINT_DIR, METADATA_DIR = get_run_dirs("het_cnn/train", create=True)
 
     # Training parameters
-    LR = 1e-3
-    N_EPOCHS = 200
+    LR = 1e-2
+    N_EPOCHS = 500
     BATCH_SIZE = 32
-    PATIENCE = 20
+    PATIENCE = 300
     PRINT_EVERY = 10
 
     # Data parameters
@@ -148,7 +148,7 @@ def main():
     @nnx.jit
     def train_step(model, optimizer, batch):
         def loss_fn(model):
-            return nll_loss(model, batch)
+            return nll_loss(model, batch, beta=0.5)
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
@@ -156,6 +156,11 @@ def main():
 
     @nnx.jit
     def eval_step(model, batch):
+        """The evaluation loss is just the NLL without the variance weighting.
+
+        The beta weighting is only used during training to encourage the model to learn
+        reasonable variances early on.
+        """
         return nll_loss(model, batch)
 
     # Training loop
@@ -168,12 +173,8 @@ def main():
     for epoch in range(N_EPOCHS):
         # Training
         model.train()
-        train_losses = []
         for batch in dataloader_train:
-            loss = train_step(model, optimizer, batch)
-            train_losses.append(loss)
-
-        train_loss = jnp.mean(jnp.array(train_losses))
+            train_step(model, optimizer, batch)
 
         # Validation
         model.eval()
@@ -182,7 +183,13 @@ def main():
             loss = eval_step(model, batch)
             val_losses.append(loss)
 
+        train_losses = []
+        for batch in dataloader_train:
+            loss = eval_step(model, batch)
+            train_losses.append(loss)
+
         val_loss = jnp.mean(jnp.array(val_losses))
+        train_loss = jnp.mean(jnp.array(train_losses))
 
         # Print progress
         if (epoch + 1) % PRINT_EVERY == 0 or epoch == 0:

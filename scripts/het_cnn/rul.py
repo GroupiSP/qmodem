@@ -129,7 +129,7 @@ def main() -> None:
     ax0.set_xlabel("Time [s]")
     ax0.set_ylabel("RUL [s]")
     ax0.set_title("Heteroscedastic CNN RUL Mean Predictions")
-    ax0.set_ylim(bottom=0.0)
+    # ax0.set_ylim(bottom=0.0)
     ax0.legend()
     ax0.grid(True, alpha=0.3)
 
@@ -167,7 +167,7 @@ def main() -> None:
     ax1.set_xlabel("Time [s]")
     ax1.set_ylabel("RUL [s]")
     ax1.set_title("Heteroscedastic CNN RUL Predictions with Uncertainty")
-    ax1.set_ylim(bottom=0.0)
+    # ax1.set_ylim(bottom=0.0)
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
