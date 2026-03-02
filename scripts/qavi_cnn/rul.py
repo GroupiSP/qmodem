@@ -223,6 +223,22 @@ def main() -> None:
         pred_lowers.append(float(np.percentile(full_samples, 2.5)))
         pred_uppers.append(float(np.percentile(full_samples, 97.5)))
 
+    # Cover the last part of the trajectory if it doesn't fit a full window
+    if end < N_t:
+        ts_pred.append(N_t * dt)
+        X = discharge_voltage[-window_size:].reshape(1, -1)
+        x_input = jnp.expand_dims(X, 0)
+
+        preds = predict_window(q_params_list, pp_list, model, z_all, x_input)
+        mus = np.array(preds[:, 0]) * y_max_train
+        vars_ = np.array(preds[:, 1]) * y_max_train**2
+        stds = np.sqrt(np.clip(vars_, 1e-12, None))
+        full_samples = np.clip(np.random.normal(mus, stds), 0, None)
+
+        pred_means.append(float(np.mean(mus)))
+        pred_lowers.append(float(np.percentile(full_samples, 2.5)))
+        pred_uppers.append(float(np.percentile(full_samples, 97.5)))
+
     print(
         "Part 2. Running stochastic simulations from intermediate SOCs and comparing "
         "with QAVI CNN predictions..."
