@@ -43,8 +43,9 @@ def main() -> None:
     with open(METADATA_DIR / "metadata.pkl", "rb") as f:
         metadata = pickle.load(f)
 
-    # Battery simulator parameters
+    # Target distribution parameters
     N_SIMU = 100  # Number of stochastic simulations to reconstruct the true RUL distributions
+    N_INTERMEDIATE_SOCs = 10  # Number of intermediate SoCs to test the model on (evenly spaced along the trajectory)
 
     print("=" * 70)
     print("Heteroscedastic CNN RUL Prediction with Uncertainty")
@@ -54,7 +55,12 @@ def main() -> None:
 
     # Recreate the simulator used in training and run a single simulation.
     print("Part 1. Single simulation to get voltage and SoC history...")
-    sim_0 = les.SimulatorSimple(metadata["simulator_config"])
+    train_sim_config = metadata["simulator_config"].copy()
+    train_sim_config["N_simu"] = (
+        1  # Pick a single discharge history to test the model on
+    )
+
+    sim_0 = les.SimulatorSimple(train_sim_config)
     sim_0.simulate()
 
     dt = metadata["simulator_config"]["dt"]
@@ -74,6 +80,7 @@ def main() -> None:
     window_size = metadata["training_params"]["window_size"]
     stride = metadata["training_params"]["stride"]
     y_max_train = metadata["scaling_params"]["y_max"]
+
     model.eval()
 
     ts_pred = []
@@ -102,13 +109,12 @@ def main() -> None:
     print(
         "Part 2. Running stochastic simulations from intermediate SOCs and comparing with CNN predictions..."
     )
-    # Get 10 intermediate SoCs from the previous simulation, run stochastic simulations from each and save
+    # Get intermediate SoCs from the previous simulation, run stochastic simulations from each and save
     # the RUL distributions.
-    ruls_true = []
     ruls_true_lowers = []
     ruls_true_uppers = []
     socs = sim_0.soc_memo.flatten()
-    for i in range(0, N_t, N_t // 10):
+    for i in range(0, N_t, N_t // N_INTERMEDIATE_SOCs):
         soc_0 = socs[i]
         sim_config = metadata["simulator_config"].copy()
         sim_config["SoC_0"] = soc_0
@@ -116,18 +122,19 @@ def main() -> None:
         sim = les.SimulatorSimple(sim_config)
         sim.simulate()
         t_eods = sim.t_eods
-        ruls_true.append(
-            np.mean(t_eods)
-        )  # Use the expected RUL from the simulator as the "true" RUL at this point
         # Calculate 95% confidence intervals for the true RUL distribution using the variance from the simulator
         ruls_true_lowers.append(np.percentile(t_eods, 2.5))
         ruls_true_uppers.append(np.percentile(t_eods, 97.5))
+
+    # true RUL is linear
+    ts_rul_true = np.arange(0.0, N_t, N_t // N_INTERMEDIATE_SOCs) * dt
+    ruls_true = sim_0.t_eods[0] - ts_rul_true
 
     print("Part 3. Plotting results...")
 
     fig0, ax0 = plt.subplots(figsize=(10, 6))
     ax0.plot(
-        np.arange(0, N_t, N_t // 10) * dt,
+        ts_rul_true,
         ruls_true,
         label="True RUL",
     )
@@ -147,10 +154,13 @@ def main() -> None:
     prop_cycle = plt.rcParams["axes.prop_cycle"]
     colors = prop_cycle.by_key()["color"]
     ax1.plot(
-        np.arange(0, N_t, N_t // 10) * dt, ruls_true, label="True RUL", color=colors[0]
+        ts_rul_true,
+        ruls_true,
+        label="True RUL",
+        color=colors[0],
     )
     ax1.fill_between(
-        np.arange(0, N_t, N_t // 10) * dt,
+        ts_rul_true,
         ruls_true_lowers,
         ruls_true_uppers,
         color=colors[0],

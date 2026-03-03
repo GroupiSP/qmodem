@@ -5,7 +5,7 @@ This script demonstrates:
 - Training on multiple discharge histories (combined time window sources)
 - Validation monitoring during training
 - Using NLL loss for heteroscedastic predictions (mean + variance)
-- Two-layer CNN architecture (2 conv layers, 8 filters each, no pooling)
+- Two-layer CNN architecture (1 conv layer, 4 filters of size 5, global average pooling, Gaussian output)
 """
 
 import pickle
@@ -15,6 +15,7 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import lib_eod_simulation as les
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
@@ -52,19 +53,22 @@ def main():
     BATCH_SIZE = 32
     PATIENCE = 50
     PRINT_EVERY = 10
+    N_FILTERS = 4
+    KERNEL_SIZE = 5
 
     # Data parameters
     N_SIMU_TRAIN = 100  # Number of discharge histories for training
     N_SIMU_VAL = 20  # Number of discharge histories for validation
-    WINDOW_SIZE = 30
-    STRIDE = 15  # 50% overlap between windows
+    WINDOW_SIZE = 20
+    STRIDE = 10  # 50% overlap between windows
+    NORMALIZE = True  # Whether to normalize RUL values by max RUL in the dataset
 
     # Battery simulation parameters
     CURRENT_AMPLITUDE = -2.8 * 0.75
     V_CUT = 2.5
-    DT = 10.0
+    DT = 20.0
     OMEGA_STD = 3e-3
-    ETA_STD = 3e-2
+    ETA_STD = 0.0
 
     battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
@@ -79,8 +83,8 @@ def main():
 
     # Create training data: combine multiple simulations
     print("Creating training dataset...")
-    shared_sim_config = make_simulator_config(
-        n_simu=1,
+    sim_config = make_simulator_config(
+        n_simu=N_SIMU_TRAIN,
         v_cut=V_CUT,
         soc_0=1.0,
         dt=DT,
@@ -90,8 +94,13 @@ def main():
         battery=battery,
     )
 
+    battery_simulator_train = les.SimulatorSimple(sim_config)
+
     ds_train = BatterySimulationTimeWindowSource(
-        shared_sim_config, n_hists=N_SIMU_TRAIN, window_size=WINDOW_SIZE, stride=STRIDE
+        battery_simulator_train,
+        window_size=WINDOW_SIZE,
+        stride=STRIDE,
+        normalize=NORMALIZE,
     )
     print(
         f"Total training windows: {len(ds_train)} (skipped {ds_train.n_skipped} short histories)"
@@ -100,8 +109,14 @@ def main():
 
     # Create validation data
     print("Creating validation dataset...")
+    sim_config_val = sim_config.copy()
+    sim_config_val["N_simu"] = N_SIMU_VAL
+    battery_simulator_val = les.SimulatorSimple(sim_config_val)
     ds_val = BatterySimulationTimeWindowSource(
-        shared_sim_config, n_hists=N_SIMU_VAL, window_size=WINDOW_SIZE, stride=STRIDE
+        battery_simulator_val,
+        window_size=WINDOW_SIZE,
+        stride=STRIDE,
+        normalize=NORMALIZE,
     )
     print(
         f"Total validation windows: {len(ds_val)} (skipped {ds_val.n_skipped} short histories)"
@@ -132,7 +147,9 @@ def main():
     # Create model
     print("Creating heteroscedastic CNN model...")
     rngs = nnx.Rngs(0)
-    model = HeteroscedasticCNN1D(rngs=rngs)
+    model = HeteroscedasticCNN1D(
+        n_filters=N_FILTERS, kernel_size=KERNEL_SIZE, rngs=rngs
+    )
 
     # Count parameters
     n_params = sum(p.size for p in jax.tree.leaves(nnx.state(model, nnx.Param)))
@@ -228,7 +245,7 @@ def main():
     # Save metadata
     # Pickle the simulator config
     metadata = {
-        "simulator_config": shared_sim_config,
+        "simulator_config": sim_config,
         "training_params": {
             "window_size": WINDOW_SIZE,
             "stride": STRIDE,
@@ -236,11 +253,13 @@ def main():
             "n_simu_val": N_SIMU_VAL,
         },
         "model_params": {
-            "n_filters": 4,
-            "kernel_size": 5,
+            "n_filters": N_FILTERS,
+            "kernel_size": KERNEL_SIZE,
         },
+        # TODO - y_max should be exposed as a scalar by the datasource, since it's only use is for scaling
         "scaling_params": {
-            "y_max": ds_train.y_max.item(),
+            "normalize": NORMALIZE,
+            "y_max": ds_train.y_max.item() if NORMALIZE else 1.0,
         },
     }
     with open(METADATA_DIR / "metadata.pkl", "wb") as f:

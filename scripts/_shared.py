@@ -38,6 +38,7 @@ def create_battery_and_policy(
     return battery, discharge_policy
 
 
+# TODO - remove
 def make_simulator_config(
     *,
     n_simu: int,
