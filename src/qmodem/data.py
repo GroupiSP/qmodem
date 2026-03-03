@@ -154,4 +154,4 @@ class BatterySimulationTimeWindowSource:
                 has shape (1, window_size) and target has shape (1,) for a scalar
                 index or (batch_size,) for a slice.
         """
-        return self.X[record_key], self.y[record_key].reshape(-1)
+        return self.X[record_key], self.y[record_key]

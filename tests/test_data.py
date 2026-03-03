@@ -77,7 +77,7 @@ def test_time_window_source_getitem_single_shape() -> None:
 
     window, target = source[0]
     assert window.shape == (1, window_size)
-    assert target.shape == (1,)
+    assert target.shape == ()
 
 
 def test_time_window_source_getitem_batch_shape() -> None:
