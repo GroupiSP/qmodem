@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Generator, SupportsIndex
+from typing import SupportsIndex
 
 import jax
 import jax.numpy as jnp
@@ -24,50 +24,6 @@ def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.n
     """
     ruls = np.linspace(t_eod - t_0, 0.0, N_t)
     return jnp.array(ruls)
-
-
-# TODO: generate discharge histories from the same initial SoC.
-# TODO: run one call to `simulate`, with `N_simu` set by the user. Yield the discharge histories one by one.
-# TODO: ensure that the measurement noise \eta is set to zero. If not, change it here and notify the user.
-# TODO: keep t_0=0.0 for all histories, no need to yield it. Modify the data sources accordingly.
-# TODO: update docstrings.
-# TODO: add/adjust tests: message when measurement noise is set to zero by the function, check that all discharge histories have the same length, check that number of discharge histories is correct
-def _generate_discharge_histories(
-    n_hists: int, shared_sim_config: dict
-) -> Generator[tuple[np.ndarray, float]]:
-    """Generate discharge histories with varying uniform random initial SoCs.
-
-    Args:
-        n_hists (int): number of discharge histories to generate.
-        shared_sim_config (dict): shared simulator configuration.
-            Number of simulations is set to 1.
-
-    Yields:
-        tuple[np.ndarray, float]: a tuple of (t_0, discharge_voltage_per_sim, t_eod) for
-            each generated discharge history.
-    """
-    # Create a deterministic history (no noise) as a reference for SoC_0 and t_0
-    sim_config_ref = shared_sim_config.copy()
-    sim_config_ref["SoC_0"] = 1.0
-    sim_config_ref["omega_std"] = 0.0  # No process noise
-    sim_config_ref["eta_std"] = 0.0  # No measurement noise
-    sim_ref = les.SimulatorSimple(sim_config_ref)
-    sim_ref.simulate(t_0=0.0)
-
-    dt = shared_sim_config["dt"]
-    N_t = sim_ref.v_memo.shape[0]
-
-    for _ in range(n_hists):
-        sim_config = shared_sim_config.copy()
-        # Sample an index and the corresponding SoC_0 from the reference history.
-        idx = np.random.randint(0, N_t)
-        sim_config["SoC_0"] = sim_ref.soc_memo[idx].item()
-        t_0 = idx * dt
-
-        sim = les.SimulatorSimple(sim_config)
-        sim.simulate(t_0=t_0)
-        discharge_voltage_per_sim: np.ndarray = sim.v_memo.T
-        yield t_0, discharge_voltage_per_sim[0], sim.t_eods[0]
 
 
 class BatterySimulationSource:
@@ -120,33 +76,45 @@ class BatterySimulationSource:
 
 class BatterySimulationTimeWindowSource:
     def __init__(
-        self, shared_sim_config: dict, n_hists: int, window_size: int, stride: int = 1
+        self,
+        simulator: les.SimulatorSimple | les.SimulatorComplete,
+        window_size: int,
+        stride: int = 1,
+        normalize: bool = False,
     ) -> None:
-        """Data source that provides time-windowed, labelled chunks of the discharge
-        history. The features are the voltage values in the time window, and the target
-        is the RUL at the time step immediately following the time window.
+        """Data source that provides time-windowed, labelled chunks of discharge
+        histories. The simulator is called once with ``t_0=0.0``. The features are the
+        voltage values in the time window, and the target is the RUL at the time step
+        immediately following the time window.
 
         Args:
-            shared_sim_config (dict): shared simulator configuration dict. Number of
-                simulations is set to 1.
-            n_hists (int): number of discharge histories to generate.
+            simulator (les.SimulatorSimple | les.SimulatorComplete): the simulator
+                from lib_eod_simulation. It must be fully configured (including
+                ``N_simu``) before being passed to this class.
             window_size (int): the size of the time window (number of time steps).
             stride (int): the stride of the sliding time window
                 (number of time steps to move the window at each step).
                 Defaults to 1.
+            normalize (bool): normalizes the RUL values (divide by max(RUL)).
+                Defaults to False.
 
         Note:
-            Discharge histories shorter than window_size are skipped.
+            Discharge histories shorter than ``window_size`` are skipped.
         """
+        simulator.simulate(t_0=0.0)
+
+        # Transpose for convenience. Shape=(N_simu, N_t).
+        discharge_voltage_per_sim: np.ndarray = simulator.v_memo.T
+        N_t = discharge_voltage_per_sim.shape[1]
+
         self.X = []
         self.y = []
         self.n_skipped = 0
-        for t_0, discharge_voltage, t_eod in _generate_discharge_histories(
-            n_hists=n_hists, shared_sim_config=shared_sim_config
-        ):
-            N_t = discharge_voltage.shape[0]
-            # calculate RULs (labels) for this time history, using a linear degradation model.
-            ruls = _back_calculate_rul_linear(t_eod=t_eod, N_t=N_t, t_0=t_0)
+        for i in range(simulator.N_simu):
+            discharge_voltage = discharge_voltage_per_sim[i]
+            t_eod = simulator.t_eods[i]
+            # Calculate RULs (labels) using a linear degradation model (t_0=0.0).
+            ruls = _back_calculate_rul_linear(t_eod=t_eod, N_t=N_t)
             # Skip histories shorter than the window size.
             if window_size > N_t:
                 self.n_skipped += 1
@@ -163,8 +131,13 @@ class BatterySimulationTimeWindowSource:
                 self.y.append(0.0)
 
         self.X = jnp.array(self.X)
-        self.y_max = jnp.max(jnp.array(self.y))
-        self.y = jnp.array(self.y) / self.y_max  # Normalize RUL values to [0, 1]
+        y_array = jnp.array(self.y)
+        self.y_max = jnp.max(y_array)
+
+        if normalize:
+            self.y = y_array / self.y_max
+        else:
+            self.y = y_array
 
     def __len__(self) -> int:
         """Number of time windows in the dataset."""
@@ -178,6 +151,7 @@ class BatterySimulationTimeWindowSource:
 
         Returns:
             tuple[jax.Array, jax.Array]: A tuple of (window, target) where window
-                has shape (1, window_size) and target is a scalar.
+                has shape (1, window_size) and target has shape (1,) for a scalar
+                index or (batch_size,) for a slice.
         """
-        return self.X[record_key], self.y[record_key]
+        return self.X[record_key], self.y[record_key].reshape(-1)
