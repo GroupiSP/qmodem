@@ -26,6 +26,12 @@ def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.n
     return jnp.array(ruls)
 
 
+# TODO: generate discharge histories from the same initial SoC.
+# TODO: run one call to `simulate`, with `N_simu` set by the user. Yield the discharge histories one by one.
+# TODO: ensure that the measurement noise \eta is set to zero. If not, change it here and notify the user.
+# TODO: keep t_0=0.0 for all histories, no need to yield it. Modify the data sources accordingly.
+# TODO: update docstrings.
+# TODO: add/adjust tests: message when measurement noise is set to zero by the function, check that all discharge histories have the same length, check that number of discharge histories is correct
 def _generate_discharge_histories(
     n_hists: int, shared_sim_config: dict
 ) -> Generator[tuple[np.ndarray, float]]:
