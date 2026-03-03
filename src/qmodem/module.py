@@ -277,7 +277,17 @@ class HeteroscedasticCNN1DV1(nnx.Module):
 class GaussianBlock(nnx.Module):
     def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
         self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        # Bias initialised to -3 so that softplus(-3) ≈ 0.049 at the start of
+        # training. This keeps the predicted variance small in early epochs,
+        # ensuring the mean head receives a strong gradient signal before the
+        # variance has any chance to inflate and suppress it (the canonical NLL
+        # "variance collapse" failure mode).
+        self.linear_2 = nnx.Linear(
+            input_dim,
+            output_dim,
+            rngs=rngs,
+            bias_init=nnx.initializers.constant(-3.0),
+        )
 
     def __call__(self, x: jax.Array) -> jax.Array:
         mu = self.linear_1(x)
