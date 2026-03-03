@@ -44,8 +44,8 @@ def main() -> None:
         metadata = pickle.load(f)
 
     # Target distribution parameters
-    N_SIMU = 100  # Number of stochastic simulations to reconstruct the true RUL distributions
-    N_INTERMEDIATE_SOCs = 10  # Number of intermediate SoCs to test the model on (evenly spaced along the trajectory)
+    N_SIMU = 500  # Number of stochastic simulations to reconstruct the true RUL distributions
+    N_INTERMEDIATE_SOCs = 100  # Number of intermediate SoCs to test the model on (evenly spaced along the trajectory)
 
     print("=" * 70)
     print("Heteroscedastic CNN RUL Prediction with Uncertainty")
@@ -114,7 +114,7 @@ def main() -> None:
     ruls_true_lowers = []
     ruls_true_uppers = []
     socs = sim_0.soc_memo.flatten()
-    for i in range(0, N_t, N_t // N_INTERMEDIATE_SOCs):
+    for i in np.linspace(0, N_t, N_INTERMEDIATE_SOCs, endpoint=False, dtype=np.int32):
         soc_0 = socs[i]
         sim_config = metadata["simulator_config"].copy()
         sim_config["SoC_0"] = soc_0
@@ -127,7 +127,7 @@ def main() -> None:
         ruls_true_uppers.append(np.percentile(t_eods, 97.5))
 
     # true RUL is linear
-    ts_rul_true = np.arange(0.0, N_t, N_t // N_INTERMEDIATE_SOCs) * dt
+    ts_rul_true = np.linspace(0.0, N_t, N_INTERMEDIATE_SOCs) * dt
     ruls_true = sim_0.t_eods[0] - ts_rul_true
 
     print("Part 3. Plotting results...")
