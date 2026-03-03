@@ -100,7 +100,9 @@ def main():
     ds_train = BatterySimulationTimeWindowSource(
         shared_sim_config, n_hists=N_SIMU_TRAIN, window_size=WINDOW_SIZE, stride=STRIDE
     )
-    print(f"Total training windows: {len(ds_train)}")
+    print(
+        f"Total training windows: {len(ds_train)} (skipped {ds_train.n_skipped} short histories)"
+    )
     print()
 
     # Create validation data
@@ -108,7 +110,9 @@ def main():
     ds_val = BatterySimulationTimeWindowSource(
         shared_sim_config, n_hists=N_SIMU_VAL, window_size=WINDOW_SIZE, stride=STRIDE
     )
-    print(f"Total validation windows: {len(ds_val)}")
+    print(
+        f"Total validation windows: {len(ds_val)} (skipped {ds_val.n_skipped} short histories)"
+    )
     print()
 
     # Create DataLoaders

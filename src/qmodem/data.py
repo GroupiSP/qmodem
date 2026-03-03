@@ -11,17 +11,18 @@ import numpy as np
 BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
 
 
-def _back_calculate_rul_linear(t_eod: float, N_t: int) -> np.ndarray:
+def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.ndarray:
     """Back-calculates RUL values for a linear degradation model.
 
     Args:
         t_eod (float): time of end of discharge (failure).
         N_t (int): number of time steps in the discharge history.
+        t_0 (float): initial time of the discharge history. Defaults to 0.0.
 
     Returns:
         np.ndarray: RUL values for each time step, clipped to be non-negative.
     """
-    ruls = np.linspace(t_eod, 0.0, N_t)
+    ruls = np.linspace(t_eod - t_0, 0.0, N_t)
     return jnp.array(ruls)
 
 
@@ -36,18 +37,31 @@ def _generate_discharge_histories(
             Number of simulations is set to 1.
 
     Yields:
-        tuple[np.ndarray, float]: a tuple of (discharge_voltage_per_sim, t_eod) for
+        tuple[np.ndarray, float]: a tuple of (t_0, discharge_voltage_per_sim, t_eod) for
             each generated discharge history.
     """
+    # Create a deterministic history (no noise) as a reference for SoC_0 and t_0
+    sim_config_ref = shared_sim_config.copy()
+    sim_config_ref["SoC_0"] = 1.0
+    sim_config_ref["omega_std"] = 0.0  # No process noise
+    sim_config_ref["eta_std"] = 0.0  # No measurement noise
+    sim_ref = les.SimulatorSimple(sim_config_ref)
+    sim_ref.simulate(t_0=0.0)
+
+    dt = shared_sim_config["dt"]
+    N_t = sim_ref.v_memo.shape[0]
+
     for _ in range(n_hists):
         sim_config = shared_sim_config.copy()
-        sim_config["SoC_0"] = np.random.uniform(
-            0.2, 1.0
-        )  # Random initial SoC between 20% and 100%
+        # Sample an index and the corresponding SoC_0 from the reference history.
+        idx = np.random.randint(0, N_t)
+        sim_config["SoC_0"] = sim_ref.soc_memo[idx].item()
+        t_0 = idx * dt
+
         sim = les.SimulatorSimple(sim_config)
-        sim.simulate()
+        sim.simulate(t_0=t_0)
         discharge_voltage_per_sim: np.ndarray = sim.v_memo.T
-        yield discharge_voltage_per_sim[0], sim.t_eods[0]
+        yield t_0, discharge_voltage_per_sim[0], sim.t_eods[0]
 
 
 class BatterySimulationSource:
@@ -115,21 +129,21 @@ class BatterySimulationTimeWindowSource:
                 (number of time steps to move the window at each step).
                 Defaults to 1.
 
-        Raises:
-            ValueError: if window_size is greater than the number of time steps.
+        Note:
+            Discharge histories shorter than window_size are skipped.
         """
         self.X = []
         self.y = []
-        for discharge_voltage, t_eod in _generate_discharge_histories(
+        self.n_skipped = 0
+        for t_0, discharge_voltage, t_eod in _generate_discharge_histories(
             n_hists=n_hists, shared_sim_config=shared_sim_config
         ):
             N_t = discharge_voltage.shape[0]
             # calculate RULs (labels) for this time history, using a linear degradation model.
-            ruls = _back_calculate_rul_linear(t_eod=t_eod, N_t=N_t)
-            # if window_size > N_t, return a single window with all the hisory and RUL=0.
+            ruls = _back_calculate_rul_linear(t_eod=t_eod, N_t=N_t, t_0=t_0)
+            # Skip histories shorter than the window size.
             if window_size > N_t:
-                self.X.append(discharge_voltage.reshape(1, -1))
-                self.y.append(0.0)
+                self.n_skipped += 1
                 continue
             # Generate windows and targets for this discharge history.
             for start in range(0, N_t - window_size, stride):
