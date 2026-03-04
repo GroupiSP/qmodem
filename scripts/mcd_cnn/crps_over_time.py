@@ -35,9 +35,9 @@ def main() -> None:
     np.random.seed(TEST_SEED)
 
     # Configuration
-    N_SIMU = 200  # Stochastic simulations per eval point (reference distribution)
-    N_MC_PASSES = 100  # MC Dropout forward passes (predicted distribution)
-    N_EVAL_POINTS = 15  # Number of evaluation time points along the trajectory
+    N_SIMU = 500  # Stochastic simulations per eval point (reference distribution)
+    N_MC_PASSES = 500  # MC Dropout forward passes (predicted distribution)
+    N_EVAL_POINTS = 50  # Number of evaluation time points along the trajectory
 
     # Directories
     root_dir, _, METADATA_DIR = get_run_dirs("mcd_cnn/train", create=False)

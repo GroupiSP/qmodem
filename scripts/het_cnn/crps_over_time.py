@@ -34,9 +34,9 @@ def main() -> None:
     np.random.seed(TEST_SEED)
 
     # Configuration
-    N_SIMU = 200  # Stochastic simulations per eval point (reference distribution)
-    N_PRED_SAMPLES = 200  # Samples from predicted Gaussian
-    N_EVAL_POINTS = 15  # Number of evaluation time points along the trajectory
+    N_SIMU = 500  # Stochastic simulations per eval point (reference distribution)
+    N_PRED_SAMPLES = 500  # Samples from predicted Gaussian
+    N_EVAL_POINTS = 50  # Number of evaluation time points along the trajectory
 
     # Directories
     root_dir, _, METADATA_DIR = get_run_dirs("het_cnn/train", create=False)
