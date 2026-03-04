@@ -194,17 +194,17 @@ def main():
         for batch in dataloader_train:
             train_step(model, optimizer, batch)
 
+        train_losses = []
+        for batch in dataloader_train:
+            loss = eval_step(model, batch)
+            train_losses.append(loss)
+
         # Validation
         model.eval()
         val_losses = []
         for batch in dataloader_val:
             loss = eval_step(model, batch)
             val_losses.append(loss)
-
-        train_losses = []
-        for batch in dataloader_train:
-            loss = eval_step(model, batch)
-            train_losses.append(loss)
 
         val_loss = jnp.mean(jnp.array(val_losses))
         train_loss = jnp.mean(jnp.array(train_losses))

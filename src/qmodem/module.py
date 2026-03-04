@@ -898,7 +898,10 @@ def nll_loss(model: nnx.Module, batch: jax.Array, beta: float = 0.0) -> jax.Arra
 
 
 def nll_loss_mcd(
-    model: nnx.Module, batch: jax.Array, rngs: Optional[nnx.Rngs] = None
+    model: nnx.Module,
+    batch: jax.Array,
+    beta: float = 0.0,
+    rngs: Optional[nnx.Rngs] = None,
 ) -> jax.Array:
     """NLL loss for models that require RNGs at call time (e.g. MC Dropout).
 
@@ -908,6 +911,7 @@ def nll_loss_mcd(
     Args:
         model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
         batch (jax.Array): batched input data.
+        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
         rngs (nnx.Rngs, optional): passed to the forward method of the model.
             When ``None``, dropout uses its internal RNG state.
 
@@ -919,6 +923,9 @@ def nll_loss_mcd(
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
+
+    if beta > 0:
+        losses = losses * jax.lax.stop_gradient(variances) ** beta
 
     return jnp.mean(losses)
 
