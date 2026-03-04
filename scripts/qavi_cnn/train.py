@@ -69,17 +69,19 @@ PATIENCE = 50
 PRINT_EVERY = 10
 
 # Data
-N_SIMU_TRAIN = 100
-N_SIMU_VAL = 20
-WINDOW_SIZE = 30
-STRIDE = 15
+N_HISTORIES_TRAIN = 100
+N_HISTORIES_VAL = 20
+WINDOW_SIZE = 20
+STRIDE = 10
+NORMALIZE = True  # whether to normalize targets by max RUL in training set
 
 # Battery simulation
 CURRENT_AMPLITUDE = -2.8 * 0.75
 V_CUT = 2.5
 DT = 10.0
 OMEGA_STD = 3e-3
-ETA_STD = 3e-2
+ETA_STD = 0.0
+SOC_RANGE = (0.05, 1.0)
 
 # Discriminator
 DISC_HIDDEN = 64
@@ -456,12 +458,12 @@ def main():
     print("=" * 70)
     print(f"PQC: {N_QUBITS} qubits, {N_PQC_LAYERS} layers, {N_FILTERS} filters")
     print(f"Window size: {WINDOW_SIZE}, Stride: {STRIDE}")
-    print(f"Train sims: {N_SIMU_TRAIN}, Val sims: {N_SIMU_VAL}")
+    print(f"Train sims: {N_HISTORIES_TRAIN}, Val sims: {N_HISTORIES_VAL}")
     print(f"Weight samples per step: {BATCH_W}")
     print()
 
     # --- Data ---
-    shared_sim_config = make_simulator_config(
+    sim_config = make_simulator_config(
         n_simu=1,
         v_cut=V_CUT,
         soc_0=1.0,
@@ -474,19 +476,25 @@ def main():
 
     print("Creating training dataset...")
     ds_train = BatterySimulationTimeWindowSource(
-        shared_sim_config, n_hists=N_SIMU_TRAIN, window_size=WINDOW_SIZE, stride=STRIDE
+        sim_config,
+        n_histories=N_HISTORIES_TRAIN,
+        window_size=WINDOW_SIZE,
+        stride=STRIDE,
+        normalize=NORMALIZE,
+        soc_range=SOC_RANGE,
     )
-    print(
-        f"Total training windows: {len(ds_train)} (skipped {ds_train.n_skipped} short histories)"
-    )
+    print(f"Total training windows: {len(ds_train)}")
 
     print("Creating validation dataset...")
     ds_val = BatterySimulationTimeWindowSource(
-        shared_sim_config, n_hists=N_SIMU_VAL, window_size=WINDOW_SIZE, stride=STRIDE
+        sim_config,
+        n_histories=N_HISTORIES_VAL,
+        window_size=WINDOW_SIZE,
+        stride=STRIDE,
+        normalize=NORMALIZE,
+        soc_range=SOC_RANGE,
     )
-    print(
-        f"Total validation windows: {len(ds_val)} (skipped {ds_val.n_skipped} short histories)"
-    )
+    print(f"Total validation windows: {len(ds_val)}")
     print()
 
     sampler_train = IndexSampler(
@@ -693,12 +701,13 @@ def main():
 
     # Metadata
     metadata = {
-        "simulator_config": shared_sim_config,
+        "simulator_config": sim_config,
         "training_params": {
             "window_size": WINDOW_SIZE,
             "stride": STRIDE,
-            "n_simu_train": N_SIMU_TRAIN,
-            "n_simu_val": N_SIMU_VAL,
+            "n_simu_train": N_HISTORIES_TRAIN,
+            "n_simu_val": N_HISTORIES_VAL,
+            "soc_range": SOC_RANGE,
             "batch_w": BATCH_W,
         },
         "model_params": {
@@ -710,7 +719,8 @@ def main():
             "n_pqc_layers": N_PQC_LAYERS,
         },
         "scaling_params": {
-            "y_max": ds_train.y_max.item(),
+            "normalize": NORMALIZE,
+            "y_max": ds_train.y_max.item() if NORMALIZE else 1.0,
         },
     }
     with open(METADATA_DIR / "metadata.pkl", "wb") as f:

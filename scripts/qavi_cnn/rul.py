@@ -122,8 +122,9 @@ def main() -> None:
     with open(METADATA_DIR / "metadata.pkl", "rb") as f:
         metadata = pickle.load(f)
 
-    N_WEIGHT_SAMPLES = 100
-    N_SIMU = 100
+    N_WEIGHT_SAMPLES = 500
+    N_SIMU = 500
+    N_INTERMEDIATE_SOCs = 200
 
     n_filters = metadata["model_params"]["n_filters"]
     kernel_size = metadata["model_params"]["kernel_size"]
@@ -243,11 +244,10 @@ def main() -> None:
         "Part 2. Running stochastic simulations from intermediate SOCs and comparing "
         "with QAVI CNN predictions..."
     )
-    ruls_true = []
     ruls_true_lowers = []
     ruls_true_uppers = []
     socs = sim_0.soc_memo.flatten()
-    for i in range(0, N_t, N_t // 10):
+    for i in np.linspace(0, N_t, N_INTERMEDIATE_SOCs, endpoint=False, dtype=np.int32):
         soc_0 = socs[i]
         sim_config = metadata["simulator_config"].copy()
         sim_config["SoC_0"] = soc_0
@@ -255,13 +255,16 @@ def main() -> None:
         sim = les.SimulatorSimple(sim_config)
         sim.simulate()
         t_eods = sim.t_eods
-        ruls_true.append(np.mean(t_eods))
         ruls_true_lowers.append(np.percentile(t_eods, 2.5))
         ruls_true_uppers.append(np.percentile(t_eods, 97.5))
 
+    # true RUL is linear
+    ts_rul_true = np.linspace(0.0, N_t, N_INTERMEDIATE_SOCs) * dt
+    ruls_true = sim_0.t_eods[0] - ts_rul_true
+
     print("Part 3. Plotting results...")
     fig0, ax0 = plt.subplots(figsize=(10, 6))
-    ax0.plot(np.arange(0, N_t, N_t // 10) * dt, ruls_true, label="True RUL")
+    ax0.plot(ts_rul_true, ruls_true, label="True RUL")
     ax0.plot(ts_pred, pred_means, label="Predicted RUL (QAVI CNN)", marker="o")
     ax0.set_xlabel("Time [s]")
     ax0.set_ylabel("RUL [s]")
@@ -275,13 +278,13 @@ def main() -> None:
     prop_cycle = plt.rcParams["axes.prop_cycle"]
     colors = prop_cycle.by_key()["color"]
     ax1.plot(
-        np.arange(0, N_t, N_t // 10) * dt,
+        ts_rul_true,
         ruls_true,
         label="True RUL",
         color=colors[0],
     )
     ax1.fill_between(
-        np.arange(0, N_t, N_t // 10) * dt,
+        ts_rul_true,
         ruls_true_lowers,
         ruls_true_uppers,
         color=colors[0],

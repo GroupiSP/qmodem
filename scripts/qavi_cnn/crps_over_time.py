@@ -113,9 +113,9 @@ def main() -> None:
     np.random.seed(TEST_SEED)
 
     # Configuration
-    N_SIMU = 200
-    N_WEIGHT_SAMPLES = 100
-    N_EVAL_POINTS = 15
+    N_SIMU = 500
+    N_WEIGHT_SAMPLES = 500
+    N_EVAL_POINTS = 50
 
     # Directories
     root_dir, _, METADATA_DIR = get_run_dirs("qavi_cnn/train", create=False)
