@@ -192,7 +192,7 @@ def main():
         # Training (dropout active)
         model.train()
         for batch in dataloader_train:
-            loss = train_step(model, optimizer, batch)
+            train_step(model, optimizer, batch)
 
         train_losses = []
         for batch in dataloader_train:
@@ -205,8 +205,8 @@ def main():
             loss = eval_step(model, batch)
             val_losses.append(loss)
 
-        val_loss = jnp.mean(jnp.array(val_losses))
         train_loss = jnp.mean(jnp.array(train_losses))
+        val_loss = jnp.mean(jnp.array(val_losses))
 
         # Print progress
         if (epoch + 1) % PRINT_EVERY == 0 or epoch == 0:

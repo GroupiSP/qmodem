@@ -6,12 +6,12 @@ from flax import nnx
 from qmodem.module import (
     HNNV0,
     MCDCNN1D,
-    MCDNetV0,
     BayesCNN1D,
     FlipoutConv1D,
+    MCDNetV0,
     StandardBayesConv1D,
+    elbo_nll_loss,
     nll_loss,
-    nll_loss_bayes,
     nll_loss_mcd,
 )
 
@@ -252,7 +252,7 @@ def test_nll_loss_bayes(mock_bayes_cnn1d, batch) -> None:
     - the output is scalar
     """
     key = jax.random.PRNGKey(42)
-    loss_value = nll_loss_bayes(
+    loss_value = elbo_nll_loss(
         mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=100
     )
     assert isinstance(loss_value, jax.Array)
@@ -265,12 +265,8 @@ def test_nll_loss_bayes_stochastic(mock_bayes_cnn1d) -> None:
         jax.random.normal(shape=[10, 1, 30], key=_rng_key),
         jax.random.normal(shape=[10], key=_rng_key),
     )
-    loss1 = nll_loss_bayes(
-        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=0), n_train=100
-    )
-    loss2 = nll_loss_bayes(
-        mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=1), n_train=100
-    )
+    loss1 = elbo_nll_loss(mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=0), n_train=100)
+    loss2 = elbo_nll_loss(mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=1), n_train=100)
     assert not jnp.allclose(loss1, loss2)
 
 
@@ -285,7 +281,7 @@ def test_nll_loss_bayes_includes_kl(mock_bayes_cnn1d) -> None:
         jax.random.normal(shape=[10, 1, 30], key=_rng_key),
         jax.random.normal(shape=[10], key=_rng_key),
     )
-    elbo_loss = nll_loss_bayes(
+    elbo_loss = elbo_nll_loss(
         mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=100
     )
     kl = mock_bayes_cnn1d.kl_divergence()
@@ -301,10 +297,10 @@ def test_nll_loss_bayes_kl_scaling(mock_bayes_cnn1d) -> None:
         jax.random.normal(shape=[10, 1, 30], key=_rng_key),
         jax.random.normal(shape=[10], key=_rng_key),
     )
-    loss_small_n = nll_loss_bayes(
+    loss_small_n = elbo_nll_loss(
         mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=10
     )
-    loss_large_n = nll_loss_bayes(
+    loss_large_n = elbo_nll_loss(
         mock_bayes_cnn1d, batch, rngs=nnx.Rngs(params=key), n_train=10_000
     )
     # Larger n_train => smaller KL/N term => smaller total loss

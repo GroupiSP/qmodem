@@ -37,9 +37,9 @@ def main() -> None:
     np.random.seed(TEST_SEED)
 
     # Configuration
-    N_SIMU = 200  # Stochastic simulations per eval point (reference distribution)
-    N_WEIGHT_SAMPLES = 100  # Bayesian forward passes (predicted distribution)
-    N_EVAL_POINTS = 15  # Number of evaluation time points along the trajectory
+    N_SIMU = 500  # Stochastic simulations per eval point (reference distribution)
+    N_WEIGHT_SAMPLES = 500  # Bayesian forward passes (predicted distribution)
+    N_EVAL_POINTS = 50  # Number of evaluation time points along the trajectory
 
     # Directories
     root_dir, _, METADATA_DIR = get_run_dirs("bayes_cnn/train", create=False)

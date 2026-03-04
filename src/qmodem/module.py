@@ -930,8 +930,13 @@ def nll_loss_mcd(
     return jnp.mean(losses)
 
 
-def nll_loss_bayes(
-    model: nnx.Module, batch: jax.Array, *, rngs: nnx.Rngs, n_train: int
+def elbo_nll_loss(
+    model: nnx.Module,
+    batch: jax.Array,
+    *,
+    rngs: nnx.Rngs,
+    n_train: int,
+    beta: float = 0.0,
 ) -> jax.Array:
     """ELBO NLL loss for Bayesian models (Bayes by Backprop).
 
@@ -946,6 +951,7 @@ def nll_loss_bayes(
         batch (jax.Array): batched input data ``(xs, labels)``.
         rngs (nnx.Rngs): RNGs for weight sampling (forwarded to the model).
         n_train (int): Total number of training samples (for KL scaling).
+        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
 
     Returns:
         jax.Array: scalar ELBO loss value.
@@ -954,9 +960,13 @@ def nll_loss_bayes(
     outputs = model(xs, rngs=rngs)
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
+
     nll = jnp.mean(
         0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
     )
+    if beta > 0:
+        nll = nll * jax.lax.stop_gradient(jnp.mean(variances) ** beta)
+
     kl = model.kl_divergence() / n_train
     return nll + kl
 

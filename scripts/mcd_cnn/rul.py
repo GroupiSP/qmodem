@@ -138,9 +138,9 @@ def main() -> None:
         pred_uppers.append(np.percentile(full_samples, 97.5))
 
     print(
-        "Part 2. Running stochastic simulations from intermediate SOCs and comparing with CNN predictions..."
+        "Part 2. Running stochastic simulations from intermediate SOCs and comparing with MCD CNN predictions..."
     )
-    # Get 10 intermediate SoCs from the previous simulation
+    # Get intermediate SoCs from the previous simulation
     ruls_true_lowers = []
     ruls_true_uppers = []
     socs = sim_0.soc_memo.flatten()

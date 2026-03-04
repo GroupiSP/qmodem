@@ -16,9 +16,9 @@ from .module import (  # noqa: F401
     MCDNetV1,
     SimpleCNN1D,
     StandardBayesConv1D,
+    elbo_nll_loss,
     mse_loss,
     nll_loss,
-    nll_loss_bayes,
     nll_loss_mcd,
 )
 

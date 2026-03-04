@@ -35,7 +35,7 @@ from qmodem import (
     BatterySimulationTimeWindowSource,
     BayesCNN1D,
     FlipoutConv1D,
-    nll_loss_bayes,
+    elbo_nll_loss,
 )
 from qmodem.train import EarlyStopper
 
@@ -49,28 +49,28 @@ def main():
     )
 
     # Training parameters
-    LR = 1e-3
-    N_EPOCHS = 200
+    LR = 1e-2
+    N_EPOCHS = 500
     BATCH_SIZE = 32
-    PATIENCE = 20
+    PATIENCE = 50
     PRINT_EVERY = 10
-
-    # Data parameters
-    N_SIMU_TRAIN = 100  # Number of discharge histories for training
-    N_SIMU_VAL = 20  # Number of discharge histories for validation
-    WINDOW_SIZE = 30
-    STRIDE = 15  # 50% overlap between windows
-
-    # Model parameters
     N_FILTERS = 4
     KERNEL_SIZE = 5
+
+    # Data parameters
+    N_HISTORIES_TRAIN = 100  # Number of discharge histories for training
+    N_HISTORIES_VAL = 20  # Number of discharge histories for validation
+    WINDOW_SIZE = 20
+    STRIDE = 10  # 50% overlap between windows
+    NORMALIZE = True  # Whether to normalize targets by max RUL in training set
 
     # Battery simulation parameters
     CURRENT_AMPLITUDE = -2.8 * 0.75
     V_CUT = 2.5
     DT = 10.0
     OMEGA_STD = 3e-3
-    ETA_STD = 3e-2
+    ETA_STD = 0.0
+    SOC_RANGE = (0.05, 1.0)
 
     battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
@@ -79,13 +79,12 @@ def main():
     print("=" * 70)
     print(f"Window size: {WINDOW_SIZE}")
     print(f"Stride: {STRIDE}")
-    print(f"Training simulations: {N_SIMU_TRAIN}")
-    print(f"Validation simulations: {N_SIMU_VAL}")
+    print(f"Training simulations: {N_HISTORIES_TRAIN}")
+    print(f"Validation simulations: {N_HISTORIES_VAL}")
+    print(f"SoC₀ range: {SOC_RANGE}")
     print()
 
-    # Create training data: combine multiple simulations
-    print("Creating training dataset...")
-    shared_sim_config = make_simulator_config(
+    sim_config = make_simulator_config(
         n_simu=1,
         v_cut=V_CUT,
         soc_0=1.0,
@@ -96,22 +95,30 @@ def main():
         battery=battery,
     )
 
+    # Create training data: combine multiple simulations
+    print("Creating training dataset...")
     ds_train = BatterySimulationTimeWindowSource(
-        shared_sim_config, n_hists=N_SIMU_TRAIN, window_size=WINDOW_SIZE, stride=STRIDE
+        sim_config,
+        n_histories=N_HISTORIES_TRAIN,
+        window_size=WINDOW_SIZE,
+        stride=STRIDE,
+        normalize=NORMALIZE,
+        soc_range=SOC_RANGE,
     )
-    print(
-        f"Total training windows: {len(ds_train)} (skipped {ds_train.n_skipped} short histories)"
-    )
+    print(f"Total training windows: {len(ds_train)}")
     print()
 
     # Create validation data
     print("Creating validation dataset...")
     ds_val = BatterySimulationTimeWindowSource(
-        shared_sim_config, n_hists=N_SIMU_VAL, window_size=WINDOW_SIZE, stride=STRIDE
+        sim_config,
+        n_histories=N_HISTORIES_VAL,
+        window_size=WINDOW_SIZE,
+        stride=STRIDE,
+        normalize=NORMALIZE,
+        soc_range=SOC_RANGE,
     )
-    print(
-        f"Total validation windows: {len(ds_val)} (skipped {ds_val.n_skipped} short histories)"
-    )
+    print(f"Total validation windows: {len(ds_val)}")
     print()
 
     # Create DataLoaders
@@ -168,8 +175,8 @@ def main():
     @nnx.jit
     def train_step(model, optimizer, batch, key):
         def loss_fn(model):
-            return nll_loss_bayes(
-                model, batch, rngs=nnx.Rngs(params=key), n_train=n_train
+            return elbo_nll_loss(
+                model, batch, rngs=nnx.Rngs(params=key), n_train=n_train, beta=0.5
             )
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
@@ -178,7 +185,7 @@ def main():
 
     @nnx.jit
     def eval_step(model, batch, key):
-        return nll_loss_bayes(model, batch, rngs=nnx.Rngs(params=key), n_train=n_train)
+        return elbo_nll_loss(model, batch, rngs=nnx.Rngs(params=key), n_train=n_train)
 
     # Training loop
     print("Starting training...")
@@ -190,14 +197,17 @@ def main():
 
     for epoch in range(N_EPOCHS):
         # Training
+        for batch in dataloader_train:
+            key = jax.random.fold_in(base_key, global_step)
+            train_step(model, optimizer, batch, key)
+            global_step += 1
+
         train_losses = []
         for batch in dataloader_train:
             key = jax.random.fold_in(base_key, global_step)
-            loss = train_step(model, optimizer, batch, key)
+            loss = eval_step(model, batch, key)
             train_losses.append(loss)
             global_step += 1
-
-        train_loss = jnp.mean(jnp.array(train_losses))
 
         # Validation
         val_losses = []
@@ -207,6 +217,7 @@ def main():
             val_losses.append(loss)
             global_step += 1
 
+        train_loss = jnp.mean(jnp.array(train_losses))
         val_loss = jnp.mean(jnp.array(val_losses))
 
         # Print progress
@@ -241,19 +252,21 @@ def main():
 
     # Save metadata
     metadata = {
-        "simulator_config": shared_sim_config,
+        "simulator_config": sim_config,
         "training_params": {
             "window_size": WINDOW_SIZE,
             "stride": STRIDE,
-            "n_simu_train": N_SIMU_TRAIN,
-            "n_simu_val": N_SIMU_VAL,
+            "n_simu_train": N_HISTORIES_TRAIN,
+            "n_simu_val": N_HISTORIES_VAL,
+            "soc_range": SOC_RANGE,
         },
         "model_params": {
             "n_filters": N_FILTERS,
             "kernel_size": KERNEL_SIZE,
         },
         "scaling_params": {
-            "y_max": ds_train.y_max.item(),
+            "normalize": NORMALIZE,
+            "y_max": ds_train.y_max.item() if NORMALIZE else 1.0,
         },
     }
     with open(METADATA_DIR / "metadata.pkl", "wb") as f:
