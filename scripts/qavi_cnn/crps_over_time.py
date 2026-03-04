@@ -30,7 +30,7 @@ import pennylane as qml
 from flax import nnx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _seeds import TEST_SEED  # noqa: E402
+from _shared import TEST_SEED  # noqa: E402
 from _shared import get_run_dirs  # noqa: E402
 
 from qmodem import QAVICNN1D  # noqa: E402

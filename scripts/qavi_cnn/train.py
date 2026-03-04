@@ -36,8 +36,9 @@ import pennylane as qml
 from flax import nnx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _seeds import TRAIN_SEED  # noqa: E402
 from _shared import (  # noqa: E402
+    SHARED_PARAMS,
+    TRAIN_SEED,
     create_battery_and_policy,
     get_run_dirs,
     make_simulator_config,
@@ -51,39 +52,39 @@ from qmodem import QAVICNN1D, BatterySimulationTimeWindowSource  # noqa: E402
 # ---------------------------------------------------------------------------
 # Hyperparameters
 # ---------------------------------------------------------------------------
-# PQC
+# PQC (qavi-specific)
 N_QUBITS = 6
 N_PQC_LAYERS = 1
 
 # CNN
-N_FILTERS = 4
-KERNEL_SIZE = 5
+N_FILTERS = SHARED_PARAMS["model"]["n_filters"]
+KERNEL_SIZE = SHARED_PARAMS["model"]["kernel_size"]
 
 # Training
 LR_GEN = 0.01
 LR_DISC = 0.001
-N_EPOCHS = 500
-BATCH_SIZE = 32
+N_EPOCHS = SHARED_PARAMS["training"]["n_epochs"]
+BATCH_SIZE = SHARED_PARAMS["training"]["batch_size"]
 BATCH_W = 32  # weight samples per step
-PATIENCE = 50
-PRINT_EVERY = 10
+PATIENCE = SHARED_PARAMS["training"]["patience"]
+PRINT_EVERY = SHARED_PARAMS["training"]["print_every"]
 
 # Data
-N_HISTORIES_TRAIN = 100
-N_HISTORIES_VAL = 20
-WINDOW_SIZE = 20
-STRIDE = 10
-NORMALIZE = True  # whether to normalize targets by max RUL in training set
+N_HISTORIES_TRAIN = SHARED_PARAMS["data"]["n_histories_train"]
+N_HISTORIES_VAL = SHARED_PARAMS["data"]["n_histories_val"]
+WINDOW_SIZE = SHARED_PARAMS["data"]["window_size"]
+STRIDE = SHARED_PARAMS["data"]["stride"]
+NORMALIZE = SHARED_PARAMS["data"]["normalize"]
 
 # Battery simulation
-CURRENT_AMPLITUDE = -2.8 * 0.75
-V_CUT = 2.5
-DT = 10.0
-OMEGA_STD = 3e-3
-ETA_STD = 0.0
-SOC_RANGE = (0.05, 1.0)
+CURRENT_AMPLITUDE = SHARED_PARAMS["simulation"]["current_amplitude"]
+V_CUT = SHARED_PARAMS["simulation"]["v_cut"]
+DT = SHARED_PARAMS["simulation"]["dt"]
+OMEGA_STD = SHARED_PARAMS["simulation"]["omega_std"]
+ETA_STD = SHARED_PARAMS["simulation"]["eta_std"]
+SOC_RANGE = SHARED_PARAMS["simulation"]["soc_range"]
 
-# Discriminator
+# Discriminator (qavi-specific)
 DISC_HIDDEN = 64
 
 SEED = TRAIN_SEED

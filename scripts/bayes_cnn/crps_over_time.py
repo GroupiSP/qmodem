@@ -23,7 +23,7 @@ import numpy as np
 from flax import nnx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _seeds import TEST_SEED  # noqa: E402
+from _shared import TEST_SEED  # noqa: E402
 from _shared import (  # noqa: E402
     get_run_dirs,
     restore_model_from_checkpoint,

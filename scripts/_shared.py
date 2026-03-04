@@ -11,6 +11,44 @@ from flax import nnx
 from qmodem import BATT_CONFIG_PATH
 from qmodem.utils import mkdir_if_not_existent
 
+# ---------------------------------------------------------------------------
+# Shared seeds
+# ---------------------------------------------------------------------------
+TRAIN_SEED: int = 42
+TEST_SEED: int = 123
+
+# ---------------------------------------------------------------------------
+# Shared parameters
+# ---------------------------------------------------------------------------
+SHARED_PARAMS: dict[str, Any] = {
+    "training": {
+        "lr": 1e-2,
+        "n_epochs": 500,
+        "batch_size": 32,
+        "patience": 50,
+        "print_every": 10,
+    },
+    "model": {
+        "n_filters": 4,
+        "kernel_size": 5,
+    },
+    "data": {
+        "n_histories_train": 100,
+        "n_histories_val": 20,
+        "window_size": 20,
+        "stride": 10,
+        "normalize": True,
+    },
+    "simulation": {
+        "current_amplitude": -2.8 * 0.75,
+        "v_cut": 2.5,
+        "dt": 20.0,
+        "omega_std": 3e-3,
+        "eta_std": 0.0,
+        "soc_range": (0.05, 1.0),
+    },
+}
+
 
 def read_json(path: Path) -> dict[str, Any]:
     """Read JSON data from a file."""
