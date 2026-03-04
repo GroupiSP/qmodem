@@ -15,7 +15,6 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import lib_eod_simulation as les
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
@@ -57,8 +56,8 @@ def main():
     KERNEL_SIZE = 5
 
     # Data parameters
-    N_SIMU_TRAIN = 100  # Number of discharge histories for training
-    N_SIMU_VAL = 20  # Number of discharge histories for validation
+    N_HISTORIES_TRAIN = 100  # Number of discharge histories for training
+    N_HISTORIES_VAL = 20  # Number of discharge histories for validation
     WINDOW_SIZE = 20
     STRIDE = 10  # 50% overlap between windows
     NORMALIZE = True  # Whether to normalize RUL values by max RUL in the dataset
@@ -69,6 +68,7 @@ def main():
     DT = 20.0
     OMEGA_STD = 3e-3
     ETA_STD = 0.0
+    SOC_RANGE = (0.05, 1.0)
 
     battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
@@ -77,14 +77,14 @@ def main():
     print("=" * 70)
     print(f"Window size: {WINDOW_SIZE}")
     print(f"Stride: {STRIDE}")
-    print(f"Training simulations: {N_SIMU_TRAIN}")
-    print(f"Validation simulations: {N_SIMU_VAL}")
+    print(f"Training histories: {N_HISTORIES_TRAIN}")
+    print(f"Validation histories: {N_HISTORIES_VAL}")
+    print(f"SoC₀ range: {SOC_RANGE}")
     print()
 
-    # Create training data: combine multiple simulations
-    print("Creating training dataset...")
+    # Base simulator config (N_simu and SoC_0 are set per-history by the data source)
     sim_config = make_simulator_config(
-        n_simu=N_SIMU_TRAIN,
+        n_simu=1,
         v_cut=V_CUT,
         soc_0=1.0,
         dt=DT,
@@ -94,33 +94,30 @@ def main():
         battery=battery,
     )
 
-    battery_simulator_train = les.SimulatorSimple(sim_config)
-
+    # Create training data: each history starts from a random SoC₀
+    print("Creating training dataset...")
     ds_train = BatterySimulationTimeWindowSource(
-        battery_simulator_train,
+        sim_config,
+        n_histories=N_HISTORIES_TRAIN,
         window_size=WINDOW_SIZE,
         stride=STRIDE,
         normalize=NORMALIZE,
+        soc_range=SOC_RANGE,
     )
-    print(
-        f"Total training windows: {len(ds_train)} (skipped {ds_train.n_skipped} short histories)"
-    )
+    print(f"Total training windows: {len(ds_train)}")
     print()
 
     # Create validation data
     print("Creating validation dataset...")
-    sim_config_val = sim_config.copy()
-    sim_config_val["N_simu"] = N_SIMU_VAL
-    battery_simulator_val = les.SimulatorSimple(sim_config_val)
     ds_val = BatterySimulationTimeWindowSource(
-        battery_simulator_val,
+        sim_config,
+        n_histories=N_HISTORIES_VAL,
         window_size=WINDOW_SIZE,
         stride=STRIDE,
         normalize=NORMALIZE,
+        soc_range=SOC_RANGE,
     )
-    print(
-        f"Total validation windows: {len(ds_val)} (skipped {ds_val.n_skipped} short histories)"
-    )
+    print(f"Total validation windows: {len(ds_val)}")
     print()
 
     # Create DataLoaders
@@ -243,14 +240,14 @@ def main():
     print(f"Checkpoint saved to {CHECKPOINT_DIR}")
 
     # Save metadata
-    # Pickle the simulator config
     metadata = {
         "simulator_config": sim_config,
         "training_params": {
             "window_size": WINDOW_SIZE,
             "stride": STRIDE,
-            "n_simu_train": N_SIMU_TRAIN,
-            "n_simu_val": N_SIMU_VAL,
+            "n_histories_train": N_HISTORIES_TRAIN,
+            "n_histories_val": N_HISTORIES_VAL,
+            "soc_range": SOC_RANGE,
         },
         "model_params": {
             "n_filters": N_FILTERS,

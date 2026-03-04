@@ -1,6 +1,6 @@
 """Integration test for BatterySimulationTimeWindowSource with Google Grain."""
 
-from unittest.mock import Mock
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -11,34 +11,28 @@ from grain.transforms import Batch
 from qmodem.data import BatterySimulationTimeWindowSource
 
 
+def _stub_run_discharge(_config, _soc_0):
+    """Deterministic stub returning a 10-step discharge history."""
+    voltage = np.array([4.2, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, 3.5, 3.4, 3.3])
+    return voltage.copy(), 10.0
+
+
 @pytest.fixture
-def mock_simulator():
-    """Create a mock simulator with single simulation."""
-    simulator = Mock()
-    simulator.N_simu = 1
-    simulator.dt = 0.1
-    simulator.t_eods = np.array(
-        [10.0]
-    )  # Changed from 1.0 for clearer normalization tests
-    # Create discharge voltage data: shape (1, N_t) after transpose
-    simulator.v_memo = np.array(
-        [4.2, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, 3.5, 3.4, 3.3]
-    ).reshape(-1, 1)
-    simulator.simulate = Mock()
-    return simulator
+def _patch_discharge():
+    """Patch ``_run_discharge`` so no real simulator is needed."""
+    with patch("qmodem.data._run_discharge", side_effect=_stub_run_discharge):
+        yield
 
 
-def test_dataloader_integration(mock_simulator):
+@pytest.mark.usefixtures("_patch_discharge")
+def test_dataloader_integration():
     """Test that BatterySimulationTimeWindowSource works with Grain DataLoader."""
-    # Create the data source
     source = BatterySimulationTimeWindowSource(
-        mock_simulator, window_size=3, stride=1, normalize=False
+        simulator_config={}, n_histories=1, window_size=3, stride=1, normalize=False
     )
 
-    # Create sampler
     sampler = IndexSampler(num_records=len(source), num_epochs=1, shuffle=True, seed=42)
 
-    # Create DataLoader with batching
     batch_size = 4
     dataloader = DataLoader(
         data_source=source,
@@ -47,23 +41,22 @@ def test_dataloader_integration(mock_simulator):
         worker_count=0,
     )
 
-    # Iterate through batches
     batches = list(dataloader)
     assert len(batches) > 0
 
-    # Check first batch
     first_batch = batches[0]
     windows, targets = first_batch
-    assert windows.shape[0] <= batch_size  # Batch dimension
+    assert windows.shape[0] <= batch_size
     assert windows.shape[1] == 1  # Height dimension from (1, window_size)
     assert windows.shape[2] == 3  # window_size
     assert targets.shape[0] <= batch_size
 
 
-def test_dataloader_all_samples_retrieved(mock_simulator):
+@pytest.mark.usefixtures("_patch_discharge")
+def test_dataloader_all_samples_retrieved():
     """Test that DataLoader retrieves all samples from the source."""
     source = BatterySimulationTimeWindowSource(
-        mock_simulator, window_size=2, stride=1, normalize=False
+        simulator_config={}, n_histories=1, window_size=2, stride=1, normalize=False
     )
 
     sampler = IndexSampler(num_records=len(source), num_epochs=1, shuffle=False, seed=0)
@@ -84,10 +77,11 @@ def test_dataloader_all_samples_retrieved(mock_simulator):
     assert total_samples == len(source)
 
 
-def test_dataloader_with_normalization(mock_simulator):
+@pytest.mark.usefixtures("_patch_discharge")
+def test_dataloader_with_normalization():
     """Test that DataLoader works with normalized data."""
     source = BatterySimulationTimeWindowSource(
-        mock_simulator, window_size=2, stride=1, normalize=True
+        simulator_config={}, n_histories=1, window_size=2, stride=1, normalize=True
     )
 
     sampler = IndexSampler(num_records=len(source), num_epochs=1, shuffle=False, seed=0)
@@ -99,9 +93,7 @@ def test_dataloader_with_normalization(mock_simulator):
         worker_count=0,
     )
 
-    # Get first batch and check normalization
     first_batch = next(iter(dataloader))
     windows, targets = first_batch
 
-    # Targets should be normalized (all <= 1.0)
     assert np.all(targets <= 1.0)
