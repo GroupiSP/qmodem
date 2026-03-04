@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
@@ -38,7 +37,7 @@ from qmodem import (
     BatterySimulationTimeWindowSource,
     nll_loss_mcd,
 )
-from qmodem.train import EarlyStopper
+from qmodem.train import EarlyStopper, train_loop
 
 
 def main():
@@ -187,48 +186,18 @@ def main():
     print("=" * 70)
 
     early_stopper = EarlyStopper(patience=PATIENCE, min_delta=1e-4)
-    best_val_loss = float("inf")
 
-    for epoch in range(N_EPOCHS):
-        # Training (dropout active)
-        model.train()
-        for batch in dataloader_train:
-            train_step(model, optimizer, batch)
-
-        train_losses = []
-        for batch in dataloader_train:
-            loss = eval_step(model, batch)
-            train_losses.append(loss)
-
-        model.eval()
-        val_losses = []
-        for batch in dataloader_val:
-            loss = eval_step(model, batch)
-            val_losses.append(loss)
-
-        train_loss = jnp.mean(jnp.array(train_losses))
-        val_loss = jnp.mean(jnp.array(val_losses))
-
-        # Print progress
-        if (epoch + 1) % PRINT_EVERY == 0 or epoch == 0:
-            print(
-                f"Epoch {epoch + 1:3d}/{N_EPOCHS} | "
-                f"Train Loss: {train_loss:.6f} | "
-                f"Val Loss: {val_loss:.6f}"
-            )
-
-        # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-
-        # Early stopping
-        if early_stopper(val_loss):
-            print(f"\nEarly stopping at epoch {epoch + 1}")
-            break
-
-    print("=" * 70)
-    print(f"Training complete! Best validation loss: {best_val_loss:.6f}")
-    print()
+    best_val_loss, _ = train_loop(
+        n_epochs=N_EPOCHS,
+        dataloader_train=dataloader_train,
+        dataloader_val=dataloader_val,
+        train_batch_fn=lambda batch: train_step(model, optimizer, batch),
+        eval_batch_fn=lambda batch: eval_step(model, batch),
+        early_stopper=early_stopper,
+        print_every=PRINT_EVERY,
+        on_train_epoch_start=model.train,
+        on_val_epoch_start=model.eval,
+    )
 
     # Checkpoint the trained model
     print("Saving checkpoint...")
