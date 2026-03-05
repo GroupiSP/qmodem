@@ -193,7 +193,7 @@ def test_nll_loss_mcd(mock_mcdcnn1d, batch) -> None:
     - the output is scalar
     """
     rngs = nnx.Rngs(dropout=42)
-    loss_value = nll_loss_mcd(mock_mcdcnn1d, batch, rngs)
+    loss_value = nll_loss_mcd(mock_mcdcnn1d, batch, rngs=rngs)
     assert isinstance(loss_value, jax.Array)
     assert jnp.isscalar(loss_value)
 
@@ -205,11 +205,11 @@ def test_nll_loss_mcd_forwards_rngs(mock_mcdcnn1d) -> None:
         jax.random.normal(shape=[10, 1, 30], key=_rng_key),
         jax.random.normal(shape=[10], key=_rng_key),
     )
-    rng = nnx.Rngs(dropout=0)
+    rngs = nnx.Rngs(dropout=0)
 
     mock_mcdcnn1d.train()
-    loss1 = nll_loss_mcd(mock_mcdcnn1d, batch, rng)
-    loss2 = nll_loss_mcd(mock_mcdcnn1d, batch, rng)
+    loss1 = nll_loss_mcd(mock_mcdcnn1d, batch, rngs=rngs)
+    loss2 = nll_loss_mcd(mock_mcdcnn1d, batch, rngs=rngs)
     # Different dropout masks should produce different losses
     assert not jnp.allclose(loss1, loss2)
 
