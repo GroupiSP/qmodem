@@ -75,6 +75,10 @@ def main() -> None:
     eval_indices = test_data["eval_indices"]
     ref_t_eods = test_data["ref_t_eods"]
     N_t = len(discharge_voltage)
+    # Keep only eval points where a full window can be extracted
+    valid_mask = eval_indices >= window_size
+    eval_indices = eval_indices[valid_mask]
+    ref_t_eods = ref_t_eods[valid_mask]
     N_EVAL_POINTS = len(eval_indices)
 
     print(f"Trajectory length: {N_t} steps")
@@ -90,8 +94,6 @@ def main() -> None:
 
         # --- Predicted distribution (MC Dropout CNN) ---
         start = idx - window_size
-        if start < 0:
-            continue
         ts_eval.append(t)
         window = discharge_voltage[start:idx].reshape(1, -1)
         x_input = jnp.expand_dims(window, 0)
