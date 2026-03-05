@@ -12,9 +12,9 @@ import pickle
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
@@ -38,7 +38,7 @@ from qmodem import (
     FlipoutConv1D,
     elbo_nll_loss,
 )
-from qmodem.train import EarlyStopper
+from qmodem.train import EarlyStopper, train_loop
 
 
 def main():
@@ -193,54 +193,30 @@ def main():
     print("=" * 70)
 
     early_stopper = EarlyStopper(patience=PATIENCE, min_delta=1e-4)
-    best_val_loss = float("inf")
     global_step = 0
 
-    for epoch in range(N_EPOCHS):
-        # Training
-        for batch in dataloader_train:
-            key = jax.random.fold_in(base_key, global_step)
-            train_step(model, optimizer, batch, key)
-            global_step += 1
+    def train_batch_fn(batch: Any) -> None:
+        nonlocal global_step
+        key = jax.random.fold_in(base_key, global_step)
+        train_step(model, optimizer, batch, key)
+        global_step += 1
 
-        train_losses = []
-        for batch in dataloader_train:
-            key = jax.random.fold_in(base_key, global_step)
-            loss = eval_step(model, batch, key)
-            train_losses.append(loss)
-            global_step += 1
+    def eval_batch_fn(batch: Any) -> jax.Array:
+        nonlocal global_step
+        key = jax.random.fold_in(base_key, global_step)
+        loss = eval_step(model, batch, key)
+        global_step += 1
+        return loss
 
-        # Validation
-        val_losses = []
-        for batch in dataloader_val:
-            key = jax.random.fold_in(base_key, global_step)
-            loss = eval_step(model, batch, key)
-            val_losses.append(loss)
-            global_step += 1
-
-        train_loss = jnp.mean(jnp.array(train_losses))
-        val_loss = jnp.mean(jnp.array(val_losses))
-
-        # Print progress
-        if (epoch + 1) % PRINT_EVERY == 0 or epoch == 0:
-            print(
-                f"Epoch {epoch + 1:3d}/{N_EPOCHS} | "
-                f"Train Loss: {train_loss:.6f} | "
-                f"Val Loss: {val_loss:.6f}"
-            )
-
-        # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-
-        # Early stopping
-        if early_stopper(val_loss):
-            print(f"\nEarly stopping at epoch {epoch + 1}")
-            break
-
-    print("=" * 70)
-    print(f"Training complete! Best validation loss: {best_val_loss:.6f}")
-    print()
+    best_val_loss, _ = train_loop(
+        n_epochs=N_EPOCHS,
+        dataloader_train=dataloader_train,
+        dataloader_val=dataloader_val,
+        train_batch_fn=train_batch_fn,
+        eval_batch_fn=eval_batch_fn,
+        early_stopper=early_stopper,
+        print_every=PRINT_EVERY,
+    )
 
     # Checkpoint the trained model
     print("Saving checkpoint...")
