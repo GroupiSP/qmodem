@@ -454,16 +454,7 @@ def main():
 
     battery, discharge_policy = create_battery_and_policy(CURRENT_AMPLITUDE)
 
-    print("=" * 70)
-    print("QAVI CNN Training on Time-Windowed Battery Data")
-    print("=" * 70)
-    print(f"PQC: {N_QUBITS} qubits, {N_PQC_LAYERS} layers, {N_FILTERS} filters")
-    print(f"Window size: {WINDOW_SIZE}, Stride: {STRIDE}")
-    print(f"Train sims: {N_HISTORIES_TRAIN}, Val sims: {N_HISTORIES_VAL}")
-    print(f"Weight samples per step: {BATCH_W}")
-    print()
-
-    # --- Data ---
+    # Simulator config needed for metadata (not for data generation)
     sim_config = make_simulator_config(
         n_simu=1,
         v_cut=V_CUT,
@@ -475,25 +466,31 @@ def main():
         battery=battery,
     )
 
-    print("Creating training dataset...")
-    ds_train = BatterySimulationTimeWindowSource(
-        sim_config,
-        n_histories=N_HISTORIES_TRAIN,
+    print("=" * 70)
+    print("QAVI CNN Training on Time-Windowed Battery Data")
+    print("=" * 70)
+    print(f"PQC: {N_QUBITS} qubits, {N_PQC_LAYERS} layers, {N_FILTERS} filters")
+    print(f"Window size: {WINDOW_SIZE}, Stride: {STRIDE}")
+    print(f"Train sims: {N_HISTORIES_TRAIN}, Val sims: {N_HISTORIES_VAL}")
+    print(f"Weight samples per step: {BATCH_W}")
+    print()
+
+    # --- Data ---
+    print("Loading training dataset...")
+    ds_train = BatterySimulationTimeWindowSource.from_file(
+        path="data/train.npz",
         window_size=WINDOW_SIZE,
         stride=STRIDE,
         normalize=NORMALIZE,
-        soc_range=SOC_RANGE,
     )
     print(f"Total training windows: {len(ds_train)}")
 
-    print("Creating validation dataset...")
-    ds_val = BatterySimulationTimeWindowSource(
-        sim_config,
-        n_histories=N_HISTORIES_VAL,
+    print("Loading validation dataset...")
+    ds_val = BatterySimulationTimeWindowSource.from_file(
+        path="data/val.npz",
         window_size=WINDOW_SIZE,
         stride=STRIDE,
         normalize=NORMALIZE,
-        soc_range=SOC_RANGE,
     )
     print(f"Total validation windows: {len(ds_val)}")
     print()

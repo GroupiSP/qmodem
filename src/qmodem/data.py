@@ -169,3 +169,54 @@ class BatterySimulationTimeWindowSource:
                 index or (batch_size,) for a slice.
         """
         return self.X[record_key], self.y[record_key]
+
+    @classmethod
+    def from_file(
+        cls,
+        path: Path | str,
+        window_size: int,
+        stride: int = 1,
+        normalize: bool = False,
+    ) -> BatterySimulationTimeWindowSource:
+        """Create a data source from a pre-generated ``.npz`` file.
+
+        The file must contain ``voltages`` (object array of 1-D voltage
+        histories) and ``t_eods`` (1-D array of end-of-discharge times),
+        as produced by :func:`qmodem.generate.generate_train_data`.
+
+        Args:
+            path: Path to the ``.npz`` file.
+            window_size: The size of the time window (number of time steps).
+            stride: The stride of the sliding time window. Defaults to 1.
+            normalize: Normalizes the RUL values (divide by max(RUL)).
+                Defaults to False.
+
+        Returns:
+            A populated ``BatterySimulationTimeWindowSource`` instance.
+        """
+        data = np.load(path, allow_pickle=True)
+        voltages = data["voltages"]
+        t_eods = data["t_eods"]
+        soc_0s = data["soc_0s"] if "soc_0s" in data else []
+
+        obj = cls.__new__(cls)
+        all_windows: list[np.ndarray] = []
+        all_targets: list[float] = []
+        obj.soc_0s = list(soc_0s)
+
+        for voltage, t_eod in zip(voltages, t_eods):
+            ruls = _back_calculate_rul_linear(t_eod=float(t_eod), N_t=len(voltage))
+            windows, targets = _make_windows(voltage, ruls, window_size, stride)
+            all_windows.extend(windows)
+            all_targets.extend(targets)
+
+        obj.X = jnp.array(all_windows)
+        y_array = jnp.array(all_targets)
+        obj.y_max = jnp.max(y_array)
+
+        if normalize:
+            obj.y = y_array / obj.y_max
+        else:
+            obj.y = y_array
+
+        return obj

@@ -2,15 +2,15 @@
 RUL.
 
 This script:
-- Runs a deterministic simulation to get voltage trajectory
-- Runs stochastic simulations from SOCs after the first time window
+- Loads a pre-generated test case (discharge trajectory + reference RUL distributions)
 - Uses trained BayesCNN1D to predict RUL with uncertainty
 - Point prediction: averages μ_out across M weight samples (Bayesian predictive mean)
 - Uncertainty: draws one sample from N(μ_out, σ²_out) per weight sample to capture
   both epistemic and aleatoric uncertainty
 - Compares predictions using 95% CI plots
 
-Requires a trained BayesCNN1D checkpoint from ``train.py``.
+Requires a trained BayesCNN1D checkpoint from ``train.py``
+and pre-generated test data from ``scripts/generate_data.py``.
 """
 
 import pickle
@@ -19,7 +19,6 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import numpy as np
 from flax import nnx
@@ -51,23 +50,25 @@ def main() -> None:
 
     # Bayesian sampling parameters
     N_WEIGHT_SAMPLES = 500  # Forward passes for uncertainty quantification
-    N_SIMU = 500  # Stochastic simulations for reference RUL distributions
-    N_INTERMEDIATE_SOCs = 200
 
     print("=" * 70)
     print("Bayesian CNN (Flipout) RUL Prediction with Uncertainty")
     print("=" * 70)
     print(f"Number of weight samples: {N_WEIGHT_SAMPLES}")
-    print(f"Number of stochastic simulations: {N_SIMU}")
     print()
 
-    # Recreate the simulator used in training and run a single simulation.
-    print("Part 1. Single simulation to get voltage and SoC history...")
-    sim_0 = les.SimulatorSimple(metadata["simulator_config"])
-    sim_0.simulate()
-
-    dt = metadata["simulator_config"]["dt"]
-    N_t = sim_0.v_memo.shape[0]
+    # Load pre-generated test case
+    print("Loading test case data...")
+    test_data = np.load("data/test_case_0.npz")
+    discharge_voltage = test_data["voltage"]
+    t_eod = float(test_data["t_eod"])
+    dt = float(test_data["dt"])
+    eval_indices = test_data["eval_indices"]
+    ref_t_eods = test_data["ref_t_eods"]
+    N_t = len(discharge_voltage)
+    N_INTERMEDIATE_SOCs = len(eval_indices)
+    print(f"Trajectory length: {N_t} steps, t_eod={t_eod:.1f}s")
+    print()
 
     # Load trained model
     print("Loading trained Bayesian CNN model...")
@@ -81,7 +82,6 @@ def main() -> None:
     print()
 
     # Time-window the voltage trajectory
-    discharge_voltage = sim_0.v_memo.flatten()
     window_size = metadata["training_params"]["window_size"]
     stride = metadata["training_params"]["stride"]
     y_max_train = metadata["scaling_params"]["y_max"]
@@ -117,29 +117,17 @@ def main() -> None:
         pred_lowers.append(np.percentile(full_samples, 2.5))
         pred_uppers.append(np.percentile(full_samples, 97.5))
 
-    print(
-        "Part 2. Running stochastic simulations from intermediate SOCs and comparing "
-        "with Bayesian CNN predictions..."
-    )
-    # Get intermediate SoCs from the previous simulation
+    print("Computing reference RUL confidence intervals from pre-generated data...")
     ruls_true_lowers = []
     ruls_true_uppers = []
-    socs = sim_0.soc_memo.flatten()
-    for i in np.linspace(0, N_t, N_INTERMEDIATE_SOCs, endpoint=False, dtype=np.int32):
-        soc_0 = socs[i]
-        sim_config = metadata["simulator_config"].copy()
-        sim_config["SoC_0"] = soc_0
-        sim_config["N_simu"] = N_SIMU
-        sim = les.SimulatorSimple(sim_config)
-        sim.simulate()
-        t_eods = sim.t_eods
-        # Calculate 95% confidence intervals for the true RUL distribution using the variance from the simulator
+    for k in range(N_INTERMEDIATE_SOCs):
+        t_eods = ref_t_eods[k]
         ruls_true_lowers.append(np.percentile(t_eods, 2.5))
         ruls_true_uppers.append(np.percentile(t_eods, 97.5))
 
     # true RUL is linear
     ts_rul_true = np.linspace(0.0, N_t, N_INTERMEDIATE_SOCs) * dt
-    ruls_true = sim_0.t_eods[0] - ts_rul_true
+    ruls_true = t_eod - ts_rul_true
 
     print("Part 3. Plotting results...")
     fig0, ax0 = plt.subplots(figsize=(10, 6))

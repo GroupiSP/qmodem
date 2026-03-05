@@ -1,11 +1,13 @@
 """Compare heteroscedastic CNN predictions with simulator predictions for battery RUL.
 
 This script:
-- Runs a deterministic simulation to get voltage trajectory
-- Runs stochastic simulations from SOCs after the first time window
+- Loads a pre-generated test case (discharge trajectory + reference RUL distributions)
 - Uses trained HeteroscedasticCNN1DV1 to predict RUL with uncertainty
 - Compares predictions using 95% CI plots and CRPS metric
 - Plots CDFs of simulator and CNN predictions
+
+Requires a trained HeteroscedasticCNN1D checkpoint from ``train.py``
+and pre-generated test data from ``scripts/generate_data.py``.
 """
 
 import pickle
@@ -13,13 +15,11 @@ import sys
 from pathlib import Path
 
 import jax.numpy as jnp
-import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import numpy as np
 from flax import nnx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _shared import TEST_SEED  # noqa: E402
 from _shared import (  # noqa: E402
     get_run_dirs,
     restore_model_from_checkpoint,
@@ -29,8 +29,6 @@ from qmodem import HeteroscedasticCNN1D
 
 
 def main() -> None:
-    np.random.seed(TEST_SEED)
-
     # Directories
     root_dir, _, METADATA_DIR = get_run_dirs("het_cnn/train", create=False)
     ckpt_dir = root_dir / "checkpoints"
@@ -43,28 +41,22 @@ def main() -> None:
     with open(METADATA_DIR / "metadata.pkl", "rb") as f:
         metadata = pickle.load(f)
 
-    # Target distribution parameters
-    N_SIMU = 500  # Number of stochastic simulations to reconstruct the true RUL distributions
-    N_INTERMEDIATE_SOCs = 100  # Number of intermediate SoCs to test the model on (evenly spaced along the trajectory)
-
     print("=" * 70)
     print("Heteroscedastic CNN RUL Prediction with Uncertainty")
     print("=" * 70)
-    print(f"Number of stochastic simulations: {N_SIMU}")
+
+    # Load pre-generated test case
+    print("Loading test case data...")
+    test_data = np.load("data/test_case_0.npz")
+    discharge_voltage = test_data["voltage"]
+    t_eod = float(test_data["t_eod"])
+    dt = float(test_data["dt"])
+    eval_indices = test_data["eval_indices"]
+    ref_t_eods = test_data["ref_t_eods"]
+    N_t = len(discharge_voltage)
+    N_INTERMEDIATE_SOCs = len(eval_indices)
+    print(f"Trajectory length: {N_t} steps, t_eod={t_eod:.1f}s")
     print()
-
-    # Recreate the simulator used in training and run a single simulation.
-    print("Part 1. Single simulation to get voltage and SoC history...")
-    train_sim_config = metadata["simulator_config"].copy()
-    train_sim_config["N_simu"] = (
-        1  # Pick a single discharge history to test the model on
-    )
-
-    sim_0 = les.SimulatorSimple(train_sim_config)
-    sim_0.simulate()
-
-    dt = metadata["simulator_config"]["dt"]
-    N_t = sim_0.v_memo.shape[0]
 
     # Load trained model
     print("Loading trained heteroscedastic CNN model...")
@@ -76,7 +68,6 @@ def main() -> None:
     print()
 
     # Time-window the voltage trajectory
-    discharge_voltage = sim_0.v_memo.flatten()
     window_size = metadata["training_params"]["window_size"]
     stride = metadata["training_params"]["stride"]
     y_max_train = metadata["scaling_params"]["y_max"]
@@ -106,29 +97,17 @@ def main() -> None:
         pred_means.append(pred[0] * y_max_train)
         pred_vars.append(pred[1] * y_max_train**2)
 
-    print(
-        "Part 2. Running stochastic simulations from intermediate SOCs and comparing with CNN predictions..."
-    )
-    # Get intermediate SoCs from the previous simulation, run stochastic simulations from each and save
-    # the RUL distributions.
+    print("Computing reference RUL confidence intervals from pre-generated data...")
     ruls_true_lowers = []
     ruls_true_uppers = []
-    socs = sim_0.soc_memo.flatten()
-    for i in np.linspace(0, N_t, N_INTERMEDIATE_SOCs, endpoint=False, dtype=np.int32):
-        soc_0 = socs[i]
-        sim_config = metadata["simulator_config"].copy()
-        sim_config["SoC_0"] = soc_0
-        sim_config["N_simu"] = N_SIMU
-        sim = les.SimulatorSimple(sim_config)
-        sim.simulate()
-        t_eods = sim.t_eods
-        # Calculate 95% confidence intervals for the true RUL distribution using the variance from the simulator
+    for k in range(N_INTERMEDIATE_SOCs):
+        t_eods = ref_t_eods[k]
         ruls_true_lowers.append(np.percentile(t_eods, 2.5))
         ruls_true_uppers.append(np.percentile(t_eods, 97.5))
 
     # true RUL is linear
     ts_rul_true = np.linspace(0.0, N_t, N_INTERMEDIATE_SOCs) * dt
-    ruls_true = sim_0.t_eods[0] - ts_rul_true
+    ruls_true = t_eod - ts_rul_true
 
     print("Part 3. Plotting results...")
 
