@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-qmodem = "qmodem:main"
+greet = "qmodem:main"
 
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
