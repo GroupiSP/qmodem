@@ -95,27 +95,23 @@ def main():
     )
 
     # Create training data: each history starts from a random SoC₀
-    print("Creating training dataset...")
-    ds_train = BatterySimulationTimeWindowSource(
-        sim_config,
-        n_histories=N_HISTORIES_TRAIN,
+    print("Loading training dataset...")
+    ds_train = BatterySimulationTimeWindowSource.from_file(
+        path="data/train.npz",
         window_size=WINDOW_SIZE,
         stride=STRIDE,
         normalize=NORMALIZE,
-        soc_range=SOC_RANGE,
     )
     print(f"Total training windows: {len(ds_train)}")
     print()
 
     # Create validation data
-    print("Creating validation dataset...")
-    ds_val = BatterySimulationTimeWindowSource(
-        sim_config,
-        n_histories=N_HISTORIES_VAL,
+    print("Loading validation dataset...")
+    ds_val = BatterySimulationTimeWindowSource.from_file(
+        path="data/val.npz",
         window_size=WINDOW_SIZE,
         stride=STRIDE,
         normalize=NORMALIZE,
-        soc_range=SOC_RANGE,
     )
     print(f"Total validation windows: {len(ds_val)}")
     print()
