@@ -1,6 +1,5 @@
 from .data import (  # noqa: F401
     BATT_CONFIG_PATH,
-    BatterySimulationSource,
     BatterySimulationTimeWindowSource,
 )
 from .module import (  # noqa: F401

@@ -95,54 +95,6 @@ def _make_windows(
     return windows, targets
 
 
-class BatterySimulationSource:
-    def __init__(
-        self,
-        simulator: les.SimulatorSimple | les.SimulatorComplete,
-        normalize: bool = False,
-    ) -> None:
-        """Runs and access to battery simulation data. The histories of multiple
-        simulations are flattened into a single dataset, where each record corresponds
-        to a single time step in a discharge history. The features are the voltage at
-        that time step, and the target is the RUL at that time step.
-
-        Args:
-            simulator (les.SimulatorSimple | les.SimulatorComplete): the simulator from
-                lib_eod_simulation. It needs to be configured outside of this data
-                source.
-            normalize (bool): Normalizes the RUL values (divide by max(RUL)). Defaults to False.
-        """
-        simulator.simulate()
-
-        # Transpose for convenience. Shape=(N_simu, N_t).
-        discharge_voltage_per_sim: np.ndarray = simulator.v_memo.T
-        N_t = discharge_voltage_per_sim.shape[1]
-
-        X = discharge_voltage_per_sim.flatten().reshape(-1, 1)
-        ruls = np.empty(shape=(simulator.N_simu * N_t))
-
-        for i in range(simulator.N_simu):
-            ruls[i * N_t : (i + 1) * N_t] = _back_calculate_rul_linear(
-                t_eod=simulator.t_eods[i], N_t=N_t
-            )
-        y = ruls
-        self.y_max = np.max(y)
-
-        if normalize:
-            y /= self.y_max
-
-        self.X = jnp.array(X)
-        self.y = jnp.array(y)
-
-    def __len__(self) -> int:
-        """Number of records in the dataset."""
-        return len(self.y)
-
-    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, float]:
-        """Retrieves record for the given record_key."""
-        return self.X[record_key], self.y[record_key]
-
-
 class BatterySimulationTimeWindowSource:
     def __init__(
         self,
