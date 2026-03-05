@@ -156,9 +156,14 @@ def generate_test_data(
         sim_config = simulator_config.copy()
         sim_config["N_simu"] = 1
         case_seed = int(rng.integers(0, 2**31))
-        np.random.seed(case_seed)  # seed for lib_eod_simulation
-        sim = les.SimulatorSimple(sim_config)
-        sim.simulate()
+        # Temporarily seed NumPy's global RNG for lib_eod_simulation, then restore.
+        prev_state = np.random.get_state()
+        try:
+            np.random.seed(case_seed)  # seed for lib_eod_simulation
+            sim = les.SimulatorSimple(sim_config)
+            sim.simulate()
+        finally:
+            np.random.set_state(prev_state)
 
         voltage = sim.v_memo.flatten()
         soc_history = sim.soc_memo.flatten()
