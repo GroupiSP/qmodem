@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import click
 
+from qmodem.application import METHODS
 from qmodem.utils import SHARED_PARAMS
 
-_METHODS = click.Choice(["bayes_cnn", "het_cnn", "mcd_cnn", "qavi_cnn"])
+_METHODS = click.Choice(METHODS)
 
 _P_TRAIN = SHARED_PARAMS["training"]
 _P_MODEL = SHARED_PARAMS["model"]
