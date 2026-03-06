@@ -24,6 +24,19 @@ import optax
 import orbax.checkpoint as ocp
 from flax import nnx
 
+from qmodem.metadata import (
+    BaseModelParams,
+    MCDModelParams,
+    PQCParams,
+    QAVITrainingMetadata,
+    QAVITrainingParams,
+    ScalingParams,
+    SimulatorConfig,
+    TrainingMetadata,
+    TrainingParams,
+    load_metadata,
+    save_metadata,
+)
 from qmodem import (
     MCDCNN1D,
     QAVICNN1D,
@@ -42,9 +55,7 @@ from qmodem.utils import (
     SHARED_PARAMS,
     TEST_SEED,
     TRAIN_SEED,
-    create_battery_and_policy,
     get_run_dirs,
-    make_simulator_config,
     restore_model_from_checkpoint,
     restore_model_state,
 )
@@ -123,20 +134,15 @@ def _create_dataloaders(
     return dataloader_train, dataloader_val
 
 
-def _build_sim_config(sim_params: dict[str, Any]) -> dict[str, Any]:
-    """Build a simulator config from shared simulation parameters."""
-    battery, discharge_policy = create_battery_and_policy(
-        sim_params["current_amplitude"]
-    )
-    return make_simulator_config(
+def _build_sim_config(sim_params: dict[str, Any]) -> SimulatorConfig:
+    """Build a JSON-serialisable simulator config from shared simulation parameters."""
+    return SimulatorConfig(
         n_simu=1,
         v_cut=sim_params["v_cut"],
         soc_0=1.0,
         dt=sim_params["dt"],
         omega_std=sim_params["omega_std"],
         eta_std=sim_params["eta_std"],
-        discharge_policy=discharge_policy,
-        battery=battery,
     )
 
 
@@ -144,11 +150,11 @@ def _save_checkpoint_and_metadata(
     model: nnx.Module,
     checkpoint_dir: Path,
     metadata_dir: Path,
-    metadata: dict[str, Any],
+    metadata: TrainingMetadata,
     *,
     params_only: bool = False,
 ) -> None:
-    """Save model checkpoint and metadata pickle."""
+    """Save model checkpoint and metadata as JSON."""
     print("Saving checkpoint...")
     ckpt_dir = ocp.test_utils.erase_and_create_empty(checkpoint_dir)
     checkpointer = ocp.StandardCheckpointer()
@@ -161,8 +167,7 @@ def _save_checkpoint_and_metadata(
     time.sleep(0.5)
     print(f"Checkpoint saved to {checkpoint_dir}")
 
-    with open(metadata_dir / "metadata.pkl", "wb") as f:
-        pickle.dump(metadata, f)
+    save_metadata(metadata_dir, metadata)
     print(f"Metadata saved to {metadata_dir}")
     print()
 
@@ -242,7 +247,7 @@ def _qavi_generator_forward(
 
 def _qavi_load_all_components(
     ckpt_dir: Path,
-    metadata: dict[str, Any],
+    metadata: QAVITrainingMetadata,
 ) -> tuple[tuple[jax.Array, ...], tuple[PostProcessor, ...], QAVICNN1D]:
     """Load PQC params, PostProcessors, and QAVICNN1D from checkpoint."""
     n_filters = metadata["model_params"]["n_filters"]
@@ -418,9 +423,7 @@ def generate_data(
         else n_histories_train
     )
     n_histories_val = (
-        data_params["n_histories_val"]
-        if n_histories_val is None
-        else n_histories_val
+        data_params["n_histories_val"] if n_histories_val is None else n_histories_val
     )
     seed_train = seed_train if seed_train is not None else TRAIN_SEED
     seed_val = seed_val if seed_val is not None else TRAIN_SEED + 1
@@ -639,20 +642,21 @@ def _train_het_cnn(
         on_val_epoch_start=model.eval,
     )
 
-    metadata = {
+    metadata: TrainingMetadata = {
+        "method": "het_cnn",
         "simulator_config": sim_config,
-        "training_params": {
-            "window_size": window_size,
-            "stride": stride,
-            "n_histories_train": SHARED_PARAMS["data"]["n_histories_train"],
-            "n_histories_val": SHARED_PARAMS["data"]["n_histories_val"],
-            "soc_range": SHARED_PARAMS["simulation"]["soc_range"],
-        },
-        "model_params": {"n_filters": n_filters, "kernel_size": kernel_size},
-        "scaling_params": {
-            "normalize": normalize,
-            "y_max": ds_train.y_max.item() if normalize else 1.0,
-        },
+        "training_params": TrainingParams(
+            window_size=window_size,
+            stride=stride,
+            n_histories_train=SHARED_PARAMS["data"]["n_histories_train"],
+            n_histories_val=SHARED_PARAMS["data"]["n_histories_val"],
+            soc_range=SHARED_PARAMS["simulation"]["soc_range"],
+        ),
+        "model_params": BaseModelParams(n_filters=n_filters, kernel_size=kernel_size),
+        "scaling_params": ScalingParams(
+            normalize=normalize,
+            y_max=ds_train.y_max.item() if normalize else 1.0,
+        ),
     }
     _save_checkpoint_and_metadata(model, checkpoint_dir, metadata_dir, metadata)
     print("Done!")
@@ -740,24 +744,25 @@ def _train_mcd_cnn(
         on_val_epoch_start=model.eval,
     )
 
-    metadata = {
+    metadata: TrainingMetadata = {
+        "method": "mcd_cnn",
         "simulator_config": sim_config,
-        "training_params": {
-            "window_size": window_size,
-            "stride": stride,
-            "n_histories_train": SHARED_PARAMS["data"]["n_histories_train"],
-            "n_histories_val": SHARED_PARAMS["data"]["n_histories_val"],
-            "soc_range": SHARED_PARAMS["simulation"]["soc_range"],
-        },
-        "model_params": {
-            "n_filters": n_filters,
-            "kernel_size": kernel_size,
-            "dropout_rate": dropout_rate,
-        },
-        "scaling_params": {
-            "normalize": normalize,
-            "y_max": ds_train.y_max.item() if normalize else 1.0,
-        },
+        "training_params": TrainingParams(
+            window_size=window_size,
+            stride=stride,
+            n_histories_train=SHARED_PARAMS["data"]["n_histories_train"],
+            n_histories_val=SHARED_PARAMS["data"]["n_histories_val"],
+            soc_range=SHARED_PARAMS["simulation"]["soc_range"],
+        ),
+        "model_params": MCDModelParams(
+            n_filters=n_filters,
+            kernel_size=kernel_size,
+            dropout_rate=dropout_rate,
+        ),
+        "scaling_params": ScalingParams(
+            normalize=normalize,
+            y_max=ds_train.y_max.item() if normalize else 1.0,
+        ),
     }
     _save_checkpoint_and_metadata(
         model, checkpoint_dir, metadata_dir, metadata, params_only=True
@@ -864,20 +869,21 @@ def _train_bayes_cnn(
         print_every=print_every,
     )
 
-    metadata = {
+    metadata: TrainingMetadata = {
+        "method": "bayes_cnn",
         "simulator_config": sim_config,
-        "training_params": {
-            "window_size": window_size,
-            "stride": stride,
-            "n_histories_train": SHARED_PARAMS["data"]["n_histories_train"],
-            "n_histories_val": SHARED_PARAMS["data"]["n_histories_val"],
-            "soc_range": SHARED_PARAMS["simulation"]["soc_range"],
-        },
-        "model_params": {"n_filters": n_filters, "kernel_size": kernel_size},
-        "scaling_params": {
-            "normalize": normalize,
-            "y_max": ds_train.y_max.item() if normalize else 1.0,
-        },
+        "training_params": TrainingParams(
+            window_size=window_size,
+            stride=stride,
+            n_histories_train=SHARED_PARAMS["data"]["n_histories_train"],
+            n_histories_val=SHARED_PARAMS["data"]["n_histories_val"],
+            soc_range=SHARED_PARAMS["simulation"]["soc_range"],
+        ),
+        "model_params": BaseModelParams(n_filters=n_filters, kernel_size=kernel_size),
+        "scaling_params": ScalingParams(
+            normalize=normalize,
+            y_max=ds_train.y_max.item() if normalize else 1.0,
+        ),
     }
     _save_checkpoint_and_metadata(model, checkpoint_dir, metadata_dir, metadata)
     print("Done!")
@@ -1234,25 +1240,25 @@ def _train_qavi_cnn(
     time.sleep(0.5)
     print(f"Checkpoint saved to {checkpoint_dir}")
 
-    metadata = {
+    metadata: QAVITrainingMetadata = {
+        "method": "qavi_cnn",
         "simulator_config": sim_config,
-        "training_params": {
-            "window_size": window_size,
-            "stride": stride,
-            "n_histories_train": SHARED_PARAMS["data"]["n_histories_train"],
-            "n_histories_val": SHARED_PARAMS["data"]["n_histories_val"],
-            "soc_range": SHARED_PARAMS["simulation"]["soc_range"],
-            "batch_w": BATCH_W,
-        },
-        "model_params": {"n_filters": n_filters, "kernel_size": kernel_size},
-        "pqc_params": {"n_qubits": n_qubits, "n_pqc_layers": n_pqc_layers},
-        "scaling_params": {
-            "normalize": normalize,
-            "y_max": ds_train.y_max.item() if normalize else 1.0,
-        },
+        "training_params": QAVITrainingParams(
+            window_size=window_size,
+            stride=stride,
+            n_histories_train=SHARED_PARAMS["data"]["n_histories_train"],
+            n_histories_val=SHARED_PARAMS["data"]["n_histories_val"],
+            soc_range=SHARED_PARAMS["simulation"]["soc_range"],
+            batch_w=BATCH_W,
+        ),
+        "model_params": BaseModelParams(n_filters=n_filters, kernel_size=kernel_size),
+        "pqc_params": PQCParams(n_qubits=n_qubits, n_pqc_layers=n_pqc_layers),
+        "scaling_params": ScalingParams(
+            normalize=normalize,
+            y_max=ds_train.y_max.item() if normalize else 1.0,
+        ),
     }
-    with open(metadata_dir / "metadata.pkl", "wb") as f:
-        pickle.dump(metadata, f)
+    save_metadata(metadata_dir, metadata)
     print(f"Metadata saved to {metadata_dir}")
     print()
     print("Done!")
@@ -1308,8 +1314,7 @@ def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    with open(metadata_dir / "metadata.pkl", "rb") as f:
-        metadata = pickle.load(f)
+    metadata = load_metadata(metadata_dir)
 
     print("=" * 70)
     print("Heteroscedastic CNN — RUL + CRPS Evaluation")
@@ -1422,8 +1427,7 @@ def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    with open(metadata_dir / "metadata.pkl", "rb") as f:
-        metadata = pickle.load(f)
+    metadata = load_metadata(metadata_dir)
 
     print("=" * 70)
     print("MC Dropout CNN — RUL + CRPS Evaluation")
@@ -1553,8 +1557,7 @@ def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    with open(metadata_dir / "metadata.pkl", "rb") as f:
-        metadata = pickle.load(f)
+    metadata = load_metadata(metadata_dir)
 
     print("=" * 70)
     print("Bayesian CNN (Flipout) — RUL + CRPS Evaluation")
@@ -1689,8 +1692,7 @@ def _test_qavi_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> N
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    with open(metadata_dir / "metadata.pkl", "rb") as f:
-        metadata = pickle.load(f)
+    metadata = load_metadata(metadata_dir)
 
     n_filters = metadata["model_params"]["n_filters"]
     kernel_size = metadata["model_params"]["kernel_size"]
