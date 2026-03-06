@@ -412,8 +412,16 @@ def generate_data(
     data_params = SHARED_PARAMS["data"]
     sim_params = SHARED_PARAMS["simulation"]
 
-    n_histories_train = n_histories_train or data_params["n_histories_train"]
-    n_histories_val = n_histories_val or data_params["n_histories_val"]
+    n_histories_train = (
+        data_params["n_histories_train"]
+        if n_histories_train is None
+        else n_histories_train
+    )
+    n_histories_val = (
+        data_params["n_histories_val"]
+        if n_histories_val is None
+        else n_histories_val
+    )
     seed_train = seed_train if seed_train is not None else TRAIN_SEED
     seed_val = seed_val if seed_val is not None else TRAIN_SEED + 1
     seed_test = seed_test if seed_test is not None else TEST_SEED
