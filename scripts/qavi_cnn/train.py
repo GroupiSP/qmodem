@@ -1,4 +1,6 @@
 """Train a QAVI CNN on time-windowed battery discharge data for RUL prediction.
+.. deprecated:: Use the ``qmodem`` CLI instead.  See ``qmodem --help``.
+
 
 This script demonstrates:
 - Quantum Adversarial Variational Inference (QAVI) for CNN weight generation

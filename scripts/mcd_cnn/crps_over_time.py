@@ -1,4 +1,6 @@
 """Plot CRPS over time for MC Dropout CNN RUL predictions.
+.. deprecated:: Use the ``qmodem`` CLI instead.  See ``qmodem --help``.
+
 
 At each evaluation time t along a stochastic discharge trajectory:
 - The CNN receives the voltage window ending at t.

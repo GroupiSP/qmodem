@@ -1,4 +1,6 @@
 """Compare Bayesian CNN (Flipout) predictions with simulator predictions for battery
+.. deprecated:: Use the ``qmodem`` CLI instead.  See ``qmodem --help``.
+
 RUL.
 
 This script:

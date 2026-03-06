@@ -1,4 +1,6 @@
 """Compare QAVI CNN predictions with simulator predictions for battery RUL.
+.. deprecated:: Use the ``qmodem`` CLI instead.  See ``qmodem --help``.
+
 
 This script:
 - Loads a pre-generated test case (discharge trajectory + reference RUL distributions)

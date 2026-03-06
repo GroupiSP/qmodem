@@ -1,4 +1,6 @@
 """Train a Bayesian CNN (Flipout) on time-windowed battery discharge data for RUL
+.. deprecated:: Use the ``qmodem`` CLI instead.  See ``qmodem --help``.
+
 prediction with uncertainty.
 
 This script demonstrates:
