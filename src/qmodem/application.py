@@ -1617,7 +1617,7 @@ def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> 
     ruls_true_lowers, ruls_true_uppers = _compute_reference_ci(
         ref_t_eods, N_INTERMEDIATE_SOCs
     )
-    ts_rul_true = np.linspace(0.0, N_t, N_INTERMEDIATE_SOCs) * dt
+    ts_rul_true = eval_indices.astype(float) * dt
     ruls_true = t_eod - ts_rul_true
 
     _plot_rul(
