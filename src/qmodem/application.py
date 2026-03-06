@@ -1239,8 +1239,8 @@ def _train_qavi_cnn(
         "training_params": {
             "window_size": window_size,
             "stride": stride,
-            "n_simu_train": SHARED_PARAMS["data"]["n_histories_train"],
-            "n_simu_val": SHARED_PARAMS["data"]["n_histories_val"],
+            "n_histories_train": SHARED_PARAMS["data"]["n_histories_train"],
+            "n_histories_val": SHARED_PARAMS["data"]["n_histories_val"],
             "soc_range": SHARED_PARAMS["simulation"]["soc_range"],
             "batch_w": BATCH_W,
         },
