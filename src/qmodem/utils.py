@@ -84,6 +84,7 @@ def mkdir_if_not_existent(paths: list[str | Path]) -> None:
             print(f"Checked/Created: {dir_path.resolve()}")
         except OSError as e:
             print(f"Error creating directory '{path}': {e}")
+            raise
 
 
 def read_json(path: Path) -> dict[str, Any]:
