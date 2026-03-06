@@ -1,4 +1,6 @@
 """Train an MC Dropout CNN on time-windowed battery discharge data for RUL prediction
+.. deprecated:: Use the ``qmodem`` CLI instead.  See ``qmodem --help``.
+
 with uncertainty.
 
 This script demonstrates:

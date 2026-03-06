@@ -1,4 +1,6 @@
 """Generate train and test data for battery discharge RUL experiments.
+.. deprecated:: Use the ``qmodem`` CLI instead.  See ``qmodem --help``.
+
 
 Usage::
 
