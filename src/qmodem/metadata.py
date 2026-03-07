@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TypedDict
+from typing import Sequence, TypedDict
 
 
 class SimulatorConfig(TypedDict):
@@ -50,7 +50,7 @@ class TrainingParams(TypedDict):
     stride: int
     n_histories_train: int
     n_histories_val: int
-    soc_range: list[float]
+    soc_range: Sequence[float]
 
 
 class QAVITrainingParams(TrainingParams):
