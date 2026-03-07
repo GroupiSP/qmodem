@@ -2,6 +2,19 @@ from .data import (  # noqa: F401
     BATT_CONFIG_PATH,
     BatterySimulationTimeWindowSource,
 )
+from .metadata import (  # noqa: F401
+    BaseModelParams,
+    MCDModelParams,
+    PQCParams,
+    QAVITrainingMetadata,
+    QAVITrainingParams,
+    ScalingParams,
+    SimulatorConfig,
+    TrainingMetadata,
+    TrainingParams,
+    load_metadata,
+    save_metadata,
+)
 from .module import (  # noqa: F401
     HNNV0,
     HNNV1,
