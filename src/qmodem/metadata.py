@@ -129,7 +129,7 @@ def save_metadata(metadata_dir: Path, metadata: TrainingMetadata) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def load_metadata(metadata_dir: Path) -> TrainingMetadata:
+def load_metadata(metadata_dir: Path) -> TrainingMetadata | QAVITrainingMetadata:
     """Deserialise ``metadata.json`` from *metadata_dir*.
 
     Args:
