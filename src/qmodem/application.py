@@ -55,7 +55,9 @@ from qmodem.utils import (
     SHARED_PARAMS,
     TEST_SEED,
     TRAIN_SEED,
+    create_battery_and_policy,
     get_run_dirs,
+    make_simulator_config,
     restore_model_from_checkpoint,
     restore_model_state,
 )
@@ -143,6 +145,28 @@ def _build_sim_config(sim_params: dict[str, Any]) -> SimulatorConfig:
         dt=sim_params["dt"],
         omega_std=sim_params["omega_std"],
         eta_std=sim_params["eta_std"],
+    )
+
+
+def _build_runtime_sim_config(sim_params: dict[str, Any]) -> dict[str, Any]:
+    """Build a full runtime simulator config including battery model and discharge
+    policy.
+
+    This config is suitable for passing to ``les.SimulatorSimple`` (data generation).
+    For saving metadata to disk, use :func:`_build_sim_config` instead.
+    """
+    battery, discharge_policy = create_battery_and_policy(
+        sim_params["current_amplitude"]
+    )
+    return make_simulator_config(
+        n_simu=1,
+        v_cut=sim_params["v_cut"],
+        soc_0=1.0,
+        dt=sim_params["dt"],
+        omega_std=sim_params["omega_std"],
+        eta_std=sim_params["eta_std"],
+        discharge_policy=discharge_policy,
+        battery=battery,
     )
 
 
@@ -430,7 +454,7 @@ def generate_data(
     seed_test = seed_test if seed_test is not None else TEST_SEED
 
     output_path = Path(output_dir)
-    sim_config = _build_sim_config(sim_params)
+    sim_config = _build_runtime_sim_config(sim_params)
     soc_range = sim_params["soc_range"]
 
     print(f"Generating {n_histories_train} training histories (seed={seed_train})...")
