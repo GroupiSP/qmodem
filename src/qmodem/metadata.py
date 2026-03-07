@@ -124,6 +124,7 @@ def save_metadata(metadata_dir: Path, metadata: TrainingMetadata) -> None:
         metadata_dir: Directory in which to write ``metadata.json``.
         metadata: Metadata dict to serialise.
     """
+    metadata_dir.mkdir(parents=True, exist_ok=True)
     with open(metadata_dir / "metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
