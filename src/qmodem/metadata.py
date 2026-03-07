@@ -92,15 +92,18 @@ class TrainingMetadata(TypedDict):
     Attributes:
         method: Tag identifying the training method (e.g. ``"het_cnn"``).
         simulator_config: Primitive battery-simulation parameters.
-        training_params: Data windowing and dataset size parameters.
-        model_params: CNN architecture parameters.
+        training_params: Data windowing and dataset size parameters (base or
+            method-specific; see :class:`TrainingParams` and
+            :class:`QAVITrainingParams`).
+        model_params: CNN architecture parameters (base or method-specific;
+            see :class:`BaseModelParams` and :class:`MCDModelParams`).
         scaling_params: Target normalisation parameters.
     """
 
     method: str
     simulator_config: SimulatorConfig
-    training_params: TrainingParams
-    model_params: BaseModelParams
+    training_params: TrainingParams | QAVITrainingParams
+    model_params: BaseModelParams | MCDModelParams
     scaling_params: ScalingParams
 
 
