@@ -776,7 +776,7 @@ def _train_mcd_cnn(
             stride=stride,
             n_histories_train=SHARED_PARAMS["data"]["n_histories_train"],
             n_histories_val=SHARED_PARAMS["data"]["n_histories_val"],
-            soc_range=SHARED_PARAMS["simulation"]["soc_range"],
+            soc_range=list(SHARED_PARAMS["simulation"]["soc_range"]),
         ),
         "model_params": MCDModelParams(
             n_filters=n_filters,
