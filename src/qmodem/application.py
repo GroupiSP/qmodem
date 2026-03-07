@@ -1,19 +1,24 @@
 """Application-level functions for the QMoDeM workflow.
 
 This module provides the high-level entry points for data generation, model
-training, and model testing (RUL prediction + CRPS evaluation).  It is the
-primary orchestration layer called by :mod:`qmodem.cli`.
+training, model testing (RUL prediction + CRPS evaluation), and multi-method
+comparison.  It is the primary orchestration layer called by
+:mod:`qmodem.cli`.
 
 Functions:
     generate_data: Generate train, validation, and test datasets.
     train: Train a model using one of the supported methods.
     test: Evaluate a trained model (RUL prediction + CRPS).
+    compare: Compare multiple methods on the same test case.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import pickle
 import time
+import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +68,31 @@ from qmodem.utils import (
 )
 
 METHODS = ("bayes_cnn", "het_cnn", "mcd_cnn", "qavi_cnn")
+
+METHOD_LABELS: dict[str, str] = {
+    "bayes_cnn": "Bayesian CNN (Flipout)",
+    "het_cnn": "Heteroscedastic CNN",
+    "mcd_cnn": "MC Dropout CNN",
+    "qavi_cnn": "QAVI CNN",
+}
+
+
+@dataclasses.dataclass
+class TestResult:
+    """Prediction outputs produced by a single method on one test case."""
+
+    method_label: str
+    ts_rul_true: list[float]
+    ruls_true: list[float]
+    ruls_true_lowers: list[float]
+    ruls_true_uppers: list[float]
+    ts_pred: list[float]
+    pred_means: list[float]
+    pred_lowers: list[float]
+    pred_uppers: list[float]
+    ts_eval: list[float]
+    crps_values: list[float]
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -304,6 +334,91 @@ def _qavi_load_all_components(
 # ---------------------------------------------------------------------------
 
 
+def populate_rul_ax(
+    ax: Any,
+    ts_rul_true: np.ndarray | list[float],
+    ruls_true: np.ndarray | list[float],
+    ruls_true_lowers: list[float],
+    ruls_true_uppers: list[float],
+    ts_pred: list[float],
+    pred_means: list[float],
+    pred_lowers: list[float],
+    pred_uppers: list[float],
+    method_label: str,
+) -> None:
+    """Draw RUL predictions with uncertainty on *ax*.
+
+    Args:
+        ax: A ``matplotlib.axes.Axes`` instance.
+        ts_rul_true: Time stamps for reference RUL.
+        ruls_true: Reference RUL values.
+        ruls_true_lowers: Lower 95 % CI of reference RUL.
+        ruls_true_uppers: Upper 95 % CI of reference RUL.
+        ts_pred: Time stamps for model predictions.
+        pred_means: Predicted RUL means.
+        pred_lowers: Lower 95 % CI of predicted RUL.
+        pred_uppers: Upper 95 % CI of predicted RUL.
+        method_label: Human-readable method name for the legend.
+    """
+    import matplotlib.pyplot as plt
+
+    prop_cycle = plt.rcParams["axes.prop_cycle"]
+    colors = prop_cycle.by_key()["color"]
+    ax.plot(ts_rul_true, ruls_true, label="True RUL", color=colors[0])
+    ax.fill_between(
+        ts_rul_true,
+        ruls_true_lowers,
+        ruls_true_uppers,
+        color=colors[0],
+        alpha=0.2,
+        label="True RUL 95% CI",
+    )
+    ax.plot(
+        ts_pred,
+        pred_means,
+        label=f"Predicted RUL ({method_label})",
+        color=colors[1],
+        marker="o",
+    )
+    ax.fill_between(
+        ts_pred,
+        pred_lowers,
+        pred_uppers,
+        color=colors[1],
+        alpha=0.2,
+        label="Predicted RUL 95% CI",
+    )
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("RUL [s]")
+    ax.set_title(f"{method_label} RUL Predictions with Uncertainty")
+    ax.set_ylim(bottom=0.0)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+
+def populate_crps_ax(
+    ax: Any,
+    ts_eval: list[float],
+    crps_values: list[float],
+    method_label: str,
+) -> None:
+    """Draw a CRPS-over-time curve on *ax*.
+
+    Args:
+        ax: A ``matplotlib.axes.Axes`` instance.
+        ts_eval: Time stamps at evaluation points.
+        crps_values: CRPS values at each evaluation point.
+        method_label: Human-readable method name for the legend.
+    """
+    ax.plot(ts_eval, crps_values, marker="o", linewidth=2, label=method_label)
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("CRPS [s]")
+    ax.set_title(f"CRPS Over Time — {method_label} vs Simulator")
+    ax.set_ylim(bottom=0.0)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+
 def _plot_rul(
     ts_rul_true: np.ndarray,
     ruls_true: np.ndarray,
@@ -334,38 +449,18 @@ def _plot_rul(
 
     # Uncertainty plot
     fig1, ax1 = plt.subplots(figsize=(10, 6))
-    prop_cycle = plt.rcParams["axes.prop_cycle"]
-    colors = prop_cycle.by_key()["color"]
-    ax1.plot(ts_rul_true, ruls_true, label="True RUL", color=colors[0])
-    ax1.fill_between(
+    populate_rul_ax(
+        ax1,
         ts_rul_true,
+        ruls_true,
         ruls_true_lowers,
         ruls_true_uppers,
-        color=colors[0],
-        alpha=0.2,
-        label="True RUL 95% CI",
-    )
-    ax1.plot(
         ts_pred,
         pred_means,
-        label=f"Predicted RUL ({method_label})",
-        color=colors[1],
-        marker="o",
-    )
-    ax1.fill_between(
-        ts_pred,
         pred_lowers,
         pred_uppers,
-        color=colors[1],
-        alpha=0.2,
-        label="Predicted RUL 95% CI",
+        method_label,
     )
-    ax1.set_xlabel("Time [s]")
-    ax1.set_ylabel("RUL [s]")
-    ax1.set_title(f"{method_label} RUL Predictions with Uncertainty")
-    ax1.set_ylim(bottom=0.0)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
     fig1.savefig(
         output_dir / "rul_uncertainty_prediction.png", dpi=150, bbox_inches="tight"
     )
@@ -383,12 +478,7 @@ def _plot_crps(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(ts_eval, crps_values, marker="o", linewidth=2)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("CRPS [s]")
-    ax.set_title(f"CRPS Over Time — {method_label} vs Simulator")
-    ax.set_ylim(bottom=0.0)
-    ax.grid(True, alpha=0.3)
+    populate_crps_ax(ax, ts_eval, crps_values, method_label)
     fig.savefig(output_dir / "crps_over_time.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"CRPS plot saved to {output_dir / 'crps_over_time.png'}")
@@ -1326,17 +1416,110 @@ def test(
     )
 
 
+_PREDICT_DISPATCH: dict[str, Any] = {
+    "bayes_cnn": lambda **kw: _predict_bayes_cnn(**kw),
+    "het_cnn": lambda **kw: _predict_het_cnn(**kw),
+    "mcd_cnn": lambda **kw: _predict_mcd_cnn(**kw),
+    "qavi_cnn": lambda **kw: _predict_qavi_cnn(**kw),
+}
+
+
+def compare(
+    methods: Sequence[str] | None = None,
+    *,
+    test_data_path: str = "data/test_case_0.npz",
+    n_samples: int = 500,
+    output_dir: str | None = None,
+) -> Any:
+    """Compare multiple methods on the same test case.
+
+    Produces a figure with one RUL subplot per method and a final subplot
+    overlaying the CRPS curves of all methods.
+
+    Args:
+        methods: Methods to compare. Defaults to all methods in ``METHODS``.
+        test_data_path: Path to the test-case ``.npz`` file.
+        n_samples: Number of forward passes / weight samples for uncertainty.
+        output_dir: Directory for the output plot. Defaults to
+            ``saved/compare``.
+
+    Returns:
+        The ``matplotlib.figure.Figure`` containing the comparison subplots.
+    """
+    import matplotlib.pyplot as plt
+
+    if methods is None:
+        methods = list(METHODS)
+    for m in methods:
+        _validate_method(m)
+
+    if output_dir is None:
+        output_dir = "saved/compare"
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    results: list[TestResult] = []
+    for method in methods:
+        try:
+            result = _PREDICT_DISPATCH[method](
+                test_data_path=test_data_path, n_samples=n_samples
+            )
+            results.append(result)
+        except Exception as exc:  # noqa: BLE001
+            warnings.warn(
+                f"Skipping {method}: {exc}",
+                stacklevel=2,
+            )
+
+    if not results:
+        raise RuntimeError("No methods produced results. Nothing to compare.")
+
+    n_methods = len(results)
+    fig, axes = plt.subplots(
+        1,
+        n_methods + 1,
+        figsize=(7 * (n_methods + 1), 6),
+    )
+    if n_methods + 1 == 1:
+        axes = [axes]
+
+    for i, result in enumerate(results):
+        populate_rul_ax(
+            axes[i],
+            result.ts_rul_true,
+            result.ruls_true,
+            result.ruls_true_lowers,
+            result.ruls_true_uppers,
+            result.ts_pred,
+            result.pred_means,
+            result.pred_lowers,
+            result.pred_uppers,
+            result.method_label,
+        )
+
+    crps_ax = axes[-1]
+    for result in results:
+        populate_crps_ax(
+            crps_ax, result.ts_eval, result.crps_values, result.method_label
+        )
+    crps_ax.set_title("CRPS Over Time — All Methods")
+
+    fig.tight_layout()
+    fig.savefig(out_path / "compare.png", dpi=150, bbox_inches="tight")
+    print(f"Comparison plot saved to {out_path / 'compare.png'}")
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Test: het_cnn
 # ---------------------------------------------------------------------------
 
 
-def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+def _predict_het_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+    """Run het_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
     root_dir, _, metadata_dir = get_run_dirs("het_cnn/train", create=False)
     ckpt_dir = root_dir / "checkpoints"
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
 
     metadata = load_metadata(metadata_dir)
 
@@ -1388,21 +1571,8 @@ def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
     ruls_true_lowers, ruls_true_uppers = _compute_reference_ci(
         ref_t_eods, N_INTERMEDIATE_SOCs
     )
-    ts_rul_true = eval_indices.astype(float) * dt
-    ruls_true = t_eod - ts_rul_true
-
-    _plot_rul(
-        ts_rul_true,
-        ruls_true,
-        ruls_true_lowers,
-        ruls_true_uppers,
-        ts_pred,
-        pred_means,
-        pred_lowers,
-        pred_uppers,
-        "Heteroscedastic CNN",
-        out_path,
-    )
+    ts_rul_true = (eval_indices.astype(float) * dt).tolist()
+    ruls_true = (t_eod - eval_indices.astype(float) * dt).tolist()
 
     # --- CRPS ---
     valid_mask = eval_indices >= window_size
@@ -1434,7 +1604,38 @@ def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
             f"mu={mu:7.1f} | std={std:6.1f} | CRPS={crps_val:.3f}"
         )
 
-    _plot_crps(ts_eval, crps_values, "Heteroscedastic CNN", out_path)
+    return TestResult(
+        method_label=METHOD_LABELS["het_cnn"],
+        ts_rul_true=ts_rul_true,
+        ruls_true=ruls_true,
+        ruls_true_lowers=ruls_true_lowers,
+        ruls_true_uppers=ruls_true_uppers,
+        ts_pred=ts_pred,
+        pred_means=pred_means,
+        pred_lowers=pred_lowers,
+        pred_uppers=pred_uppers,
+        ts_eval=ts_eval,
+        crps_values=crps_values,
+    )
+
+
+def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+    result = _predict_het_cnn(test_data_path=test_data_path, n_samples=n_samples)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    _plot_rul(
+        result.ts_rul_true,
+        result.ruls_true,
+        result.ruls_true_lowers,
+        result.ruls_true_uppers,
+        result.ts_pred,
+        result.pred_means,
+        result.pred_lowers,
+        result.pred_uppers,
+        result.method_label,
+        out_path,
+    )
+    _plot_crps(result.ts_eval, result.crps_values, result.method_label, out_path)
     print()
     print("Done!")
 
@@ -1444,12 +1645,11 @@ def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
 # ---------------------------------------------------------------------------
 
 
-def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+def _predict_mcd_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+    """Run mcd_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
     root_dir, _, metadata_dir = get_run_dirs("mcd_cnn/train", create=False)
     ckpt_dir = root_dir / "checkpoints"
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
 
     metadata = load_metadata(metadata_dir)
 
@@ -1510,21 +1710,8 @@ def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
     ruls_true_lowers, ruls_true_uppers = _compute_reference_ci(
         ref_t_eods, N_INTERMEDIATE_SOCs
     )
-    ts_rul_true = eval_indices.astype(float) * dt
-    ruls_true = t_eod - ts_rul_true
-
-    _plot_rul(
-        ts_rul_true,
-        ruls_true,
-        ruls_true_lowers,
-        ruls_true_uppers,
-        ts_pred,
-        pred_means,
-        pred_lowers,
-        pred_uppers,
-        "MC Dropout CNN",
-        out_path,
-    )
+    ts_rul_true = (eval_indices.astype(float) * dt).tolist()
+    ruls_true = (t_eod - eval_indices.astype(float) * dt).tolist()
 
     # --- CRPS ---
     valid_mask = eval_indices >= window_size
@@ -1564,7 +1751,38 @@ def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
             f"std={np.std(pred_samples_arr):6.1f} | CRPS={crps_val:.3f}"
         )
 
-    _plot_crps(ts_eval, crps_values, "MC Dropout CNN", out_path)
+    return TestResult(
+        method_label=METHOD_LABELS["mcd_cnn"],
+        ts_rul_true=ts_rul_true,
+        ruls_true=ruls_true,
+        ruls_true_lowers=ruls_true_lowers,
+        ruls_true_uppers=ruls_true_uppers,
+        ts_pred=ts_pred,
+        pred_means=pred_means,
+        pred_lowers=pred_lowers,
+        pred_uppers=pred_uppers,
+        ts_eval=ts_eval,
+        crps_values=crps_values,
+    )
+
+
+def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+    result = _predict_mcd_cnn(test_data_path=test_data_path, n_samples=n_samples)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    _plot_rul(
+        result.ts_rul_true,
+        result.ruls_true,
+        result.ruls_true_lowers,
+        result.ruls_true_uppers,
+        result.ts_pred,
+        result.pred_means,
+        result.pred_lowers,
+        result.pred_uppers,
+        result.method_label,
+        out_path,
+    )
+    _plot_crps(result.ts_eval, result.crps_values, result.method_label, out_path)
     print()
     print("Done!")
 
@@ -1574,12 +1792,11 @@ def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
 # ---------------------------------------------------------------------------
 
 
-def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+def _predict_bayes_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+    """Run bayes_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
     root_dir, _, metadata_dir = get_run_dirs("bayes_cnn/train", create=False)
     ckpt_dir = root_dir / "checkpoints"
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
 
     metadata = load_metadata(metadata_dir)
 
@@ -1644,21 +1861,8 @@ def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> 
     ruls_true_lowers, ruls_true_uppers = _compute_reference_ci(
         ref_t_eods, N_INTERMEDIATE_SOCs
     )
-    ts_rul_true = eval_indices.astype(float) * dt
-    ruls_true = t_eod - ts_rul_true
-
-    _plot_rul(
-        ts_rul_true,
-        ruls_true,
-        ruls_true_lowers,
-        ruls_true_uppers,
-        ts_pred,
-        pred_means,
-        pred_lowers,
-        pred_uppers,
-        "Bayesian CNN (Flipout)",
-        out_path,
-    )
+    ts_rul_true = (eval_indices.astype(float) * dt).tolist()
+    ruls_true = (t_eod - eval_indices.astype(float) * dt).tolist()
 
     # --- CRPS ---
     valid_mask = eval_indices >= window_size
@@ -1699,7 +1903,38 @@ def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> 
             f"std={np.std(pred_samples_arr):6.1f} | CRPS={crps_val:.3f}"
         )
 
-    _plot_crps(ts_eval, crps_values, "Bayesian CNN (Flipout)", out_path)
+    return TestResult(
+        method_label=METHOD_LABELS["bayes_cnn"],
+        ts_rul_true=ts_rul_true,
+        ruls_true=ruls_true,
+        ruls_true_lowers=ruls_true_lowers,
+        ruls_true_uppers=ruls_true_uppers,
+        ts_pred=ts_pred,
+        pred_means=pred_means,
+        pred_lowers=pred_lowers,
+        pred_uppers=pred_uppers,
+        ts_eval=ts_eval,
+        crps_values=crps_values,
+    )
+
+
+def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+    result = _predict_bayes_cnn(test_data_path=test_data_path, n_samples=n_samples)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    _plot_rul(
+        result.ts_rul_true,
+        result.ruls_true,
+        result.ruls_true_lowers,
+        result.ruls_true_uppers,
+        result.ts_pred,
+        result.pred_means,
+        result.pred_lowers,
+        result.pred_uppers,
+        result.method_label,
+        out_path,
+    )
+    _plot_crps(result.ts_eval, result.crps_values, result.method_label, out_path)
     print()
     print("Done!")
 
@@ -1709,12 +1944,11 @@ def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> 
 # ---------------------------------------------------------------------------
 
 
-def _test_qavi_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+def _predict_qavi_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+    """Run qavi_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
     root_dir, _, metadata_dir = get_run_dirs("qavi_cnn/train", create=False)
     ckpt_dir = root_dir / "checkpoints"
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
 
     metadata = load_metadata(metadata_dir)
 
@@ -1805,21 +2039,8 @@ def _test_qavi_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> N
     ruls_true_lowers, ruls_true_uppers = _compute_reference_ci(
         ref_t_eods, N_INTERMEDIATE_SOCs
     )
-    ts_rul_true = eval_indices.astype(float) * dt
-    ruls_true = t_eod - ts_rul_true
-
-    _plot_rul(
-        ts_rul_true,
-        ruls_true,
-        ruls_true_lowers,
-        ruls_true_uppers,
-        ts_pred,
-        pred_means,
-        pred_lowers,
-        pred_uppers,
-        "QAVI CNN",
-        out_path,
-    )
+    ts_rul_true = (eval_indices.astype(float) * dt).tolist()
+    ruls_true = (t_eod - eval_indices.astype(float) * dt).tolist()
 
     # --- CRPS ---
     valid_mask = eval_indices >= window_size
@@ -1865,6 +2086,37 @@ def _test_qavi_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> N
             f"std={np.std(pred_samples):6.1f} | CRPS={crps_val:.3f}"
         )
 
-    _plot_crps(ts_eval, crps_values, "QAVI CNN", out_path)
+    return TestResult(
+        method_label=METHOD_LABELS["qavi_cnn"],
+        ts_rul_true=ts_rul_true,
+        ruls_true=ruls_true,
+        ruls_true_lowers=ruls_true_lowers,
+        ruls_true_uppers=ruls_true_uppers,
+        ts_pred=ts_pred,
+        pred_means=pred_means,
+        pred_lowers=pred_lowers,
+        pred_uppers=pred_uppers,
+        ts_eval=ts_eval,
+        crps_values=crps_values,
+    )
+
+
+def _test_qavi_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
+    result = _predict_qavi_cnn(test_data_path=test_data_path, n_samples=n_samples)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    _plot_rul(
+        result.ts_rul_true,
+        result.ruls_true,
+        result.ruls_true_lowers,
+        result.ruls_true_uppers,
+        result.ts_pred,
+        result.pred_means,
+        result.pred_lowers,
+        result.pred_uppers,
+        result.method_label,
+        out_path,
+    )
+    _plot_crps(result.ts_eval, result.crps_values, result.method_label, out_path)
     print()
     print("Done!")

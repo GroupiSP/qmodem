@@ -5,6 +5,7 @@ Usage::
     qmodem generate-data [OPTIONS]
     qmodem train METHOD [OPTIONS]
     qmodem test METHOD [OPTIONS]
+    qmodem compare [OPTIONS]
 
 Where ``METHOD`` is one of: ``bayes_cnn``, ``het_cnn``, ``mcd_cnn``,
 ``qavi_cnn``.
@@ -276,6 +277,58 @@ def test(
 
     _test(
         method,
+        test_data_path=test_data_path,
+        n_samples=n_samples,
+        output_dir=output_dir,
+    )
+
+
+# ===================================================================
+# compare
+# ===================================================================
+
+
+@cli.command()
+@click.option(
+    "--methods",
+    type=str,
+    multiple=True,
+    default=None,
+    help=(
+        "Methods to compare (repeat for each method, e.g. "
+        "--methods het_cnn --methods mcd_cnn). "
+        "Defaults to all methods."
+    ),
+)
+@click.option(
+    "--test-data-path",
+    type=str,
+    default="data/test_case_0.npz",
+    help="Path to the test-case .npz file (default: data/test_case_0.npz).",
+)
+@click.option(
+    "--n-samples",
+    type=int,
+    default=_P_TEST["n_samples"],
+    help=f"Number of forward passes / weight samples for uncertainty (default: {_P_TEST['n_samples']}).",
+)
+@click.option(
+    "--output-dir",
+    type=str,
+    default=None,
+    help="Directory for the comparison plot (default: saved/compare).",
+)
+def compare(
+    methods: tuple[str, ...],
+    test_data_path: str,
+    n_samples: int,
+    output_dir: str | None,
+) -> None:
+    """Compare multiple methods on the same test case."""
+    from qmodem.application import compare as _compare
+
+    _compare(
+        methods=list(methods) if methods else None,
         test_data_path=test_data_path,
         n_samples=n_samples,
         output_dir=output_dir,

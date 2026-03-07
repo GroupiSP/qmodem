@@ -35,6 +35,13 @@ class TestCLIHelp:
         assert result.exit_code == 0
         assert "n-histories-train" in result.output
 
+    def test_compare_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["compare", "--help"])
+        assert result.exit_code == 0
+        assert "--methods" in result.output
+        assert "--n-samples" in result.output
+
 
 class TestCLIValidation:
     """Verify that invalid inputs are rejected."""
