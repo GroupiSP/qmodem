@@ -674,7 +674,7 @@ def _train_het_cnn(
             stride=stride,
             n_histories_train=SHARED_PARAMS["data"]["n_histories_train"],
             n_histories_val=SHARED_PARAMS["data"]["n_histories_val"],
-            soc_range=SHARED_PARAMS["simulation"]["soc_range"],
+            soc_range=list(SHARED_PARAMS["simulation"]["soc_range"]),
         ),
         "model_params": BaseModelParams(n_filters=n_filters, kernel_size=kernel_size),
         "scaling_params": ScalingParams(
