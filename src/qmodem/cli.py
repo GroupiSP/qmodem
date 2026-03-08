@@ -291,7 +291,7 @@ def test(
 @cli.command()
 @click.option(
     "--methods",
-    type=str,
+    type=_METHODS,
     multiple=True,
     default=None,
     help=(

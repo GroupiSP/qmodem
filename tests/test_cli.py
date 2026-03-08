@@ -61,3 +61,9 @@ class TestCLIValidation:
         runner = CliRunner()
         result = runner.invoke(cli, ["train"])
         assert result.exit_code != 0
+
+    def test_compare_invalid_method(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["compare", "--methods", "invalid_method"])
+        assert result.exit_code != 0
+        assert "Invalid value" in result.output or "invalid_method" in result.output
