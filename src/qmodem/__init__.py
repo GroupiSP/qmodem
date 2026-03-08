@@ -43,6 +43,11 @@ from .utils import (  # noqa: F401
     restore_model_from_checkpoint,
     restore_model_state,
 )
+from .application import (  # noqa: F401
+    TestResult,
+    populate_crps_ax,
+    populate_rul_ax,
+)
 
 
 def main() -> None:

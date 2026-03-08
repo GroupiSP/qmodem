@@ -68,6 +68,19 @@ qmodem test METHOD [OPTIONS]
 | `--n-samples` | 500 | Forward passes / weight samples |
 | `--output-dir` | `saved/<method>/test` | Output directory for plots |
 
+### Compare methods
+
+```bash
+qmodem compare [OPTIONS]
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--methods` | all | Methods to compare (repeat for each) |
+| `--test-data-path` | `data/test_case_0.npz` | Path to test data |
+| `--n-samples` | 500 | Forward passes / weight samples |
+| `--output-dir` | `saved/compare` | Output directory for the comparison plot |
+
 ### Examples
 
 ```bash
@@ -83,6 +96,9 @@ qmodem test bayes_cnn
 # QAVI CNN
 qmodem train qavi_cnn --n-qubits 6 --n-pqc-layers 3
 qmodem test qavi_cnn
+
+# Compare two methods on the same test case
+qmodem compare --methods het_cnn --methods mcd_cnn --n-samples 200
 ```
 
 ## Development
