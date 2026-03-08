@@ -421,14 +421,14 @@ def populate_crps_ax(
 
 
 def _plot_rul(
-    ts_rul_true: np.ndarray,
-    ruls_true: np.ndarray,
-    ruls_true_lowers: list[float],
-    ruls_true_uppers: list[float],
-    ts_pred: list[float],
-    pred_means: list[float],
-    pred_lowers: list[float],
-    pred_uppers: list[float],
+    ts_rul_true: Sequence[float],
+    ruls_true: Sequence[float],
+    ruls_true_lowers: Sequence[float],
+    ruls_true_uppers: Sequence[float],
+    ts_pred: Sequence[float],
+    pred_means: Sequence[float],
+    pred_lowers: Sequence[float],
+    pred_uppers: Sequence[float],
     method_label: str,
     output_dir: Path,
 ) -> None:
@@ -470,8 +470,8 @@ def _plot_rul(
 
 
 def _plot_crps(
-    ts_eval: list[float],
-    crps_values: list[float],
+    ts_eval: Sequence[float],
+    crps_values: Sequence[float],
     method_label: str,
     output_dir: Path,
 ) -> None:
