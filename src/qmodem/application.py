@@ -1466,7 +1466,7 @@ def compare(
                 test_data_path=test_data_path, n_samples=n_samples
             )
             results.append(result)
-        except Exception as exc:  # noqa: BLE001
+        except FileNotFoundError as exc:  # noqa: BLE001
             warnings.warn(
                 f"Skipping {method}: {exc}",
                 stacklevel=2,
