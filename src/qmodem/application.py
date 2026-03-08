@@ -28,7 +28,20 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 from flax import nnx
+from matplotlib.figure import Figure
 
+from qmodem import (
+    MCDCNN1D,
+    QAVICNN1D,
+    BatterySimulationTimeWindowSource,
+    BayesCNN1D,
+    FlipoutConv1D,
+    HeteroscedasticCNN1D,
+    elbo_nll_loss,
+    nll_loss,
+    nll_loss_mcd,
+)
+from qmodem.generate import generate_test_data, generate_train_data
 from qmodem.metadata import (
     BaseModelParams,
     MCDModelParams,
@@ -42,18 +55,6 @@ from qmodem.metadata import (
     load_metadata,
     save_metadata,
 )
-from qmodem import (
-    MCDCNN1D,
-    QAVICNN1D,
-    BatterySimulationTimeWindowSource,
-    BayesCNN1D,
-    FlipoutConv1D,
-    HeteroscedasticCNN1D,
-    elbo_nll_loss,
-    nll_loss,
-    nll_loss_mcd,
-)
-from qmodem.generate import generate_test_data, generate_train_data
 from qmodem.metrics import crps
 from qmodem.train import EarlyStopper, train_loop
 from qmodem.utils import (
@@ -1430,7 +1431,7 @@ def compare(
     test_data_path: str = "data/test_case_0.npz",
     n_samples: int = 500,
     output_dir: str | None = None,
-) -> Any:
+) -> Figure:
     """Compare multiple methods on the same test case.
 
     Produces a figure with one RUL subplot per method and a final subplot
