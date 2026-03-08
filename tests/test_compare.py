@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
@@ -12,9 +14,6 @@ from qmodem.application import (
     populate_crps_ax,
     populate_rul_ax,
 )
-
-matplotlib.use("Agg")
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
