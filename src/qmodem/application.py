@@ -611,6 +611,7 @@ def train(
     dropout_rate: float = 0.1,
     n_qubits: int = 6,
     n_pqc_layers: int = 1,
+    output_dir: str | None = None,
 ) -> None:
     """Train a model using the specified method.
 
@@ -631,6 +632,8 @@ def train(
         dropout_rate: Dropout rate (``mcd_cnn`` only).
         n_qubits: Number of qubits (``qavi_cnn`` only).
         n_pqc_layers: Number of PQC layers (``qavi_cnn`` only).
+        output_dir: Base directory for checkpoints and metadata.
+            Defaults to ``"saved"``.
     """
     _validate_method(method)
 
@@ -662,6 +665,7 @@ def train(
         normalize=normalize,
         train_data_path=train_data_path,
         val_data_path=val_data_path,
+        output_dir=output_dir,
     )
 
     dispatch = {
@@ -698,9 +702,13 @@ def _train_het_cnn(
     normalize: bool,
     train_data_path: str,
     val_data_path: str,
+    output_dir: str | None = None,
 ) -> None:
     np.random.seed(TRAIN_SEED)
-    _root_dir, checkpoint_dir, metadata_dir = get_run_dirs("het_cnn/train", create=True)
+    base_dir = output_dir if output_dir is not None else "saved"
+    _root_dir, checkpoint_dir, metadata_dir = get_run_dirs(
+        "het_cnn/train", create=True, base_dir=base_dir
+    )
     sim_config = _build_sim_config(SHARED_PARAMS["simulation"])
 
     print("=" * 70)
@@ -797,9 +805,13 @@ def _train_mcd_cnn(
     train_data_path: str,
     val_data_path: str,
     dropout_rate: float,
+    output_dir: str | None = None,
 ) -> None:
     np.random.seed(TRAIN_SEED)
-    _root_dir, checkpoint_dir, metadata_dir = get_run_dirs("mcd_cnn/train", create=True)
+    base_dir = output_dir if output_dir is not None else "saved"
+    _root_dir, checkpoint_dir, metadata_dir = get_run_dirs(
+        "mcd_cnn/train", create=True, base_dir=base_dir
+    )
     sim_config = _build_sim_config(SHARED_PARAMS["simulation"])
 
     print("=" * 70)
@@ -904,10 +916,12 @@ def _train_bayes_cnn(
     normalize: bool,
     train_data_path: str,
     val_data_path: str,
+    output_dir: str | None = None,
 ) -> None:
     np.random.seed(TRAIN_SEED)
+    base_dir = output_dir if output_dir is not None else "saved"
     _root_dir, checkpoint_dir, metadata_dir = get_run_dirs(
-        "bayes_cnn/train", create=True
+        "bayes_cnn/train", create=True, base_dir=base_dir
     )
     sim_config = _build_sim_config(SHARED_PARAMS["simulation"])
 
@@ -1025,6 +1039,7 @@ def _train_qavi_cnn(
     val_data_path: str,
     n_qubits: int,
     n_pqc_layers: int,
+    output_dir: str | None = None,
 ) -> None:
     EPS = 1e-7
     BATCH_W = 32
@@ -1034,8 +1049,9 @@ def _train_qavi_cnn(
     SEED = TRAIN_SEED
 
     np.random.seed(SEED)
+    base_dir = output_dir if output_dir is not None else "saved"
     _root_dir, checkpoint_dir, metadata_dir = get_run_dirs(
-        "qavi_cnn/train", create=True
+        "qavi_cnn/train", create=True, base_dir=base_dir
     )
     sim_config = _build_sim_config(SHARED_PARAMS["simulation"])
 
@@ -1390,6 +1406,7 @@ def test(
     test_data_path: str = "data/test_case_0.npz",
     n_samples: int = 500,
     output_dir: str | None = None,
+    trained_dir: str | None = None,
 ) -> None:
     """Evaluate a trained model: RUL prediction + CRPS.
 
@@ -1398,6 +1415,8 @@ def test(
         test_data_path: Path to the test-case ``.npz`` file.
         n_samples: Number of forward passes / weight samples for uncertainty.
         output_dir: Directory for output plots. Defaults to ``saved/<method>/test``.
+        trained_dir: Base directory containing trained model artefacts. Defaults
+            to ``"saved"``.
     """
     _validate_method(method)
 
@@ -1414,6 +1433,7 @@ def test(
         test_data_path=test_data_path,
         n_samples=n_samples,
         output_dir=output_dir,
+        trained_dir=trained_dir,
     )
 
 
@@ -1431,6 +1451,7 @@ def compare(
     test_data_path: str = "data/test_case_0.npz",
     n_samples: int = 500,
     output_dir: str | None = None,
+    trained_dir: str | None = None,
 ) -> Figure:
     """Compare multiple methods on the same test case.
 
@@ -1443,6 +1464,8 @@ def compare(
         n_samples: Number of forward passes / weight samples for uncertainty.
         output_dir: Directory for the output plot. Defaults to
             ``saved/compare``.
+        trained_dir: Base directory containing trained model artefacts. Defaults
+            to ``"saved"``.
 
     Returns:
         The ``matplotlib.figure.Figure`` containing the comparison subplots.
@@ -1463,7 +1486,9 @@ def compare(
     for method in methods:
         try:
             result = _PREDICT_DISPATCH[method](
-                test_data_path=test_data_path, n_samples=n_samples
+                test_data_path=test_data_path,
+                n_samples=n_samples,
+                trained_dir=trained_dir,
             )
             results.append(result)
         except FileNotFoundError as exc:  # noqa: BLE001
@@ -1506,8 +1531,10 @@ def compare(
     crps_ax.set_title("CRPS Over Time — All Methods")
 
     fig.tight_layout()
-    fig.savefig(out_path / "compare.png", dpi=150, bbox_inches="tight")
-    print(f"Comparison plot saved to {out_path / 'compare.png'}")
+    test_case_stem = Path(test_data_path).stem
+    fig_name = f"compare_{test_case_stem}.png"
+    fig.savefig(out_path / fig_name, dpi=150, bbox_inches="tight")
+    print(f"Comparison plot saved to {out_path / fig_name}")
     return fig
 
 
@@ -1516,10 +1543,15 @@ def compare(
 # ---------------------------------------------------------------------------
 
 
-def _predict_het_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+def _predict_het_cnn(
+    *, test_data_path: str, n_samples: int, trained_dir: str | None = None
+) -> TestResult:
     """Run het_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
-    root_dir, _, metadata_dir = get_run_dirs("het_cnn/train", create=False)
+    base_dir = trained_dir if trained_dir is not None else "saved"
+    root_dir, _, metadata_dir = get_run_dirs(
+        "het_cnn/train", create=False, base_dir=base_dir
+    )
     ckpt_dir = root_dir / "checkpoints"
 
     metadata = load_metadata(metadata_dir)
@@ -1620,8 +1652,16 @@ def _predict_het_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
     )
 
 
-def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
-    result = _predict_het_cnn(test_data_path=test_data_path, n_samples=n_samples)
+def _test_het_cnn(
+    *,
+    test_data_path: str,
+    n_samples: int,
+    output_dir: str,
+    trained_dir: str | None = None,
+) -> None:
+    result = _predict_het_cnn(
+        test_data_path=test_data_path, n_samples=n_samples, trained_dir=trained_dir
+    )
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     _plot_rul(
@@ -1646,10 +1686,15 @@ def _test_het_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
 # ---------------------------------------------------------------------------
 
 
-def _predict_mcd_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+def _predict_mcd_cnn(
+    *, test_data_path: str, n_samples: int, trained_dir: str | None = None
+) -> TestResult:
     """Run mcd_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
-    root_dir, _, metadata_dir = get_run_dirs("mcd_cnn/train", create=False)
+    base_dir = trained_dir if trained_dir is not None else "saved"
+    root_dir, _, metadata_dir = get_run_dirs(
+        "mcd_cnn/train", create=False, base_dir=base_dir
+    )
     ckpt_dir = root_dir / "checkpoints"
 
     metadata = load_metadata(metadata_dir)
@@ -1767,8 +1812,16 @@ def _predict_mcd_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
     )
 
 
-def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
-    result = _predict_mcd_cnn(test_data_path=test_data_path, n_samples=n_samples)
+def _test_mcd_cnn(
+    *,
+    test_data_path: str,
+    n_samples: int,
+    output_dir: str,
+    trained_dir: str | None = None,
+) -> None:
+    result = _predict_mcd_cnn(
+        test_data_path=test_data_path, n_samples=n_samples, trained_dir=trained_dir
+    )
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     _plot_rul(
@@ -1793,10 +1846,15 @@ def _test_mcd_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> No
 # ---------------------------------------------------------------------------
 
 
-def _predict_bayes_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+def _predict_bayes_cnn(
+    *, test_data_path: str, n_samples: int, trained_dir: str | None = None
+) -> TestResult:
     """Run bayes_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
-    root_dir, _, metadata_dir = get_run_dirs("bayes_cnn/train", create=False)
+    base_dir = trained_dir if trained_dir is not None else "saved"
+    root_dir, _, metadata_dir = get_run_dirs(
+        "bayes_cnn/train", create=False, base_dir=base_dir
+    )
     ckpt_dir = root_dir / "checkpoints"
 
     metadata = load_metadata(metadata_dir)
@@ -1919,8 +1977,16 @@ def _predict_bayes_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
     )
 
 
-def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
-    result = _predict_bayes_cnn(test_data_path=test_data_path, n_samples=n_samples)
+def _test_bayes_cnn(
+    *,
+    test_data_path: str,
+    n_samples: int,
+    output_dir: str,
+    trained_dir: str | None = None,
+) -> None:
+    result = _predict_bayes_cnn(
+        test_data_path=test_data_path, n_samples=n_samples, trained_dir=trained_dir
+    )
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     _plot_rul(
@@ -1945,10 +2011,15 @@ def _test_bayes_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> 
 # ---------------------------------------------------------------------------
 
 
-def _predict_qavi_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
+def _predict_qavi_cnn(
+    *, test_data_path: str, n_samples: int, trained_dir: str | None = None
+) -> TestResult:
     """Run qavi_cnn predictions and return a ``TestResult``."""
     np.random.seed(TEST_SEED)
-    root_dir, _, metadata_dir = get_run_dirs("qavi_cnn/train", create=False)
+    base_dir = trained_dir if trained_dir is not None else "saved"
+    root_dir, _, metadata_dir = get_run_dirs(
+        "qavi_cnn/train", create=False, base_dir=base_dir
+    )
     ckpt_dir = root_dir / "checkpoints"
 
     metadata = load_metadata(metadata_dir)
@@ -2102,8 +2173,16 @@ def _predict_qavi_cnn(*, test_data_path: str, n_samples: int) -> TestResult:
     )
 
 
-def _test_qavi_cnn(*, test_data_path: str, n_samples: int, output_dir: str) -> None:
-    result = _predict_qavi_cnn(test_data_path=test_data_path, n_samples=n_samples)
+def _test_qavi_cnn(
+    *,
+    test_data_path: str,
+    n_samples: int,
+    output_dir: str,
+    trained_dir: str | None = None,
+) -> None:
+    result = _predict_qavi_cnn(
+        test_data_path=test_data_path, n_samples=n_samples, trained_dir=trained_dir
+    )
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     _plot_rul(

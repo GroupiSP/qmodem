@@ -198,6 +198,12 @@ def generate_data(
     default=_P_QAVI["n_pqc_layers"],
     help=f"Number of PQC layers (qavi_cnn only, default: {_P_QAVI['n_pqc_layers']}).",
 )
+@click.option(
+    "--output-dir",
+    type=str,
+    default=None,
+    help="Base directory for checkpoints and metadata (default: saved).",
+)
 def train(
     method: str,
     n_epochs: int | None,
@@ -215,6 +221,7 @@ def train(
     dropout_rate: float,
     n_qubits: int,
     n_pqc_layers: int,
+    output_dir: str | None,
 ) -> None:
     """Train a model using METHOD."""
     from qmodem.application import train as _train
@@ -238,6 +245,7 @@ def train(
         dropout_rate=dropout_rate,
         n_qubits=n_qubits,
         n_pqc_layers=n_pqc_layers,
+        output_dir=output_dir,
     )
 
 
@@ -266,11 +274,18 @@ def train(
     default=None,
     help="Directory for output plots (default: saved/<method>/test).",
 )
+@click.option(
+    "--trained-dir",
+    type=str,
+    default=None,
+    help="Base directory containing trained model artefacts (default: saved).",
+)
 def test(
     method: str,
     test_data_path: str,
     n_samples: int,
     output_dir: str | None,
+    trained_dir: str | None,
 ) -> None:
     """Evaluate a trained model (RUL prediction + CRPS)."""
     from qmodem.application import test as _test
@@ -280,6 +295,7 @@ def test(
         test_data_path=test_data_path,
         n_samples=n_samples,
         output_dir=output_dir,
+        trained_dir=trained_dir,
     )
 
 
@@ -318,11 +334,18 @@ def test(
     default=None,
     help="Directory for the comparison plot (default: saved/compare).",
 )
+@click.option(
+    "--trained-dir",
+    type=str,
+    default=None,
+    help="Base directory containing trained model artefacts (default: saved).",
+)
 def compare(
     methods: tuple[str, ...],
     test_data_path: str,
     n_samples: int,
     output_dir: str | None,
+    trained_dir: str | None,
 ) -> None:
     """Compare multiple methods on the same test case."""
     from qmodem.application import compare as _compare
@@ -332,4 +355,5 @@ def compare(
         test_data_path=test_data_path,
         n_samples=n_samples,
         output_dir=output_dir,
+        trained_dir=trained_dir,
     )
