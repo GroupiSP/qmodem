@@ -420,6 +420,26 @@ def populate_crps_ax(
     ax.grid(True, alpha=0.3)
 
 
+def populate_box_ax(
+    ax: Any,
+    crps_data: Sequence[Sequence[float]],
+    method_labels: Sequence[str],
+) -> None:
+    """Draw a CRPS box plot comparing multiple methods on *ax*.
+
+    Args:
+        ax: A ``matplotlib.axes.Axes`` instance.
+        crps_data: One sequence of CRPS values per method (aggregated across
+            time points and test cases).
+        method_labels: Human-readable label for each method.
+    """
+    ax.boxplot(crps_data, tick_labels=method_labels)
+    ax.set_ylabel("CRPS [s]")
+    ax.set_title("CRPS Distribution — All Methods")
+    ax.set_ylim(bottom=0.0)
+    ax.grid(True, alpha=0.3)
+
+
 def _plot_rul(
     ts_rul_true: Sequence[float],
     ruls_true: Sequence[float],
@@ -1535,6 +1555,104 @@ def compare(
     fig_name = f"compare_{test_case_stem}.png"
     fig.savefig(out_path / fig_name, dpi=150, bbox_inches="tight")
     print(f"Comparison plot saved to {out_path / fig_name}")
+    return fig
+
+
+def _discover_test_cases(data_dir: str) -> list[int]:
+    """Find all ``test_case_<idx>.npz`` indices in *data_dir*, sorted."""
+    import re
+
+    data_path = Path(data_dir)
+    indices: list[int] = []
+    for p in data_path.glob("test_case_*.npz"):
+        m = re.search(r"test_case_(\d+)\.npz$", p.name)
+        if m:
+            indices.append(int(m.group(1)))
+    return sorted(indices)
+
+
+def compare_box(
+    methods: Sequence[str] | None = None,
+    *,
+    test_cases: Sequence[int] | None = None,
+    data_dir: str = "data",
+    n_samples: int = 500,
+    output_dir: str | None = None,
+    trained_dir: str | None = None,
+) -> Figure:
+    """Compare methods via a CRPS box plot aggregated over test cases.
+
+    Produces a figure with one box per method.  The box-plot quartiles,
+    whiskers, and outliers are computed over the **time axis** and the
+    **test-case axis** combined.
+
+    Test-case data files must follow the naming convention
+    ``test_case_<idx>.npz`` inside *data_dir*.
+
+    Args:
+        methods: Methods to compare. Defaults to all methods in ``METHODS``.
+        test_cases: Indices of test cases to include (e.g. ``[0, 1, 2]``).
+            When ``None``, all ``test_case_<idx>.npz`` files discovered in
+            *data_dir* are used.
+        data_dir: Directory containing test-case files.
+        n_samples: Number of forward passes / weight samples for uncertainty.
+        output_dir: Directory for the output plot.  Defaults to
+            ``saved/compare``.
+        trained_dir: Base directory containing trained model artefacts.
+            Defaults to ``"saved"``.
+
+    Returns:
+        The ``matplotlib.figure.Figure`` containing the box plot.
+    """
+    import matplotlib.pyplot as plt
+
+    if methods is None:
+        methods = list(METHODS)
+    for m in methods:
+        _validate_method(m)
+
+    if test_cases is None:
+        test_cases = _discover_test_cases(data_dir)
+    if not test_cases:
+        raise FileNotFoundError(f"No test_case_*.npz files found in '{data_dir}'.")
+
+    if output_dir is None:
+        output_dir = "saved/compare"
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    crps_data: list[list[float]] = []
+    method_labels: list[str] = []
+
+    for method in methods:
+        method_crps: list[float] = []
+        for idx in test_cases:
+            test_data_path = str(Path(data_dir) / f"test_case_{idx}.npz")
+            try:
+                result = _PREDICT_DISPATCH[method](
+                    test_data_path=test_data_path,
+                    n_samples=n_samples,
+                    trained_dir=trained_dir,
+                )
+                method_crps.extend(result.crps_values)
+            except FileNotFoundError as exc:
+                warnings.warn(
+                    f"Skipping {method} on test_case_{idx}: {exc}",
+                    stacklevel=2,
+                )
+
+        if method_crps:
+            crps_data.append(method_crps)
+            method_labels.append(METHOD_LABELS.get(method, method))
+
+    if not crps_data:
+        raise RuntimeError("No methods produced results. Nothing to compare.")
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    populate_box_ax(ax, crps_data, method_labels)
+    fig.tight_layout()
+    fig.savefig(out_path / "compare_box.png", dpi=150, bbox_inches="tight")
+    print(f"Box-plot saved to {out_path / 'compare_box.png'}")
     return fig
 
 

@@ -84,6 +84,21 @@ qmodem compare [OPTIONS]
 | `--output-dir` | `saved/compare` | Output directory for the comparison plot |
 | `--trained-dir` | `saved` | Base directory with trained model artefacts |
 
+### Compare methods (box plot)
+
+```bash
+qmodem compare-box [OPTIONS]
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--methods` | all | Methods to compare (repeat for each) |
+| `--test-case` | all `test_case_*.npz` in `--data-dir` | Test-case indices to include (repeat for each) |
+| `--data-dir` | `data` | Directory containing test-case files |
+| `--n-samples` | 500 | Forward passes / weight samples |
+| `--output-dir` | `saved/compare` | Output directory for the box plot |
+| `--trained-dir` | `saved` | Base directory with trained model artefacts |
+
 ### Examples
 
 ```bash
@@ -102,6 +117,13 @@ qmodem test qavi_cnn
 
 # Compare two methods on the same test case
 qmodem compare --methods het_cnn --methods mcd_cnn --n-samples 200
+
+# CRPS box plot across all test cases and methods
+qmodem compare-box
+
+# Box plot for specific methods and test cases
+qmodem compare-box --methods het_cnn --methods bayes_cnn \
+    --test-case 0 --test-case 1
 ```
 
 ## PHMe26 — Reproducing Conference Results
