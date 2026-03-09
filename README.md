@@ -5,7 +5,7 @@
 ```bash
 pip install -e .
 # or with uv:
-uv pip install -e .
+uv sync
 ```
 
 ## CLI Usage
@@ -55,6 +55,7 @@ qmodem train METHOD [OPTIONS]
 | `--dropout-rate` | 0.1 | Dropout rate (`mcd_cnn` only) |
 | `--n-qubits` | 6 | Number of PQC qubits (`qavi_cnn` only) |
 | `--n-pqc-layers` | 1 | Number of PQC layers (`qavi_cnn` only) |
+| `--output-dir` | `saved` | Base directory for checkpoints and metadata |
 
 ### Evaluate a model
 
@@ -67,6 +68,7 @@ qmodem test METHOD [OPTIONS]
 | `--test-data-path` | `data/test_case_0.npz` | Path to test data |
 | `--n-samples` | 500 | Forward passes / weight samples |
 | `--output-dir` | `saved/<method>/test` | Output directory for plots |
+| `--trained-dir` | `saved` | Base directory with trained model artefacts |
 
 ### Compare methods
 
@@ -80,6 +82,7 @@ qmodem compare [OPTIONS]
 | `--test-data-path` | `data/test_case_0.npz` | Path to test data |
 | `--n-samples` | 500 | Forward passes / weight samples |
 | `--output-dir` | `saved/compare` | Output directory for the comparison plot |
+| `--trained-dir` | `saved` | Base directory with trained model artefacts |
 
 ### Examples
 
@@ -100,6 +103,37 @@ qmodem test qavi_cnn
 # Compare two methods on the same test case
 qmodem compare --methods het_cnn --methods mcd_cnn --n-samples 200
 ```
+
+## PHMe26 — Reproducing Conference Results
+
+The results presented at the PHMe26 conference can be reproduced with the script(s) available in the `phme26/` folder.
+
+```
+phme26/
+├── make_results.sh   # single entry-point script
+├── data/             # generated train/val/test data
+├── trained/          # model checkpoints
+└── results/          # comparison plots
+```
+
+### Quick start
+
+```bash
+pip install uv                          # install uv (if not already installed)
+uv sync                                 # install qmodem
+bash phme26/make_results.sh --gen       # generate data + train + compare
+```
+
+After the first run the data is cached in `phme26/data/`, so subsequent runs
+can skip data generation:
+
+```bash
+bash phme26/make_results.sh             # train + compare only
+```
+
+The script trains all four methods (`het_cnn`, `mcd_cnn`, `bayes_cnn`,
+`qavi_cnn`) with default settings and produces a comparison plot for each of
+the 4 test cases in `phme26/results/`.
 
 ## Development
 

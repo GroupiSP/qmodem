@@ -104,17 +104,21 @@ def write_json(path: Path, data: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def get_run_dirs(run_name: str, create: bool = False) -> tuple[Path, Path, Path]:
+def get_run_dirs(
+    run_name: str, create: bool = False, base_dir: str = "saved"
+) -> tuple[Path, Path, Path]:
     """Return root, checkpoint, and metadata directories for a run.
 
     Args:
         run_name: Name of the run (e.g. ``"het_cnn/train"``).
         create: If ``True``, create directories if they don't exist.
+        base_dir: Base directory under CWD for run artefacts. Defaults to
+            ``"saved"``.
 
     Returns:
         Tuple of ``(root_dir, checkpoint_dir, metadata_dir)``.
     """
-    root_dir = Path().cwd() / "saved" / run_name
+    root_dir = Path().cwd() / base_dir / run_name
     checkpoint_dir = root_dir / "checkpoints"
     metadata_dir = root_dir / "metadata"
     if create:

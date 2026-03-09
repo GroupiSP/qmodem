@@ -19,3 +19,11 @@ saved/
 
 # Sandbox scripts
 sandbox/
+
+# PHMe26 generated artefacts (keep folder structure via .gitkeep files)
+phme26/data/*
+!phme26/data/.gitkeep
+phme26/trained/*
+!phme26/trained/.gitkeep
+phme26/results/*
+!phme26/results/.gitkeep
