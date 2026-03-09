@@ -58,6 +58,20 @@ if [ ! -f "$DATA_DIR/train.npz" ]; then
     exit 1
 fi
 
+if [ ! -f "$DATA_DIR/val.npz" ]; then
+    echo "ERROR: $DATA_DIR/val.npz not found."
+    echo "Run with --gen to generate data first."
+    exit 1
+fi
+
+for i in $(seq 0 $((N_TEST_CASES - 1))); do
+    test_case_path="$DATA_DIR/test_case_${i}.npz"
+    if [ ! -f "$test_case_path" ]; then
+        echo "ERROR: $test_case_path not found."
+        echo "Run with --gen to generate data first."
+        exit 1
+    fi
+done
 # ------------------------------------------------------------------
 # 2. Train all methods
 # ------------------------------------------------------------------
