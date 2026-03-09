@@ -25,7 +25,8 @@ DATA_DIR="$BASE_DIR/data"
 TRAINED_DIR="$BASE_DIR/trained"
 RESULTS_DIR="$BASE_DIR/results"
 
-N_TEST_CASES=4
+N_TEST_CASES_GEN=10
+N_TEST_CASES_COMPARE=4
 METHODS="het_cnn mcd_cnn bayes_cnn qavi_cnn"
 
 # ------------------------------------------------------------------
@@ -49,7 +50,7 @@ if [ "$GENERATE" = true ]; then
     echo "Generating training, validation, and test data …"
     echo "============================================================"
     qmodem generate-data \
-        --n-test-cases "$N_TEST_CASES" \
+        --n-test-cases "$N_TEST_CASES_GEN" \
         --output-dir "$DATA_DIR"
     echo
 fi
@@ -67,7 +68,7 @@ if [ ! -f "$DATA_DIR/val.npz" ]; then
     exit 1
 fi
 
-for i in $(seq 0 $((N_TEST_CASES - 1))); do
+for i in $(seq 0 $((N_TEST_CASES_COMPARE - 1))); do
     test_case_path="$DATA_DIR/test_case_${i}.npz"
     if [ ! -f "$test_case_path" ]; then
         echo "ERROR: $test_case_path not found."
@@ -103,16 +104,27 @@ fi
 # ------------------------------------------------------------------
 mkdir -p "$RESULTS_DIR"
 
-for i in $(seq 0 $((N_TEST_CASES - 1))); do
+for i in $(seq 0 $((N_TEST_CASES_COMPARE - 1))); do
     echo "============================================================"
     echo "Comparing all methods on test_case_${i}"
     echo "============================================================"
     qmodem compare \
+        --n-samples 100 \
         --test-data-path "$DATA_DIR/test_case_${i}.npz" \
         --trained-dir "$TRAINED_DIR" \
         --output-dir "$RESULTS_DIR"
     echo
 done
+
+# ------------------------------------------------------------------
+# 4. Compare all methods in a box plot with all the test cases
+#    available
+# ------------------------------------------------------------------
+qmodem compare-box \
+    --n-samples 100 \
+    --data-dir "$DATA_DIR" \
+    --trained-dir "$TRAINED_DIR" \
+    --output-dir "$RESULTS_DIR"
 
 echo "============================================================"
 echo "All done! Results saved in $RESULTS_DIR"
