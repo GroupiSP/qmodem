@@ -5,7 +5,7 @@
 ```bash
 pip install -e .
 # or with uv:
-uv pip install -e .
+uv sync
 ```
 
 ## CLI Usage
@@ -119,7 +119,8 @@ phme26/
 ### Quick start
 
 ```bash
-pip install -e .                        # install QMoDeM
+pip install uv                          # install uv (if not already installed)
+uv sync                                 # install qmodem
 bash phme26/make_results.sh --gen       # generate data + train + compare
 ```
 
