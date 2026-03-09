@@ -1560,14 +1560,12 @@ def compare(
 
 def _discover_test_cases(data_dir: str) -> list[int]:
     """Find all ``test_case_<idx>.npz`` indices in *data_dir*, sorted."""
-    import re
-
     data_path = Path(data_dir)
     indices: list[int] = []
     for p in data_path.glob("test_case_*.npz"):
-        m = re.search(r"test_case_(\d+)\.npz$", p.name)
-        if m:
-            indices.append(int(m.group(1)))
+        suffix = p.stem.replace("test_case_", "", 1)
+        if suffix.isdigit():
+            indices.append(int(suffix))
     return sorted(indices)
 
 
