@@ -11,6 +11,8 @@ import pytest
 from qmodem.application import (
     TestResult,
     compare,
+    compare_box,
+    populate_box_ax,
     populate_crps_ax,
     populate_rul_ax,
 )
@@ -228,4 +230,181 @@ class TestCompare:
         axes = fig.get_axes()
         # Only 1 successful method → 1 RUL + 1 CRPS = 2
         assert len(axes) == 2
+        plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# populate_box_ax
+# ---------------------------------------------------------------------------
+
+
+class TestPopulateBoxAx:
+    """Tests for ``populate_box_ax``."""
+
+    def test_draws_boxes(self) -> None:
+        fig, ax = plt.subplots()
+        crps_data = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+        populate_box_ax(ax, crps_data, ["Method A", "Method B"])
+        assert ax.get_ylabel() == "CRPS [s]"
+        assert "CRPS Distribution" in ax.get_title()
+        plt.close(fig)
+
+    def test_single_method(self) -> None:
+        fig, ax = plt.subplots()
+        populate_box_ax(ax, [[0.1, 0.2]], ["Only Method"])
+        assert ax.get_ylabel() == "CRPS [s]"
+        plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# compare_box() — integration-level
+# ---------------------------------------------------------------------------
+
+
+class TestCompareBox:
+    """Tests for the ``compare_box()`` function."""
+
+    def test_rejects_invalid_method(self) -> None:
+        with pytest.raises(ValueError, match="Unknown method"):
+            compare_box(methods=["not_a_method"])
+
+    def test_no_results_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from qmodem import application
+
+        def _always_fail(**kw: object) -> None:
+            raise FileNotFoundError("no checkpoint")
+
+        monkeypatch.setattr(
+            application,
+            "_PREDICT_DISPATCH",
+            {m: _always_fail for m in application.METHODS},
+        )
+        with pytest.raises(RuntimeError, match="No methods produced results"):
+            compare_box(
+                methods=["het_cnn"],
+                test_cases=[0],
+            )
+
+    def test_no_test_cases_raises(self, tmp_path: object) -> None:
+        """Empty data dir raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError, match="No test_case_"):
+            compare_box(data_dir=str(tmp_path))
+
+    def test_produces_box_plot(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: object,
+    ) -> None:
+        from qmodem import application
+
+        fake_results = {
+            "het_cnn": _make_test_result("Heteroscedastic CNN"),
+            "mcd_cnn": _make_test_result("MC Dropout CNN"),
+        }
+        monkeypatch.setattr(
+            application,
+            "_PREDICT_DISPATCH",
+            {m: lambda m=m, **kw: fake_results[m] for m in fake_results},
+        )
+
+        fig = compare_box(
+            methods=["het_cnn", "mcd_cnn"],
+            test_cases=[0],
+            output_dir=str(tmp_path),
+        )
+        axes = fig.get_axes()
+        assert len(axes) == 1
+        assert "CRPS Distribution" in axes[0].get_title()
+        plt.close(fig)
+
+    def test_multi_test_case_aggregation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: object,
+    ) -> None:
+        """CRPS values from multiple test cases are concatenated."""
+        from qmodem import application
+
+        call_count: dict[str, int] = {"het_cnn": 0}
+
+        def _fake_predict(**kw: object) -> TestResult:
+            call_count["het_cnn"] += 1
+            return _make_test_result("Het CNN")
+
+        monkeypatch.setattr(
+            application,
+            "_PREDICT_DISPATCH",
+            {"het_cnn": _fake_predict},
+        )
+
+        fig = compare_box(
+            methods=["het_cnn"],
+            test_cases=[0, 1, 2],
+            output_dir=str(tmp_path),
+        )
+        assert call_count["het_cnn"] == 3
+        plt.close(fig)
+
+    def test_skips_failing_method_with_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: object,
+    ) -> None:
+        from qmodem import application
+
+        def _fail(**kw: object) -> None:
+            raise FileNotFoundError("no checkpoint")
+
+        monkeypatch.setattr(
+            application,
+            "_PREDICT_DISPATCH",
+            {
+                "het_cnn": lambda **kw: _make_test_result("Het CNN"),
+                "mcd_cnn": _fail,
+            },
+        )
+
+        with pytest.warns(UserWarning, match="Skipping mcd_cnn"):
+            fig = compare_box(
+                methods=["het_cnn", "mcd_cnn"],
+                test_cases=[0],
+                output_dir=str(tmp_path),
+            )
+        axes = fig.get_axes()
+        assert len(axes) == 1
+        plt.close(fig)
+
+    def test_auto_discovers_test_cases(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: object,
+    ) -> None:
+        """When test_data_paths is None, discovers test_case_*.npz in data_dir."""
+        from qmodem import application
+
+        # Create fake test case files
+        for i in range(3):
+            (tmp_path / f"test_case_{i}.npz").touch()
+
+        discovered_paths: list[str] = []
+
+        def _track_predict(**kw: object) -> TestResult:
+            discovered_paths.append(kw["test_data_path"])
+            return _make_test_result("Het CNN")
+
+        monkeypatch.setattr(
+            application,
+            "_PREDICT_DISPATCH",
+            {"het_cnn": _track_predict},
+        )
+
+        out_dir = tmp_path / "output"
+        fig = compare_box(
+            methods=["het_cnn"],
+            data_dir=str(tmp_path),
+            output_dir=str(out_dir),
+        )
+        assert len(discovered_paths) == 3
+        expected = [str(tmp_path / f"test_case_{i}.npz") for i in range(3)]
+        assert discovered_paths == expected
         plt.close(fig)

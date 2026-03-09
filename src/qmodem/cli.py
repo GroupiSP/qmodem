@@ -357,3 +357,76 @@ def compare(
         output_dir=output_dir,
         trained_dir=trained_dir,
     )
+
+
+# ===================================================================
+# compare-box
+# ===================================================================
+
+
+@cli.command("compare-box")
+@click.option(
+    "--methods",
+    type=_METHODS,
+    multiple=True,
+    default=None,
+    help=(
+        "Methods to compare (repeat for each method, e.g. "
+        "--methods het_cnn --methods mcd_cnn). "
+        "Defaults to all methods."
+    ),
+)
+@click.option(
+    "--test-case",
+    type=int,
+    multiple=True,
+    default=None,
+    help=(
+        "Test-case indices to include (repeat for each, e.g. "
+        "--test-case 0 --test-case 1). "
+        "Defaults to all test_case_*.npz in --data-dir."
+    ),
+)
+@click.option(
+    "--data-dir",
+    type=str,
+    default="data",
+    help="Directory containing test-case files (default: data).",
+)
+@click.option(
+    "--n-samples",
+    type=int,
+    default=_P_TEST["n_samples"],
+    help=f"Number of forward passes / weight samples for uncertainty (default: {_P_TEST['n_samples']}).",
+)
+@click.option(
+    "--output-dir",
+    type=str,
+    default=None,
+    help="Directory for the box plot (default: saved/compare).",
+)
+@click.option(
+    "--trained-dir",
+    type=str,
+    default=None,
+    help="Base directory containing trained model artefacts (default: saved).",
+)
+def compare_box(
+    methods: tuple[str, ...],
+    test_case: tuple[int, ...],
+    data_dir: str,
+    n_samples: int,
+    output_dir: str | None,
+    trained_dir: str | None,
+) -> None:
+    """Compare methods via a CRPS box plot over test cases."""
+    from qmodem.application import compare_box as _compare_box
+
+    _compare_box(
+        methods=list(methods) if methods else None,
+        test_cases=list(test_case) if test_case else None,
+        data_dir=data_dir,
+        n_samples=n_samples,
+        output_dir=output_dir,
+        trained_dir=trained_dir,
+    )

@@ -42,6 +42,14 @@ class TestCLIHelp:
         assert "--methods" in result.output
         assert "--n-samples" in result.output
 
+    def test_compare_box_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["compare-box", "--help"])
+        assert result.exit_code == 0
+        assert "--methods" in result.output
+        assert "--test-case" in result.output
+        assert "--data-dir" in result.output
+
 
 class TestCLIValidation:
     """Verify that invalid inputs are rejected."""
@@ -65,5 +73,11 @@ class TestCLIValidation:
     def test_compare_invalid_method(self) -> None:
         runner = CliRunner()
         result = runner.invoke(cli, ["compare", "--methods", "invalid_method"])
+        assert result.exit_code != 0
+        assert "Invalid value" in result.output or "invalid_method" in result.output
+
+    def test_compare_box_invalid_method(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["compare-box", "--methods", "invalid_method"])
         assert result.exit_code != 0
         assert "Invalid value" in result.output or "invalid_method" in result.output
