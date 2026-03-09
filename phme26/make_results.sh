@@ -6,8 +6,9 @@
 #
 # Usage:
 #   cd qmodem/
-#   bash phme26/make_results.sh           # skip data generation
-#   bash phme26/make_results.sh --gen     # regenerate data first
+#   bash phme26/make_results.sh              # skip data generation, train all methods
+#   bash phme26/make_results.sh --gen        # regenerate data first, then train
+#   bash phme26/make_results.sh --no-train   # skip training, use existing checkpoints
 #
 # Prerequisites:
 #   uv sync                   # install dependencies (once)
@@ -31,9 +32,11 @@ METHODS="het_cnn mcd_cnn bayes_cnn qavi_cnn"
 # Parse arguments
 # ------------------------------------------------------------------
 GENERATE=false
+TRAIN=true
 for arg in "$@"; do
     case "$arg" in
         --gen) GENERATE=true ;;
+        --no-train) TRAIN=false ;;
         *) echo "Unknown option: $arg"; exit 1 ;;
     esac
 done
@@ -73,18 +76,27 @@ for i in $(seq 0 $((N_TEST_CASES - 1))); do
     fi
 done
 # ------------------------------------------------------------------
-# 2. Train all methods
+# 2. Train all methods (skip with --no-train)
 # ------------------------------------------------------------------
-for method in $METHODS; do
-    echo "============================================================"
-    echo "Training: $method"
-    echo "============================================================"
-    qmodem train "$method" \
-        --train-data-path "$DATA_DIR/train.npz" \
-        --val-data-path "$DATA_DIR/val.npz" \
-        --output-dir "$TRAINED_DIR"
+if [ "$TRAIN" = true ]; then
+    for method in $METHODS; do
+        echo "============================================================"
+        echo "Training: $method"
+        echo "============================================================"
+        qmodem train "$method" \
+            --train-data-path "$DATA_DIR/train.npz" \
+            --val-data-path "$DATA_DIR/val.npz" \
+            --output-dir "$TRAINED_DIR"
+        echo
+    done
+else
+    echo "Skipping training (--no-train). Using checkpoints from $TRAINED_DIR"
+    if [ -z "$(ls -A "$TRAINED_DIR" 2>/dev/null)" ]; then
+        echo "ERROR: $TRAINED_DIR is empty. Run without --no-train to train first."
+        exit 1
+    fi
     echo
-done
+fi
 
 # ------------------------------------------------------------------
 # 3. Compare all methods on each test case
