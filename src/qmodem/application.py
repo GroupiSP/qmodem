@@ -71,10 +71,10 @@ from qmodem.utils import (
 METHODS = ("bayes_cnn", "het_cnn", "mcd_cnn", "qavi_cnn")
 
 METHOD_LABELS: dict[str, str] = {
-    "bayes_cnn": "Bayesian CNN (Flipout)",
-    "het_cnn": "Heteroscedastic CNN",
-    "mcd_cnn": "MC Dropout CNN",
-    "qavi_cnn": "QAVI CNN",
+    "bayes_cnn": "BNN",
+    "het_cnn": "HNN",
+    "mcd_cnn": "MCD",
+    "qavi_cnn": "QAVI",
 }
 
 
@@ -389,11 +389,11 @@ def populate_rul_ax(
         alpha=0.2,
         label="Predicted RUL 95% CI",
     )
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("RUL [s]")
-    ax.set_title(f"{method_label} RUL Predictions with Uncertainty")
+    ax.set_xlabel("Time [s]", fontsize=18)
+    ax.set_ylabel("RUL [s]", fontsize=18)
+    ax.set_title(f"{method_label} RUL Predictions with Uncertainty", fontsize=20)
     ax.set_ylim(bottom=0.0)
-    ax.legend()
+    ax.legend(fontsize=16)
     ax.grid(True, alpha=0.3)
 
 
@@ -412,11 +412,11 @@ def populate_crps_ax(
         method_label: Human-readable method name for the legend.
     """
     ax.plot(ts_eval, crps_values, marker="o", linewidth=2, label=method_label)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("CRPS [s]")
-    ax.set_title(f"CRPS Over Time — {method_label} vs Simulator")
-    ax.set_ylim(bottom=0.0)
-    ax.legend()
+    ax.set_xlabel("Time [s]", fontsize=18)
+    ax.set_ylabel("CRPS [s]", fontsize=18)
+    ax.set_title(f"CRPS Over Time — {method_label} vs Simulator", fontsize=20)
+    ax.set_ylim(bottom=0.0, top=200.0)
+    ax.legend(fontsize=16)
     ax.grid(True, alpha=0.3)
 
 
@@ -1524,7 +1524,7 @@ def compare(
     fig, axes = plt.subplots(
         1,
         n_methods + 1,
-        figsize=(7 * (n_methods + 1), 6),
+        figsize=(8 * (n_methods + 1), 6),
     )
     if n_methods + 1 == 1:
         axes = [axes]
@@ -1548,7 +1548,8 @@ def compare(
         populate_crps_ax(
             crps_ax, result.ts_eval, result.crps_values, result.method_label
         )
-    crps_ax.set_title("CRPS Over Time — All Methods")
+    # override title of the "populate" function
+    crps_ax.set_title("CRPS Over Time — All Methods", fontsize=20)
 
     fig.tight_layout()
     test_case_stem = Path(test_data_path).stem
