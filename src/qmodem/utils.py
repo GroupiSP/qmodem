@@ -9,7 +9,10 @@ import lib_eod_simulation as les
 import orbax.checkpoint as ocp
 from flax import nnx
 
-from qmodem.data import BATT_CONFIG_PATH
+# ---------------------------------------------------------------------------
+# Shared paths
+# ---------------------------------------------------------------------------
+BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
 
 # ---------------------------------------------------------------------------
 # Shared seeds

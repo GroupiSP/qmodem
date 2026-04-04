@@ -8,8 +8,6 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
 
-BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
-
 
 def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.ndarray:
     """Back-calculates RUL values for a linear degradation model.
