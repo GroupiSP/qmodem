@@ -7,6 +7,9 @@ import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
+import pandas as pd
+
+from .utils import CMAPSS_DIR_PATH
 
 
 def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.ndarray:
@@ -218,3 +221,181 @@ class BatterySimulationTimeWindowSource:
             obj.y = y_array
 
         return obj
+
+
+class CMAPSSAnalyst:
+    constant_sensors: list[str] = [f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]]
+    column_names: list[str] = [
+        "unit_id",
+        "time_cycles",
+        "op_setting_1",
+        "op_setting_2",
+        "op_setting_3",
+    ] + [f"sensor_{i}" for i in range(1, 22)]
+
+    def __init__(self, relative_test_size: float = 0.2) -> None:
+        # Define the attributes
+        self.df: pd.DataFrame | None = None
+        self.relative_test_size: float = relative_test_size
+        self.test_df: pd.DataFrame | None = None
+        self.train_df: pd.DataFrame | None = None
+        self.variable_sensors: list[str] = [
+            f"sensor_{i}"
+            for i in range(1, 22)
+            if f"sensor_{i}" not in self.constant_sensors
+        ]
+
+        # Steps
+        self._load_cmapss_fd001_train()
+        self._add_rul()
+        self._split_train_test()
+        self._exclude_constant_sensors()
+
+    def _load_cmapss_fd001_train(
+        self,
+    ) -> None:
+        # load the data
+        self.df = pd.read_csv(
+            CMAPSS_DIR_PATH / "train_FD001.txt",
+            sep=r"\s+",
+            header=None,
+            names=self.column_names,
+        )
+
+    def _add_rul(self) -> None:
+        # add the RUL column
+        self.df["RUL"] = self.df.groupby("unit_id")["time_cycles"].transform(
+            lambda x: x.max() - x
+        )
+
+    def _split_train_test(self) -> None:
+        # shuffle the unit_ids (engine IDs)
+        unit_ids = self.df["unit_id"].unique()
+
+        # note: the sampling follows the numpy random state.
+        # If reproducibility is desired, set the seed with np.random.seed()
+        # before this step.
+        shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
+
+        # copy the dataframe to a temp variable to avoid modifying the original
+        df = self.df.copy()
+        df["unit_id"] = pd.Categorical(
+            df["unit_id"], categories=shuffled_unit_ids, ordered=True
+        )
+
+        df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
+
+        num_units = df["unit_id"].nunique()
+        num_test_units = int(num_units * self.relative_test_size)
+        test_unit_ids = shuffled_unit_ids[:num_test_units]
+        train_unit_ids = shuffled_unit_ids[num_test_units:]
+
+        self.train_df = df[df["unit_id"].isin(train_unit_ids)]
+        self.test_df = df[df["unit_id"].isin(test_unit_ids)]
+
+    def _exclude_constant_sensors(self) -> None:
+        # drop the constant sensors
+        self.train_df.drop(columns=self.constant_sensors, inplace=True)
+        self.test_df.drop(columns=self.constant_sensors, inplace=True)
+
+    @staticmethod
+    def _modified_mann_kendall(t: np.ndarray, y: np.ndarray) -> float:
+        """Computes the modified Mann-Kendall index of a time series.
+
+        Args:
+            t (np.ndarray): time steps of the time series (assumed in ascending order)
+            y (np.ndarray): values of the time series
+
+        Returns:
+            float: value of the modified Mann-Kendall index
+        """
+        mk = 0.0
+        sum_of_distances = 0.0
+        for i in range(len(t)):
+            for j in range(i + 1, len(t)):
+                mk += (t[j] - t[i]) * np.sign(y[j] - y[i])
+                sum_of_distances += t[j] - t[i]
+        if sum_of_distances == 0:  # fail safe
+            return 0.0
+        return mk / sum_of_distances
+
+    def compute_monotonicity(self) -> pd.Series:
+        """Computes the monotonicity of each sensor in the training set.
+
+        Returns:
+            A pandas Series with sensor names as index and monotonicity values as data.
+        """
+        monotonicity = {}
+        for sensor_name in self.variable_sensors:
+            monotonicity[sensor_name] = (
+                self.train_df.groupby("unit_id")
+                .apply(
+                    lambda x: self._modified_mann_kendall(
+                        x["time_cycles"].values, x[sensor_name].values
+                    )
+                )
+                .mean()
+            )
+
+        return pd.Series(monotonicity)
+
+    def compute_prognosability(self) -> pd.Series:
+        """Computes the prognosability of each sensor in the training set.
+
+        Returns:
+            A pandas Series with sensor names as index and prognosability values as data.
+        """
+        lasts_df = self.train_df.groupby("unit_id")[self.variable_sensors].last()
+        firsts_df = self.train_df.groupby("unit_id")[self.variable_sensors].first()
+
+        return (lasts_df.std() / (firsts_df - lasts_df).abs().mean()).apply(
+            lambda x: np.exp(-x)
+        )
+
+    def compute_trendability(self) -> pd.Series:
+        """Computes the trendability of each sensor in the training set.
+
+        Returns:
+            A pandas Series with sensor names as index and trendability values as data.
+        """
+        trendability = {}
+        for sensor_name in self.variable_sensors:
+            pivot_table = self.train_df.pivot(
+                index="time_cycles", columns="unit_id", values=sensor_name
+            )
+            cov_matrix = pivot_table.cov()
+            stds = pivot_table.std()
+            rho_matrix = cov_matrix / (stds.values[:, None] * stds.values[None, :])
+            trendability[sensor_name] = np.abs(
+                rho_matrix.values[np.triu_indices_from(rho_matrix, k=1)]
+            ).min()
+
+        return pd.Series(trendability)
+
+    def compute_prognostic_metrics(self) -> pd.DataFrame:
+        """Computes all the prognostic metrics (monotonicity, prognosability,
+        trendability) and the sensor fitness for each sensor in the training set.
+
+        Returns:
+            A pandas DataFrame with sensor names as index and the metrics as columns. The dataframe is sorted by fitness in descending order.
+        """
+        metrics_df = pd.DataFrame(
+            {
+                "monotonicity": self.compute_monotonicity(),
+                "prognosability": self.compute_prognosability(),
+                "trendability": self.compute_trendability(),
+            }
+        )
+        # Use as index an incremental integer starting from 0 and add a column with the sensor names as first column
+        metrics_df.reset_index(drop=True, inplace=True)
+        metrics_df.insert(0, "sensor_name", self.variable_sensors)
+
+        # Calculate the fitness as the average of the absolute values of the three metrics
+        metrics_df["fitness"] = (
+            metrics_df[["monotonicity", "prognosability", "trendability"]]
+            .abs()
+            .mean(axis=1)
+        )
+        return metrics_df.sort_values(by="fitness", ascending=False).reset_index(
+            drop=True
+        )

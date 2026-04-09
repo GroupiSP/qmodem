@@ -7,6 +7,7 @@ from .application import (  # noqa: F401
 )
 from .data import (  # noqa: F401
     BatterySimulationTimeWindowSource,
+    CMAPSSAnalyst,
 )
 from .metadata import (  # noqa: F401
     BaseModelParams,
