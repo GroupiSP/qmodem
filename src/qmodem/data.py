@@ -225,13 +225,17 @@ class BatterySimulationTimeWindowSource:
 
 class CMAPSSAnalyst:
     constant_sensors: list[str] = [f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]]
-    column_names: list[str] = [
-        "unit_id",
-        "time_cycles",
-        "op_setting_1",
-        "op_setting_2",
-        "op_setting_3",
-    ] + [f"sensor_{i}" for i in range(1, 22)]
+    column_names: list[str] = (
+        [
+            "unit_id",
+            "time_cycles",
+            "op_setting_1",
+            "op_setting_2",
+            "op_setting_3",
+        ]
+        + [f"sensor_{i}" for i in range(1, 22)]
+        + ["RUL"]
+    )
 
     def __init__(self, relative_test_size: float = 0.2) -> None:
         # Define the attributes
