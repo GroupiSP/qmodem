@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from .utils import CMAPSS_DIR_PATH
 
@@ -403,3 +404,94 @@ class CMAPSSAnalyst:
         return metrics_df.sort_values(by="fitness", ascending=False).reset_index(
             drop=True
         )
+
+
+class CMAPSSDataSource:
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        train_or_test: str,
+        scaler: StandardScaler | MinMaxScaler | None = None,
+        window_size: int | None = None,
+    ) -> None:
+        """Note about the scaler.
+
+        In case the data source serves a training set, the scaler should be a fresh one.
+        For test sets, the scaler should have already been fitted on the training data,
+        so that the same scaling is applied to both train and test sets.
+        """
+        self.df: pd.DataFrame = df
+        self.scaler: StandardScaler | MinMaxScaler | None = scaler
+        self.sensor_names: list[str] = [
+            col for col in df.columns if col.startswith("sensor_")
+        ]
+        self.train_or_test: str = train_or_test
+        self.unit_ids: np.ndarray = df["unit_id"].unique()
+        self.window_size: int | None = window_size
+        self.X: jax.Array | None = None
+        self.y: jax.Array | None = None
+
+        # input validation (train/test flag)
+        if self.train_or_test not in ["train", "test"]:
+            raise ValueError(
+                f"train_or_test must be 'train' or 'test', got {self.train_or_test}"
+            )
+
+        if self.window_size is None:
+            print(
+                "Window size not specified. X and y will contain the full sequences for every unit and have"
+                "the dimension relative to the time windows set to 1."
+            )
+
+        # Steps
+        self._scale_sensor_data()
+        self._make_windows()
+
+    def _scale_sensor_data(self) -> None:
+        """Scales the sensor data in the dataframe using the provided scaler."""
+        if self.scaler is None:
+            return
+
+        if self.train_or_test == "train":
+            self.df[self.sensor_names] = self.scaler.fit_transform(
+                self.df[self.sensor_names]
+            )
+        else:
+            self.df[self.sensor_names] = self.scaler.transform(
+                self.df[self.sensor_names]
+            )
+
+    def _make_windows(self) -> None:
+        """Extracts sliding time windows and corresponding RUL targets from the
+        dataframe.
+
+        Stride is equal to 1, and windows are not allowed to cross unit_id boundaries.
+        Notice that the RUL target for a window is the RUL at the end of that window.
+        """
+        sequences = []
+        targets = []
+
+        for unit_id in self.unit_ids:
+            unit_df = self.df[self.df["unit_id"] == unit_id].sort_values("time_cycles")
+            features = unit_df[self.sensor_names].values
+            labels = unit_df["RUL"].values
+
+            if self.window_size is None:
+                # If window_size is not specified, use the full sequence as a single window
+                sequences.append(features)
+                targets.append(labels)
+            else:
+                for i in range(len(unit_df) - self.window_size + 1):
+                    window = features[i : i + self.window_size]
+                    window_target = labels[i + self.window_size - 1]
+                    sequences.append(window)
+                    targets.append(window_target)
+
+        self.X = jnp.array(sequences)
+        self.y = jnp.array(targets).reshape(-1, 1)
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
+        return self.X[record_key], self.y[record_key]
