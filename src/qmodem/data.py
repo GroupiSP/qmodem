@@ -147,13 +147,15 @@ def create_dataloaders(
     batch_size: int,
     seed_train: int,
     seed_val: int,
+    shuffle_train: bool = True,
+    shuffle_val: bool = False,
     *,
     drop_remainder: bool = False,
 ) -> tuple[Any, Any]:
     """Create Grain DataLoaders for training and validation."""
 
     sampler_train = IndexSampler(
-        num_records=len(ds_train), num_epochs=1, shuffle=True, seed=seed_train
+        num_records=len(ds_train), num_epochs=1, shuffle=shuffle_train, seed=seed_train
     )
     dataloader_train = DataLoader(
         data_source=ds_train,
@@ -163,7 +165,7 @@ def create_dataloaders(
     )
 
     sampler_val = IndexSampler(
-        num_records=len(ds_val), num_epochs=1, shuffle=False, seed=seed_val
+        num_records=len(ds_val), num_epochs=1, shuffle=shuffle_val, seed=seed_val
     )
     dataloader_val = DataLoader(
         data_source=ds_val,
