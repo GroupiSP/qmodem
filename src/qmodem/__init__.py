@@ -9,6 +9,7 @@ from .data import (  # noqa: F401
     BatterySimulationTimeWindowSource,
     CMAPSSAnalyst,
     CMAPSSDataSource,
+    split_cmapss,
 )
 from .metadata import (  # noqa: F401
     BaseModelParams,

@@ -97,6 +97,47 @@ def _make_windows(
     return windows, targets
 
 
+def split_cmapss(
+    df: pd.DataFrame, relative_subset_size: float
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Splits the CMAPSS dataframe into two sub-dataframes.
+
+    Args:
+        df: The CMAPSS dataframe to split.
+        relative_subset_size: The fraction of units to include in the second subset.
+
+    Returns:
+        The two sub-dataframes split from the original.
+    """
+    # shuffle the unit_ids (engine IDs)
+    unit_ids = df["unit_id"].unique()
+
+    # note: the sampling follows the numpy random state.
+    # If reproducibility is desired, set the seed with np.random.seed()
+    # before this step.
+    shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
+
+    # copy the dataframe to a temp variable to avoid modifying the original
+    df = df.copy()
+    df["unit_id"] = pd.Categorical(
+        df["unit_id"], categories=shuffled_unit_ids, ordered=True
+    )
+
+    df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
+
+    num_units = df["unit_id"].nunique()
+
+    # Note: `train` and `test` in the names are just labels for the two splits.
+    num_test_units = int(num_units * relative_subset_size)
+    test_unit_ids = shuffled_unit_ids[:num_test_units]
+    train_unit_ids = shuffled_unit_ids[num_test_units:]
+
+    train_df = df[df["unit_id"].isin(train_unit_ids)]
+    test_df = df[df["unit_id"].isin(test_unit_ids)]
+
+    return train_df, test_df
+
+
 class BatterySimulationTimeWindowSource:
     def __init__(
         self,
@@ -225,6 +266,16 @@ class BatterySimulationTimeWindowSource:
 
 
 class CMAPSSAnalyst:
+    """Loads, preprocesses and analyses the CMAPSS FD001/train dataset.
+
+    Attributes:
+        df: The full dataframe loaded from the original CMAPSS FD001/train file, with the RUL column added.
+        relative_test_size: The fraction of unit_ids to allocate to the test set (the rest goes to the train set).
+        test_df: The dataframe containing only the test set.
+        train_df: The dataframe containing only the train set.
+        variable_sensors: The list of sensor column names that are not constant across the whole dataset.
+    """
+
     constant_sensors: list[str] = [f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]]
     column_names: list[str] = (
         [
@@ -253,7 +304,7 @@ class CMAPSSAnalyst:
         # Steps
         self._load_cmapss_fd001_train()
         self._add_rul()
-        self._split_train_test()
+        self.train_df, self.test_df = split_cmapss(self.df, self.relative_test_size)
         self._exclude_constant_sensors()
 
     def _load_cmapss_fd001_train(
@@ -272,31 +323,6 @@ class CMAPSSAnalyst:
         self.df["RUL"] = self.df.groupby("unit_id")["time_cycles"].transform(
             lambda x: x.max() - x
         )
-
-    def _split_train_test(self) -> None:
-        # shuffle the unit_ids (engine IDs)
-        unit_ids = self.df["unit_id"].unique()
-
-        # note: the sampling follows the numpy random state.
-        # If reproducibility is desired, set the seed with np.random.seed()
-        # before this step.
-        shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
-
-        # copy the dataframe to a temp variable to avoid modifying the original
-        df = self.df.copy()
-        df["unit_id"] = pd.Categorical(
-            df["unit_id"], categories=shuffled_unit_ids, ordered=True
-        )
-
-        df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
-
-        num_units = df["unit_id"].nunique()
-        num_test_units = int(num_units * self.relative_test_size)
-        test_unit_ids = shuffled_unit_ids[:num_test_units]
-        train_unit_ids = shuffled_unit_ids[num_test_units:]
-
-        self.train_df = df[df["unit_id"].isin(train_unit_ids)]
-        self.test_df = df[df["unit_id"].isin(test_unit_ids)]
 
     def _exclude_constant_sensors(self) -> None:
         # drop the constant sensors
