@@ -9,6 +9,7 @@ from .data import (  # noqa: F401
     BatterySimulationTimeWindowSource,
     CMAPSSAnalyst,
     CMAPSSDataSource,
+    create_dataloaders,
     split_cmapss,
 )
 from .metadata import (  # noqa: F401
@@ -27,6 +28,7 @@ from .metadata import (  # noqa: F401
 from .module import (  # noqa: F401
     HNNV0,
     HNNV1,
+    LSTM,
     MCDCNN1D,
     QAVICNN1D,
     BayesCNN1D,

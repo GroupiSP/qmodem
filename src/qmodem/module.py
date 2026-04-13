@@ -866,6 +866,44 @@ class QAVICNN1D(nnx.Module):
         return self.gaussian_block(x)
 
 
+class LSTM(nnx.Module):
+    """Layers of LSTM and dropout with a final linear layer to output the prediction."""
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        dropout_rate: float = 0.1,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.input_size: int = input_size
+        self.hidden_size: int = hidden_size
+        self.dropout_rate: float = dropout_rate
+
+        # Layers
+        self.lstm_layer_1 = nnx.RNN(
+            nnx.OptimizedLSTMCell(input_size, hidden_size, rngs=rngs),
+            return_carry=True,  # Provide the hidden states for every time step to the next layer.
+        )
+        self.dropout_1 = nnx.Dropout(dropout_rate)
+        self.lstm_layer_2 = nnx.RNN(
+            nnx.OptimizedLSTMCell(hidden_size, hidden_size, rngs=rngs),
+            return_carry=False,  # Only output the final hidden state.
+        )
+        self.dropout_2 = nnx.Dropout(dropout_rate)
+        self.linear = nnx.Linear(hidden_size, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
+        # x shape: (batch, sequence_length, n_features)
+        carry_1, out_1 = self.lstm_layer_1(x)
+        x = self.dropout_1(out_1, rngs=rngs)
+        out_2 = self.lstm_layer_2(x, initial_carry=carry_1)
+        x = self.dropout_2(out_2, rngs=rngs)
+        x = self.linear(x)
+        return x[:, -1, :]  # Return the output of the last time step (predicted RUL)
+
+
 def nll_loss(model: nnx.Module, batch: jax.Array, beta: float = 0.0) -> jax.Array:
     """Negative log-likelihood loss based on a Gaussian predictive distribution.
 
