@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, SupportsIndex
+from typing import Any, Protocol, SupportsIndex
 
 import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
 import pandas as pd
+from grain import DataLoader
+from grain.samplers import IndexSampler
+from grain.transforms import Batch
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from .utils import CMAPSS_DIR_PATH
@@ -136,6 +139,60 @@ def split_cmapss(
     test_df = df[df["unit_id"].isin(test_unit_ids)]
 
     return train_df, test_df
+
+
+def create_dataloaders(
+    ds_train: DataSource,
+    ds_val: DataSource,
+    batch_size: int,
+    seed_train: int,
+    seed_val: int,
+    *,
+    drop_remainder: bool = False,
+) -> tuple[Any, Any]:
+    """Create Grain DataLoaders for training and validation."""
+
+    sampler_train = IndexSampler(
+        num_records=len(ds_train), num_epochs=1, shuffle=True, seed=seed_train
+    )
+    dataloader_train = DataLoader(
+        data_source=ds_train,
+        sampler=sampler_train,
+        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
+        worker_count=0,
+    )
+
+    sampler_val = IndexSampler(
+        num_records=len(ds_val), num_epochs=1, shuffle=False, seed=seed_val
+    )
+    dataloader_val = DataLoader(
+        data_source=ds_val,
+        sampler=sampler_val,
+        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
+        worker_count=0,
+    )
+
+    return dataloader_train, dataloader_val
+
+
+class DataSource(Protocol):
+    """Protocol for data sources that can be used with Grain DataLoaders."""
+
+    def __len__(self) -> int:
+        """Returns the number of records in the dataset."""
+        ...
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
+        """Retrieves the features and target for the given record key.
+
+        Args:
+            record_key (SupportsIndex): An index or slice to specify which record(s) to retrieve.
+        Returns:
+            tuple[jax.Array, jax.Array]: A tuple of (features, target).
+                - features: A jax.Array containing the input features for the specified record(s).
+                - target: A jax.Array containing the target values for the specified record(s).
+        """
+        ...
 
 
 class BatterySimulationTimeWindowSource:
