@@ -492,6 +492,18 @@ class CMAPSSAnalyst:
 
 
 class CMAPSSDataSource:
+    """Grain DataSource for CMAPSS data. At init time, the data is scaled and time-
+    windowed across each units (engine IDs). The time windows of sensor readings are
+    stored in the ``X`` attribute, whereas the ``y`` attribute contains the RUL labels
+    at the end of each time window.
+
+    Note about the scaler.
+
+    In case the data source serves a training set, the scaler should be a fresh one. For
+    test sets, the scaler should have already been fitted on the training data, so that
+    the same scaling is applied to both train and test sets.
+    """
+
     def __init__(
         self,
         df: pd.DataFrame,
@@ -499,12 +511,6 @@ class CMAPSSDataSource:
         scaler: StandardScaler | MinMaxScaler | None = None,
         window_size: int | None = None,
     ) -> None:
-        """Note about the scaler.
-
-        In case the data source serves a training set, the scaler should be a fresh one.
-        For test sets, the scaler should have already been fitted on the training data,
-        so that the same scaling is applied to both train and test sets.
-        """
         self.df: pd.DataFrame = df
         self.scaler: StandardScaler | MinMaxScaler | None = scaler
         self.sensor_names: list[str] = [
@@ -530,7 +536,7 @@ class CMAPSSDataSource:
 
         # Steps
         self._scale_sensor_data()
-        self._make_windows()
+        self._make_data_arrays()
 
     def _scale_sensor_data(self) -> None:
         """Scales the sensor data in the dataframe using the provided scaler."""
@@ -546,34 +552,50 @@ class CMAPSSDataSource:
                 self.df[self.sensor_names]
             )
 
-    def _make_windows(self) -> None:
-        """Extracts sliding time windows and corresponding RUL targets from the
-        dataframe.
+    def _make_data_arrays(self) -> None:
+        """Extracts sliding time windows and corresponding RUL targets for all units in
+        the dataframe.
 
         Stride is equal to 1, and windows are not allowed to cross unit_id boundaries.
         Notice that the RUL target for a window is the RUL at the end of that window.
         """
-        sequences = []
-        targets = []
+        unit_features = []
+        unit_labels = []
 
         for unit_id in self.unit_ids:
-            unit_df = self.df[self.df["unit_id"] == unit_id].sort_values("time_cycles")
-            features = unit_df[self.sensor_names].values
-            labels = unit_df["RUL"].values
+            features, labels = self.get_unit_arrays(unit_id, self.window_size)
+            unit_features.append(features)
+            unit_labels.append(labels)
 
-            if self.window_size is None:
-                # If window_size is not specified, use the full sequence as a single window
-                sequences.append(features)
-                targets.append(labels)
-            else:
-                for i in range(len(unit_df) - self.window_size + 1):
-                    window = features[i : i + self.window_size]
-                    window_target = labels[i + self.window_size - 1]
-                    sequences.append(window)
-                    targets.append(window_target)
+        self.X = jnp.concat(unit_features, axis=0)
+        self.y = jnp.concat(unit_labels, axis=0)
 
-        self.X = jnp.array(sequences)
-        self.y = jnp.array(targets).reshape(-1, 1)
+    def get_unit_arrays(
+        self, unit_id: int, window_size: int | None = None
+    ) -> tuple[jax.Array, jax.Array]:
+        """Extracts time windows and corresponding RUL targets for a specific unit.
+
+        The window size overrides the one provided at init time.
+        """
+        unit_df = self.df[self.df["unit_id"] == unit_id].sort_values("time_cycles")
+        features = unit_df[self.sensor_names].values
+        labels = unit_df["RUL"].values
+
+        if window_size is None:
+            # If window_size is not specified, use the full sequence as a single window
+            # Notice that the time-window dimension is set to 1.
+            return jnp.array(features).reshape(1, *features.shape), jnp.array(
+                labels
+            ).reshape(1, -1)
+        else:
+            sequences = []
+            targets = []
+            for i in range(len(unit_df) - window_size + 1):
+                window = features[i : i + window_size]
+                window_target = labels[i + window_size - 1]
+                sequences.append(window)
+                targets.append(window_target)
+            return jnp.array(sequences), jnp.array(targets).reshape(-1, 1)
 
     def __len__(self) -> int:
         return len(self.y)
