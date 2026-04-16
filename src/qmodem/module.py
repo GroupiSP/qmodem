@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional, Protocol, Sequence
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
+
+
+class RandomCallModel(Protocol):
+    def __call__(self, x, rngs=nnx.Rngs) -> jax.Array: ...
 
 
 class SimpleCNN1D(nnx.Module):
@@ -902,6 +906,25 @@ class LSTM(nnx.Module):
         x = self.dropout_2(out_2, rngs=rngs)
         x = self.linear(x)
         return x[:, -1, :]  # Return the output of the last time step (predicted RUL)
+
+
+def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Array:
+    """Generate MC samples from a model with stochastic forward pass.
+
+    Args:
+        model: A model that accepts RNGs in its forward pass (e.g. MC Dropout).
+        x: Input data for which to generate predictions, shape (n_x, ...).
+        keys: Array of JAX PRNG keys for sampling. Length determines the number
+            of MC samples.
+    Returns:
+        jax.Array: MC samples with shape (n_samples, n_x, n_outputs).
+    """
+
+    @nnx.vmap(in_axes=(None, None, 0), out_axes=1)
+    def forward(model, x, key):
+        return model(x, rngs=nnx.Rngs(key))
+
+    return forward(model, x, keys)
 
 
 def nll_loss(model: nnx.Module, batch: jax.Array, beta: float = 0.0) -> jax.Array:
