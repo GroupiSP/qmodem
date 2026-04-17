@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, SupportsIndex
+from typing import Any, Protocol, SupportsIndex
 
 import jax
 import jax.numpy as jnp
 import lib_eod_simulation as les
 import numpy as np
+import pandas as pd
+from grain import DataLoader
+from grain.samplers import IndexSampler
+from grain.transforms import Batch
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
+from .utils import CMAPSS_DIR_PATH
 
 
 def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.ndarray:
@@ -93,6 +98,103 @@ def _make_windows(
         targets.append(0.0)
 
     return windows, targets
+
+
+def split_cmapss(
+    df: pd.DataFrame, relative_subset_size: float
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Splits the CMAPSS dataframe into two sub-dataframes.
+
+    Args:
+        df: The CMAPSS dataframe to split.
+        relative_subset_size: The fraction of units to include in the second subset.
+
+    Returns:
+        The two sub-dataframes split from the original.
+    """
+    # shuffle the unit_ids (engine IDs)
+    unit_ids = df["unit_id"].unique()
+
+    # note: the sampling follows the numpy random state.
+    # If reproducibility is desired, set the seed with np.random.seed()
+    # before this step.
+    shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
+
+    # copy the dataframe to a temp variable to avoid modifying the original
+    df = df.copy()
+    df["unit_id"] = pd.Categorical(
+        df["unit_id"], categories=shuffled_unit_ids, ordered=True
+    )
+
+    df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
+
+    num_units = df["unit_id"].nunique()
+
+    # Note: `train` and `test` in the names are just labels for the two splits.
+    num_test_units = int(num_units * relative_subset_size)
+    test_unit_ids = shuffled_unit_ids[:num_test_units]
+    train_unit_ids = shuffled_unit_ids[num_test_units:]
+
+    train_df = df[df["unit_id"].isin(train_unit_ids)]
+    test_df = df[df["unit_id"].isin(test_unit_ids)]
+
+    return train_df, test_df
+
+
+def create_dataloaders(
+    ds_train: DataSource,
+    ds_val: DataSource,
+    batch_size: int,
+    seed_train: int,
+    seed_val: int,
+    shuffle_train: bool = True,
+    shuffle_val: bool = False,
+    *,
+    drop_remainder: bool = False,
+) -> tuple[Any, Any]:
+    """Create Grain DataLoaders for training and validation."""
+
+    sampler_train = IndexSampler(
+        num_records=len(ds_train), num_epochs=1, shuffle=shuffle_train, seed=seed_train
+    )
+    dataloader_train = DataLoader(
+        data_source=ds_train,
+        sampler=sampler_train,
+        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
+        worker_count=0,
+    )
+
+    sampler_val = IndexSampler(
+        num_records=len(ds_val), num_epochs=1, shuffle=shuffle_val, seed=seed_val
+    )
+    dataloader_val = DataLoader(
+        data_source=ds_val,
+        sampler=sampler_val,
+        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
+        worker_count=0,
+    )
+
+    return dataloader_train, dataloader_val
+
+
+class DataSource(Protocol):
+    """Protocol for data sources that can be used with Grain DataLoaders."""
+
+    def __len__(self) -> int:
+        """Returns the number of records in the dataset."""
+        ...
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
+        """Retrieves the features and target for the given record key.
+
+        Args:
+            record_key (SupportsIndex): An index or slice to specify which record(s) to retrieve.
+        Returns:
+            tuple[jax.Array, jax.Array]: A tuple of (features, target).
+                - features: A jax.Array containing the input features for the specified record(s).
+                - target: A jax.Array containing the target values for the specified record(s).
+        """
+        ...
 
 
 class BatterySimulationTimeWindowSource:
@@ -220,3 +322,283 @@ class BatterySimulationTimeWindowSource:
             obj.y = y_array
 
         return obj
+
+
+class CMAPSSAnalyst:
+    """Loads, preprocesses and analyses the CMAPSS FD001/train dataset.
+
+    Attributes:
+        df: The full dataframe loaded from the original CMAPSS FD001/train file, with the RUL column added.
+        relative_test_size: The fraction of unit_ids to allocate to the test set (the rest goes to the train set).
+        test_df: The dataframe containing only the test set.
+        train_df: The dataframe containing only the train set.
+        variable_sensors: The list of sensor column names that are not constant across the whole dataset.
+    """
+
+    constant_sensors: list[str] = [f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]]
+    column_names: list[str] = (
+        [
+            "unit_id",
+            "time_cycles",
+            "op_setting_1",
+            "op_setting_2",
+            "op_setting_3",
+        ]
+        + [f"sensor_{i}" for i in range(1, 22)]
+        + ["RUL"]
+    )
+
+    def __init__(self, relative_test_size: float = 0.2) -> None:
+        # Define the attributes
+        self.df: pd.DataFrame | None = None
+        self.relative_test_size: float = relative_test_size
+        self.test_df: pd.DataFrame | None = None
+        self.train_df: pd.DataFrame | None = None
+        self.variable_sensors: list[str] = [
+            f"sensor_{i}"
+            for i in range(1, 22)
+            if f"sensor_{i}" not in self.constant_sensors
+        ]
+
+        # Steps
+        self._load_cmapss_fd001_train()
+        self._add_rul()
+        self.train_df, self.test_df = split_cmapss(self.df, self.relative_test_size)
+        self._exclude_constant_sensors()
+
+    def _load_cmapss_fd001_train(
+        self,
+    ) -> None:
+        # load the data
+        self.df = pd.read_csv(
+            CMAPSS_DIR_PATH / "train_FD001.txt",
+            sep=r"\s+",
+            header=None,
+            names=self.column_names,
+        )
+
+    def _add_rul(self) -> None:
+        # add the RUL column
+        self.df["RUL"] = self.df.groupby("unit_id")["time_cycles"].transform(
+            lambda x: x.max() - x
+        )
+
+    def _exclude_constant_sensors(self) -> None:
+        # drop the constant sensors
+        self.train_df.drop(columns=self.constant_sensors, inplace=True)
+        self.test_df.drop(columns=self.constant_sensors, inplace=True)
+
+    @staticmethod
+    def _modified_mann_kendall(t: np.ndarray, y: np.ndarray) -> float:
+        """Computes the modified Mann-Kendall index of a time series.
+
+        Args:
+            t (np.ndarray): time steps of the time series (assumed in ascending order)
+            y (np.ndarray): values of the time series
+
+        Returns:
+            float: value of the modified Mann-Kendall index
+        """
+        mk = 0.0
+        sum_of_distances = 0.0
+        for i in range(len(t)):
+            for j in range(i + 1, len(t)):
+                mk += (t[j] - t[i]) * np.sign(y[j] - y[i])
+                sum_of_distances += t[j] - t[i]
+        if sum_of_distances == 0:  # fail safe
+            return 0.0
+        return mk / sum_of_distances
+
+    def compute_monotonicity(self) -> pd.Series:
+        """Computes the monotonicity of each sensor in the training set.
+
+        Returns:
+            A pandas Series with sensor names as index and monotonicity values as data.
+        """
+        monotonicity = {}
+        for sensor_name in self.variable_sensors:
+            monotonicity[sensor_name] = (
+                self.train_df.groupby("unit_id")
+                .apply(
+                    lambda x: self._modified_mann_kendall(
+                        x["time_cycles"].values, x[sensor_name].values
+                    )
+                )
+                .mean()
+            )
+
+        return pd.Series(monotonicity)
+
+    def compute_prognosability(self) -> pd.Series:
+        """Computes the prognosability of each sensor in the training set.
+
+        Returns:
+            A pandas Series with sensor names as index and prognosability values as data.
+        """
+        lasts_df = self.train_df.groupby("unit_id")[self.variable_sensors].last()
+        firsts_df = self.train_df.groupby("unit_id")[self.variable_sensors].first()
+
+        return (lasts_df.std() / (firsts_df - lasts_df).abs().mean()).apply(
+            lambda x: np.exp(-x)
+        )
+
+    def compute_trendability(self) -> pd.Series:
+        """Computes the trendability of each sensor in the training set.
+
+        Returns:
+            A pandas Series with sensor names as index and trendability values as data.
+        """
+        trendability = {}
+        for sensor_name in self.variable_sensors:
+            pivot_table = self.train_df.pivot(
+                index="time_cycles", columns="unit_id", values=sensor_name
+            )
+            cov_matrix = pivot_table.cov()
+            stds = pivot_table.std()
+            rho_matrix = cov_matrix / (stds.values[:, None] * stds.values[None, :])
+            trendability[sensor_name] = np.abs(
+                rho_matrix.values[np.triu_indices_from(rho_matrix, k=1)]
+            ).min()
+
+        return pd.Series(trendability)
+
+    def compute_prognostic_metrics(self) -> pd.DataFrame:
+        """Computes all the prognostic metrics (monotonicity, prognosability,
+        trendability) and the sensor fitness for each sensor in the training set.
+
+        Returns:
+            A pandas DataFrame with sensor names as index and the metrics as columns. The dataframe is sorted by fitness in descending order.
+        """
+        metrics_df = pd.DataFrame(
+            {
+                "monotonicity": self.compute_monotonicity(),
+                "prognosability": self.compute_prognosability(),
+                "trendability": self.compute_trendability(),
+            }
+        )
+        # Use as index an incremental integer starting from 0 and add a column with the sensor names as first column
+        metrics_df.reset_index(drop=True, inplace=True)
+        metrics_df.insert(0, "sensor_name", self.variable_sensors)
+
+        # Calculate the fitness as the average of the absolute values of the three metrics
+        metrics_df["fitness"] = (
+            metrics_df[["monotonicity", "prognosability", "trendability"]]
+            .abs()
+            .mean(axis=1)
+        )
+        return metrics_df.sort_values(by="fitness", ascending=False).reset_index(
+            drop=True
+        )
+
+
+class CMAPSSDataSource:
+    """Grain DataSource for CMAPSS data. At init time, the data is scaled and time-
+    windowed across each units (engine IDs). The time windows of sensor readings are
+    stored in the ``X`` attribute, whereas the ``y`` attribute contains the RUL labels
+    at the end of each time window.
+
+    Note about the scaler.
+
+    In case the data source serves a training set, the scaler should be a fresh one. For
+    test sets, the scaler should have already been fitted on the training data, so that
+    the same scaling is applied to both train and test sets.
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        train_or_test: str,
+        scaler: StandardScaler | MinMaxScaler | None = None,
+        window_size: int | None = None,
+    ) -> None:
+        self.df: pd.DataFrame = df
+        self.scaler: StandardScaler | MinMaxScaler | None = scaler
+        self.sensor_names: list[str] = [
+            col for col in df.columns if col.startswith("sensor_")
+        ]
+        self.train_or_test: str = train_or_test
+        self.unit_ids: np.ndarray = df["unit_id"].unique()
+        self.window_size: int | None = window_size
+        self.X: jax.Array | None = None
+        self.y: jax.Array | None = None
+
+        # input validation (train/test flag)
+        if self.train_or_test not in ["train", "test"]:
+            raise ValueError(
+                f"train_or_test must be 'train' or 'test', got {self.train_or_test}"
+            )
+
+        if self.window_size is None:
+            print(
+                "Window size not specified. X and y will contain the full sequences for every unit and have"
+                "the dimension relative to the time windows set to 1."
+            )
+
+        # Steps
+        self._scale_sensor_data()
+        self._make_data_arrays()
+
+    def _scale_sensor_data(self) -> None:
+        """Scales the sensor data in the dataframe using the provided scaler."""
+        if self.scaler is None:
+            return
+
+        if self.train_or_test == "train":
+            self.df[self.sensor_names] = self.scaler.fit_transform(
+                self.df[self.sensor_names]
+            )
+        else:
+            self.df[self.sensor_names] = self.scaler.transform(
+                self.df[self.sensor_names]
+            )
+
+    def _make_data_arrays(self) -> None:
+        """Extracts sliding time windows and corresponding RUL targets for all units in
+        the dataframe.
+
+        Stride is equal to 1, and windows are not allowed to cross unit_id boundaries.
+        Notice that the RUL target for a window is the RUL at the end of that window.
+        """
+        unit_features = []
+        unit_labels = []
+
+        for unit_id in self.unit_ids:
+            features, labels = self.get_unit_arrays(unit_id, self.window_size)
+            unit_features.append(features)
+            unit_labels.append(labels)
+
+        self.X = jnp.concat(unit_features, axis=0)
+        self.y = jnp.concat(unit_labels, axis=0)
+
+    def get_unit_arrays(
+        self, unit_id: int, window_size: int | None = None
+    ) -> tuple[jax.Array, jax.Array]:
+        """Extracts time windows and corresponding RUL targets for a specific unit.
+
+        The window size overrides the one provided at init time.
+        """
+        unit_df = self.df[self.df["unit_id"] == unit_id].sort_values("time_cycles")
+        features = unit_df[self.sensor_names].values
+        labels = unit_df["RUL"].values
+
+        if window_size is None:
+            # If window_size is not specified, use the full sequence as a single window
+            # Notice that the time-window dimension is set to 1.
+            return jnp.array(features).reshape(1, *features.shape), jnp.array(
+                labels
+            ).reshape(1, -1)
+        else:
+            sequences = []
+            targets = []
+            for i in range(len(unit_df) - window_size + 1):
+                window = features[i : i + window_size]
+                window_target = labels[i + window_size - 1]
+                sequences.append(window)
+                targets.append(window_target)
+            return jnp.array(sequences), jnp.array(targets).reshape(-1, 1)
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
+        return self.X[record_key], self.y[record_key]

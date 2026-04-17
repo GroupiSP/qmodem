@@ -35,13 +35,14 @@ def train_loop(
     n_epochs: int,
     dataloader_train: Iterable,
     dataloader_val: Iterable,
-    train_batch_fn: Callable[[Any], Any],
+    train_batch_fn: Callable[[Any], jax.Array],
     eval_batch_fn: Callable[[Any], jax.Array],
     *,
     early_stopper: EarlyStopper | None = None,
     print_every: int = 1,
     on_train_epoch_start: Callable[[], None] | None = None,
     on_val_epoch_start: Callable[[], None] | None = None,
+    on_validation_improvement: Callable[[], None] | None = None,
 ) -> tuple[float, int]:
     """Run a training loop with optional early stopping and graceful interruption.
 
@@ -68,7 +69,7 @@ def train_loop(
         print_every: Print progress every this many epochs (also prints epoch 1).
         on_train_epoch_start: Optional callback called before the training phase.
         on_val_epoch_start: Optional callback called before the validation phase.
-
+        on_validation_improvement: Optional callback called when validation loss improves.
     Returns:
         A tuple ``(best_val_loss, epochs_completed)`` where ``best_val_loss`` is
         the lowest validation loss observed and ``epochs_completed`` is the number
@@ -82,12 +83,10 @@ def train_loop(
             if on_train_epoch_start is not None:
                 on_train_epoch_start()
 
-            for batch in dataloader_train:
-                train_batch_fn(batch)
-
             train_losses = []
             for batch in dataloader_train:
-                train_losses.append(eval_batch_fn(batch))
+                loss = train_batch_fn(batch)
+                train_losses.append(loss)
 
             if on_val_epoch_start is not None:
                 on_val_epoch_start()
@@ -110,6 +109,8 @@ def train_loop(
 
             if val_loss < best_val_loss:
                 best_val_loss = float(val_loss)
+                if on_validation_improvement is not None:
+                    on_validation_improvement()
 
             if early_stopper is not None and early_stopper(val_loss):
                 break

@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import jax
+import jax.numpy as jnp
 import lib_eod_simulation as les
 import orbax.checkpoint as ocp
 from flax import nnx
 
-from qmodem.data import BATT_CONFIG_PATH
+# ---------------------------------------------------------------------------
+# Shared paths
+# ---------------------------------------------------------------------------
+BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
+CMAPSS_DIR_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "CMAPSSData"
 
 # ---------------------------------------------------------------------------
 # Shared seeds
@@ -210,3 +217,27 @@ def restore_model_from_checkpoint(
     graphdef, abstract_state = nnx.split(abstract_model)
     state_restored = checkpointer.restore(checkpoint_path, abstract_state)
     return nnx.merge(graphdef, state_restored)
+
+
+# ---------------------------------------------------------------------------
+# JAX utilities
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Statistics:
+    mean: jax.Array
+    std: jax.Array
+    p_025: jax.Array
+    p_975: jax.Array
+    count: int
+
+
+def get_statistics(arr: jax.Array, dim: int) -> Statistics:
+    """Compute mean, std, 2.5th and 97.5th percentiles along a specified dimension."""
+    mean = jnp.mean(arr, axis=dim)
+    std = jnp.std(arr, axis=dim)
+    p_025 = jnp.percentile(arr, 2.5, axis=dim)
+    p_975 = jnp.percentile(arr, 97.5, axis=dim)
+    count = arr.shape[dim]
+    return Statistics(mean=mean, std=std, p_025=p_025, p_975=p_975, count=count)

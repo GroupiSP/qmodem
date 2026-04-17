@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional, Protocol, Sequence
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
+
+
+class RandomCallModel(Protocol):
+    def __call__(self, x, rngs=nnx.Rngs) -> jax.Array: ...
 
 
 class SimpleCNN1D(nnx.Module):
@@ -864,6 +868,63 @@ class QAVICNN1D(nnx.Module):
 
         # GaussianBlock: (batch, n_filters) -> (batch, 2)
         return self.gaussian_block(x)
+
+
+class LSTM(nnx.Module):
+    """Layers of LSTM and dropout with a final linear layer to output the prediction."""
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        dropout_rate: float = 0.1,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.input_size: int = input_size
+        self.hidden_size: int = hidden_size
+        self.dropout_rate: float = dropout_rate
+
+        # Layers
+        self.lstm_layer_1 = nnx.RNN(
+            nnx.OptimizedLSTMCell(input_size, hidden_size, rngs=rngs),
+            return_carry=True,  # Provide the hidden states for every time step to the next layer.
+        )
+        self.dropout_1 = nnx.Dropout(dropout_rate)
+        self.lstm_layer_2 = nnx.RNN(
+            nnx.OptimizedLSTMCell(hidden_size, hidden_size, rngs=rngs),
+            return_carry=False,  # Only output the final hidden state.
+        )
+        self.dropout_2 = nnx.Dropout(dropout_rate)
+        self.linear = nnx.Linear(hidden_size, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
+        # x shape: (batch, sequence_length, n_features)
+        carry_1, out_1 = self.lstm_layer_1(x)
+        x = self.dropout_1(out_1, rngs=rngs)
+        out_2 = self.lstm_layer_2(x, initial_carry=carry_1)
+        x = self.dropout_2(out_2, rngs=rngs)
+        x = self.linear(x)
+        return x[:, -1, :]  # Return the output of the last time step (predicted RUL)
+
+
+def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Array:
+    """Generate MC samples from a model with stochastic forward pass.
+
+    Args:
+        model: A model that accepts RNGs in its forward pass (e.g. MC Dropout).
+        x: Input data for which to generate predictions, shape (n_x, ...).
+        keys: Array of JAX PRNG keys for sampling. Length determines the number
+            of MC samples.
+    Returns:
+        jax.Array: MC samples with shape (n_samples, n_x, n_outputs).
+    """
+
+    @nnx.vmap(in_axes=(None, None, 0), out_axes=1)
+    def forward(model, x, key):
+        return model(x, rngs=nnx.Rngs(key))
+
+    return forward(model, x, keys)
 
 
 def nll_loss(model: nnx.Module, batch: jax.Array, beta: float = 0.0) -> jax.Array:

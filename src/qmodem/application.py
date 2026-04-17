@@ -30,17 +30,7 @@ import orbax.checkpoint as ocp
 from flax import nnx
 from matplotlib.figure import Figure
 
-from qmodem import (
-    MCDCNN1D,
-    QAVICNN1D,
-    BatterySimulationTimeWindowSource,
-    BayesCNN1D,
-    FlipoutConv1D,
-    HeteroscedasticCNN1D,
-    elbo_nll_loss,
-    nll_loss,
-    nll_loss_mcd,
-)
+from qmodem.data import BatterySimulationTimeWindowSource
 from qmodem.generate import generate_test_data, generate_train_data
 from qmodem.metadata import (
     BaseModelParams,
@@ -56,6 +46,16 @@ from qmodem.metadata import (
     save_metadata,
 )
 from qmodem.metrics import crps
+from qmodem.module import (
+    MCDCNN1D,
+    QAVICNN1D,
+    BayesCNN1D,
+    FlipoutConv1D,
+    HeteroscedasticCNN1D,
+    elbo_nll_loss,
+    nll_loss,
+    nll_loss_mcd,
+)
 from qmodem.train import EarlyStopper, train_loop
 from qmodem.utils import (
     SHARED_PARAMS,

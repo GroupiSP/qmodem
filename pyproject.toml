@@ -11,6 +11,7 @@ dependencies = [
     "click>=8.0",
     "jax-ai-stack>=2025.10.28",
     "lib-eod-simulation",
+    "pandas>=3.0.2",
     "pennylane>=0.44.0",
     "scikit-learn>=1.8.0",
 ]
@@ -28,6 +29,7 @@ dev = [
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
     "ruff>=0.14.9",
+    "seaborn>=0.13.2",
 ]
 
 [tool.docformatter]
