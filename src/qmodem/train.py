@@ -35,7 +35,7 @@ def train_loop(
     n_epochs: int,
     dataloader_train: Iterable,
     dataloader_val: Iterable,
-    train_batch_fn: Callable[[Any], Any],
+    train_batch_fn: Callable[[Any], jax.Array],
     eval_batch_fn: Callable[[Any], jax.Array],
     *,
     early_stopper: EarlyStopper | None = None,
@@ -82,12 +82,10 @@ def train_loop(
             if on_train_epoch_start is not None:
                 on_train_epoch_start()
 
-            for batch in dataloader_train:
-                train_batch_fn(batch)
-
             train_losses = []
             for batch in dataloader_train:
-                train_losses.append(eval_batch_fn(batch))
+                loss = train_batch_fn(batch)
+                train_losses.append(loss)
 
             if on_val_epoch_start is not None:
                 on_val_epoch_start()
