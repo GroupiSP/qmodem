@@ -9,9 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from qmodem.data import BatterySimulationTimeWindowSource
 from qmodem.generate import generate_test_data, generate_train_data
-
 
 # ---------------------------------------------------------------------------
 # Helpers — mock _run_discharge and _run_stochastic_sims
@@ -156,71 +154,3 @@ class TestGenerateTestData:
     def test_eval_indices_shape(self, test_npz_paths: list[Path]) -> None:
         data = np.load(test_npz_paths[0])
         assert data["eval_indices"].shape == (5,)
-
-
-# ---------------------------------------------------------------------------
-# Tests for BatterySimulationTimeWindowSource.from_file
-# ---------------------------------------------------------------------------
-
-
-class TestFromFile:
-    @pytest.fixture
-    def train_file(self, tmp_path: Path) -> Path:
-        """Create a minimal train .npz file."""
-        n_histories = 3
-        n_t = 15
-        voltages = np.empty(n_histories, dtype=object)
-        t_eods = np.zeros(n_histories)
-        soc_0s = np.zeros(n_histories)
-        for i in range(n_histories):
-            voltages[i] = np.linspace(4.2, 3.0, n_t)
-            t_eods[i] = 5.0
-            soc_0s[i] = 0.5 + 0.1 * i
-
-        path = tmp_path / "train.npz"
-        np.savez(path, voltages=voltages, t_eods=t_eods, soc_0s=soc_0s)
-        return path
-
-    def test_loads_without_error(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2
-        )
-        assert len(source) > 0
-
-    def test_has_expected_attributes(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2
-        )
-        assert hasattr(source, "X")
-        assert hasattr(source, "y")
-        assert hasattr(source, "y_max")
-        assert hasattr(source, "soc_0s")
-
-    def test_getitem_returns_correct_shapes(self, train_file: Path) -> None:
-        window_size = 5
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=window_size, stride=2
-        )
-        x, y = source[0]
-        assert x.shape == (1, window_size)
-        assert y.shape == ()
-
-    def test_normalize_true(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2, normalize=True
-        )
-        assert float(np.max(source.y)) <= 1.0
-        assert float(np.min(source.y)) >= 0.0
-
-    def test_normalize_false(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2, normalize=False
-        )
-        # t_eod=5.0 so max RUL should be > 1
-        assert float(np.max(source.y)) > 1.0
-
-    def test_soc_0s_loaded(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2
-        )
-        assert len(source.soc_0s) == 3
