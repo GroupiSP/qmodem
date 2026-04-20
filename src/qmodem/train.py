@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from enum import StrEnum, auto
 from typing import Any
 
 import jax
 import jax.numpy as jnp
+
+
+class EarlyStopState(StrEnum):
+    WAITING_FOR_IMPROVEMENT = auto()
+    IMPROVEMENT_FOUND = auto()
+    STOPPED = auto()
 
 
 class EarlyStopper:
@@ -15,15 +22,23 @@ class EarlyStopper:
         self.counter = 0
         self.current_epoch = 0
 
+        self._state = EarlyStopState.WAITING_FOR_IMPROVEMENT
+
+    @property
+    def state(self) -> EarlyStopState:
+        return self._state
+
     def __call__(self, current_loss: jax.Array) -> bool:
         self.current_epoch += 1
         if current_loss < self.best_loss - self.min_delta:
             self.best_loss = current_loss
             self.counter = 0
+            self._state = EarlyStopState.IMPROVEMENT_FOUND
             return False
         else:
             self.counter += 1
             if self.counter >= self.patience:
+                self._state = EarlyStopState.STOPPED
                 print(
                     f"Early stopping triggered at epoch {self.current_epoch}. Validation loss: {current_loss:.4f}"
                 )
