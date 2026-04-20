@@ -13,10 +13,19 @@ from typing import Any
 import lib_eod_simulation as les
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_json_serialisable(_key: str, value: Any) -> bool:
+    """Return True if *value* can be JSON-serialised (skip non-serialisable objects like
+    battery models and discharge policies)."""
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def _run_discharge(config: dict[str, Any], soc_0: float) -> tuple[np.ndarray, float]:
@@ -201,18 +210,3 @@ def generate_test_data(
         paths.append(out_path.resolve())
 
     return paths
-
-
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
-
-def _is_json_serialisable(_key: str, value: Any) -> bool:
-    """Return True if *value* can be JSON-serialised (skip non-serialisable objects like
-    battery models and discharge policies)."""
-    try:
-        json.dumps(value)
-        return True
-    except (TypeError, ValueError):
-        return False
