@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import lib_eod_simulation as les
 import orbax.checkpoint as ocp
 from flax import nnx
+from jax.typing import ArrayLike
 
 # ---------------------------------------------------------------------------
 # Shared paths
@@ -220,7 +221,7 @@ def restore_model_from_checkpoint(
 
 
 # ---------------------------------------------------------------------------
-# JAX utilities
+# JAX (AI) utilities
 # ---------------------------------------------------------------------------
 
 
@@ -241,3 +242,17 @@ def get_statistics(arr: jax.Array, dim: int) -> Statistics:
     p_975 = jnp.percentile(arr, 97.5, axis=dim)
     count = arr.shape[dim]
     return Statistics(mean=mean, std=std, p_025=p_025, p_975=p_975, count=count)
+
+
+def states_equal(s1: ArrayLike, s2: ArrayLike) -> bool:
+    """Checks if two JAX pytrees (eg model parameters) are equal.
+
+    Args:
+        s1 (ArrayLike): First pytree to compare.
+        s2 (ArrayLike): Second pytree to compare.
+
+    Returns:
+        bool: True if the pytrees are equal, False otherwise.
+    """
+    leaves_equal = jax.tree.leaves(jax.tree.map(jnp.array_equal, s1, s2))
+    return all(leaves_equal)
