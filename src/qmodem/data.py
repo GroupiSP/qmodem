@@ -13,8 +13,6 @@ from grain.samplers import IndexSampler
 from grain.transforms import Batch
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-from .utils import CMAPSS_DIR_PATH
-
 
 def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.ndarray:
     """Back-calculates RUL values for a linear degradation model.
@@ -324,15 +322,50 @@ class BatterySimulationTimeWindowSource:
         return obj
 
 
+def _load_cmapss_fd001_train(path: Path) -> pd.DataFrame:
+    column_names: list[str] = (
+        [
+            "unit_id",
+            "time_cycles",
+            "op_setting_1",
+            "op_setting_2",
+            "op_setting_3",
+        ]
+        + [f"sensor_{i}" for i in range(1, 22)]
+        + ["RUL"]
+    )
+    return pd.read_csv(path, sep=r"\s+", header=None, names=column_names)
+
+
+def _add_rul(df: pd.DataFrame) -> pd.DataFrame:
+    # add the RUL column
+    df["RUL"] = df.groupby("unit_id")["time_cycles"].transform(lambda x: x.max() - x)
+    return df
+
+
+def _exclude_constant_sensors(df: pd.DataFrame) -> pd.DataFrame:
+    # drop the constant sensors
+    df.drop(columns=[f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]], inplace=True)
+    return df
+
+
+def prepare_cmapss(path: Path) -> pd.DataFrame:
+    """Loads the CMAPSS FD001/train dataset, adds the RUL labels and excludes the
+    constant sensors."""
+    df = _load_cmapss_fd001_train(path)
+    df = _add_rul(df)
+    df = _exclude_constant_sensors(df)
+    return df
+
+
 class CMAPSSAnalyst:
     """Loads, preprocesses and analyses the CMAPSS FD001/train dataset.
 
     Attributes:
-        df: The full dataframe loaded from the original CMAPSS FD001/train file, with the RUL column added.
+        df: The dataframe loaded from the original CMAPSS FD001/train file, with the constant columns removed and the RUL column added.
         variable_sensors: The list of sensor column names that are not constant across the whole dataset.
     """
 
-    constant_sensors: list[str] = [f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]]
     column_names: list[str] = (
         [
             "unit_id",
@@ -345,40 +378,12 @@ class CMAPSSAnalyst:
         + ["RUL"]
     )
 
-    def __init__(self) -> None:
+    def __init__(self, df: pd.DataFrame) -> None:
         # Define the attributes
-        self.df: pd.DataFrame | None = None
+        self.df: pd.DataFrame = df
         self.variable_sensors: list[str] = [
-            f"sensor_{i}"
-            for i in range(1, 22)
-            if f"sensor_{i}" not in self.constant_sensors
+            c for c in df.columns if c.startswith("sensor_")
         ]
-
-        # Steps
-        self._load_cmapss_fd001_train()
-        self._add_rul()
-        self._exclude_constant_sensors()
-
-    def _load_cmapss_fd001_train(
-        self,
-    ) -> None:
-        # load the data
-        self.df = pd.read_csv(
-            CMAPSS_DIR_PATH / "train_FD001.txt",
-            sep=r"\s+",
-            header=None,
-            names=self.column_names,
-        )
-
-    def _add_rul(self) -> None:
-        # add the RUL column
-        self.df["RUL"] = self.df.groupby("unit_id")["time_cycles"].transform(
-            lambda x: x.max() - x
-        )
-
-    def _exclude_constant_sensors(self) -> None:
-        # drop the constant sensors
-        self.df.drop(columns=self.constant_sensors, inplace=True)
 
     @staticmethod
     def _modified_mann_kendall(t: np.ndarray, y: np.ndarray) -> float:
