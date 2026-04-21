@@ -366,18 +366,6 @@ class CMAPSSAnalyst:
         variable_sensors: The list of sensor column names that are not constant across the whole dataset.
     """
 
-    column_names: list[str] = (
-        [
-            "unit_id",
-            "time_cycles",
-            "op_setting_1",
-            "op_setting_2",
-            "op_setting_3",
-        ]
-        + [f"sensor_{i}" for i in range(1, 22)]
-        + ["RUL"]
-    )
-
     def __init__(self, df: pd.DataFrame) -> None:
         # Define the attributes
         self.df: pd.DataFrame = df
