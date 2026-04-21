@@ -13,8 +13,6 @@ from grain.samplers import IndexSampler
 from grain.transforms import Batch
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-from .utils import CMAPSS_DIR_PATH
-
 
 def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.ndarray:
     """Back-calculates RUL values for a linear degradation model.
@@ -324,18 +322,7 @@ class BatterySimulationTimeWindowSource:
         return obj
 
 
-class CMAPSSAnalyst:
-    """Loads, preprocesses and analyses the CMAPSS FD001/train dataset.
-
-    Attributes:
-        df: The full dataframe loaded from the original CMAPSS FD001/train file, with the RUL column added.
-        relative_test_size: The fraction of unit_ids to allocate to the test set (the rest goes to the train set).
-        test_df: The dataframe containing only the test set.
-        train_df: The dataframe containing only the train set.
-        variable_sensors: The list of sensor column names that are not constant across the whole dataset.
-    """
-
-    constant_sensors: list[str] = [f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]]
+def _load_cmapss_fd001_train(path: Path) -> pd.DataFrame:
     column_names: list[str] = (
         [
             "unit_id",
@@ -347,46 +334,44 @@ class CMAPSSAnalyst:
         + [f"sensor_{i}" for i in range(1, 22)]
         + ["RUL"]
     )
+    return pd.read_csv(path, sep=r"\s+", header=None, names=column_names)
 
-    def __init__(self, relative_test_size: float = 0.2) -> None:
+
+def _add_rul(df: pd.DataFrame) -> pd.DataFrame:
+    # add the RUL column
+    df["RUL"] = df.groupby("unit_id")["time_cycles"].transform(lambda x: x.max() - x)
+    return df
+
+
+def _exclude_constant_sensors(df: pd.DataFrame) -> pd.DataFrame:
+    # drop the constant sensors
+    df.drop(columns=[f"sensor_{i}" for i in [1, 5, 6, 10, 16, 18, 19]], inplace=True)
+    return df
+
+
+def prepare_cmapss(path: Path) -> pd.DataFrame:
+    """Loads the CMAPSS FD001/train dataset, adds the RUL labels and excludes the
+    constant sensors."""
+    df = _load_cmapss_fd001_train(path)
+    df = _add_rul(df)
+    df = _exclude_constant_sensors(df)
+    return df
+
+
+class CMAPSSAnalyst:
+    """Loads, preprocesses and analyses the CMAPSS FD001/train dataset.
+
+    Attributes:
+        df: The dataframe loaded from the original CMAPSS FD001/train file, with the constant columns removed and the RUL column added.
+        variable_sensors: The list of sensor column names that are not constant across the whole dataset.
+    """
+
+    def __init__(self, df: pd.DataFrame) -> None:
         # Define the attributes
-        self.df: pd.DataFrame | None = None
-        self.relative_test_size: float = relative_test_size
-        self.test_df: pd.DataFrame | None = None
-        self.train_df: pd.DataFrame | None = None
+        self.df: pd.DataFrame = df
         self.variable_sensors: list[str] = [
-            f"sensor_{i}"
-            for i in range(1, 22)
-            if f"sensor_{i}" not in self.constant_sensors
+            c for c in df.columns if c.startswith("sensor_")
         ]
-
-        # Steps
-        self._load_cmapss_fd001_train()
-        self._add_rul()
-        self.train_df, self.test_df = split_cmapss(self.df, self.relative_test_size)
-        self._exclude_constant_sensors()
-
-    def _load_cmapss_fd001_train(
-        self,
-    ) -> None:
-        # load the data
-        self.df = pd.read_csv(
-            CMAPSS_DIR_PATH / "train_FD001.txt",
-            sep=r"\s+",
-            header=None,
-            names=self.column_names,
-        )
-
-    def _add_rul(self) -> None:
-        # add the RUL column
-        self.df["RUL"] = self.df.groupby("unit_id")["time_cycles"].transform(
-            lambda x: x.max() - x
-        )
-
-    def _exclude_constant_sensors(self) -> None:
-        # drop the constant sensors
-        self.train_df.drop(columns=self.constant_sensors, inplace=True)
-        self.test_df.drop(columns=self.constant_sensors, inplace=True)
 
     @staticmethod
     def _modified_mann_kendall(t: np.ndarray, y: np.ndarray) -> float:
@@ -409,7 +394,7 @@ class CMAPSSAnalyst:
             return 0.0
         return mk / sum_of_distances
 
-    def compute_monotonicity(self) -> pd.Series:
+    def compute_monotonicity(self, df: pd.DataFrame) -> pd.Series:
         """Computes the monotonicity of each sensor in the training set.
 
         Returns:
@@ -418,7 +403,7 @@ class CMAPSSAnalyst:
         monotonicity = {}
         for sensor_name in self.variable_sensors:
             monotonicity[sensor_name] = (
-                self.train_df.groupby("unit_id")
+                df.groupby("unit_id")
                 .apply(
                     lambda x: self._modified_mann_kendall(
                         x["time_cycles"].values, x[sensor_name].values
@@ -429,20 +414,20 @@ class CMAPSSAnalyst:
 
         return pd.Series(monotonicity)
 
-    def compute_prognosability(self) -> pd.Series:
+    def compute_prognosability(self, df: pd.DataFrame) -> pd.Series:
         """Computes the prognosability of each sensor in the training set.
 
         Returns:
             A pandas Series with sensor names as index and prognosability values as data.
         """
-        lasts_df = self.train_df.groupby("unit_id")[self.variable_sensors].last()
-        firsts_df = self.train_df.groupby("unit_id")[self.variable_sensors].first()
+        lasts_df = df.groupby("unit_id")[self.variable_sensors].last()
+        firsts_df = df.groupby("unit_id")[self.variable_sensors].first()
 
         return (lasts_df.std() / (firsts_df - lasts_df).abs().mean()).apply(
             lambda x: np.exp(-x)
         )
 
-    def compute_trendability(self) -> pd.Series:
+    def compute_trendability(self, df: pd.DataFrame) -> pd.Series:
         """Computes the trendability of each sensor in the training set.
 
         Returns:
@@ -450,7 +435,7 @@ class CMAPSSAnalyst:
         """
         trendability = {}
         for sensor_name in self.variable_sensors:
-            pivot_table = self.train_df.pivot(
+            pivot_table = df.pivot(
                 index="time_cycles", columns="unit_id", values=sensor_name
             )
             cov_matrix = pivot_table.cov()
@@ -462,7 +447,7 @@ class CMAPSSAnalyst:
 
         return pd.Series(trendability)
 
-    def compute_prognostic_metrics(self) -> pd.DataFrame:
+    def compute_prognostic_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         """Computes all the prognostic metrics (monotonicity, prognosability,
         trendability) and the sensor fitness for each sensor in the training set.
 
@@ -471,9 +456,9 @@ class CMAPSSAnalyst:
         """
         metrics_df = pd.DataFrame(
             {
-                "monotonicity": self.compute_monotonicity(),
-                "prognosability": self.compute_prognosability(),
-                "trendability": self.compute_trendability(),
+                "monotonicity": self.compute_monotonicity(df),
+                "prognosability": self.compute_prognosability(df),
+                "trendability": self.compute_trendability(df),
             }
         )
         # Use as index an incremental integer starting from 0 and add a column with the sensor names as first column
