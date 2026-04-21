@@ -329,9 +329,6 @@ class CMAPSSAnalyst:
 
     Attributes:
         df: The full dataframe loaded from the original CMAPSS FD001/train file, with the RUL column added.
-        relative_test_size: The fraction of unit_ids to allocate to the test set (the rest goes to the train set).
-        test_df: The dataframe containing only the test set.
-        train_df: The dataframe containing only the train set.
         variable_sensors: The list of sensor column names that are not constant across the whole dataset.
     """
 
@@ -348,12 +345,9 @@ class CMAPSSAnalyst:
         + ["RUL"]
     )
 
-    def __init__(self, relative_test_size: float = 0.2) -> None:
+    def __init__(self) -> None:
         # Define the attributes
         self.df: pd.DataFrame | None = None
-        self.relative_test_size: float = relative_test_size
-        self.test_df: pd.DataFrame | None = None
-        self.train_df: pd.DataFrame | None = None
         self.variable_sensors: list[str] = [
             f"sensor_{i}"
             for i in range(1, 22)
@@ -363,7 +357,6 @@ class CMAPSSAnalyst:
         # Steps
         self._load_cmapss_fd001_train()
         self._add_rul()
-        self.train_df, self.test_df = split_cmapss(self.df, self.relative_test_size)
         self._exclude_constant_sensors()
 
     def _load_cmapss_fd001_train(
@@ -385,8 +378,7 @@ class CMAPSSAnalyst:
 
     def _exclude_constant_sensors(self) -> None:
         # drop the constant sensors
-        self.train_df.drop(columns=self.constant_sensors, inplace=True)
-        self.test_df.drop(columns=self.constant_sensors, inplace=True)
+        self.df.drop(columns=self.constant_sensors, inplace=True)
 
     @staticmethod
     def _modified_mann_kendall(t: np.ndarray, y: np.ndarray) -> float:
@@ -409,7 +401,7 @@ class CMAPSSAnalyst:
             return 0.0
         return mk / sum_of_distances
 
-    def compute_monotonicity(self) -> pd.Series:
+    def compute_monotonicity(self, df: pd.DataFrame) -> pd.Series:
         """Computes the monotonicity of each sensor in the training set.
 
         Returns:
@@ -418,7 +410,7 @@ class CMAPSSAnalyst:
         monotonicity = {}
         for sensor_name in self.variable_sensors:
             monotonicity[sensor_name] = (
-                self.train_df.groupby("unit_id")
+                df.groupby("unit_id")
                 .apply(
                     lambda x: self._modified_mann_kendall(
                         x["time_cycles"].values, x[sensor_name].values
@@ -429,20 +421,20 @@ class CMAPSSAnalyst:
 
         return pd.Series(monotonicity)
 
-    def compute_prognosability(self) -> pd.Series:
+    def compute_prognosability(self, df: pd.DataFrame) -> pd.Series:
         """Computes the prognosability of each sensor in the training set.
 
         Returns:
             A pandas Series with sensor names as index and prognosability values as data.
         """
-        lasts_df = self.train_df.groupby("unit_id")[self.variable_sensors].last()
-        firsts_df = self.train_df.groupby("unit_id")[self.variable_sensors].first()
+        lasts_df = df.groupby("unit_id")[self.variable_sensors].last()
+        firsts_df = df.groupby("unit_id")[self.variable_sensors].first()
 
         return (lasts_df.std() / (firsts_df - lasts_df).abs().mean()).apply(
             lambda x: np.exp(-x)
         )
 
-    def compute_trendability(self) -> pd.Series:
+    def compute_trendability(self, df: pd.DataFrame) -> pd.Series:
         """Computes the trendability of each sensor in the training set.
 
         Returns:
@@ -450,7 +442,7 @@ class CMAPSSAnalyst:
         """
         trendability = {}
         for sensor_name in self.variable_sensors:
-            pivot_table = self.train_df.pivot(
+            pivot_table = df.pivot(
                 index="time_cycles", columns="unit_id", values=sensor_name
             )
             cov_matrix = pivot_table.cov()
@@ -462,7 +454,7 @@ class CMAPSSAnalyst:
 
         return pd.Series(trendability)
 
-    def compute_prognostic_metrics(self) -> pd.DataFrame:
+    def compute_prognostic_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         """Computes all the prognostic metrics (monotonicity, prognosability,
         trendability) and the sensor fitness for each sensor in the training set.
 
@@ -471,9 +463,9 @@ class CMAPSSAnalyst:
         """
         metrics_df = pd.DataFrame(
             {
-                "monotonicity": self.compute_monotonicity(),
-                "prognosability": self.compute_prognosability(),
-                "trendability": self.compute_trendability(),
+                "monotonicity": self.compute_monotonicity(df),
+                "prognosability": self.compute_prognosability(df),
+                "trendability": self.compute_trendability(df),
             }
         )
         # Use as index an incremental integer starting from 0 and add a column with the sensor names as first column
