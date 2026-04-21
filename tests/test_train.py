@@ -5,7 +5,6 @@ import pytest
 
 from qmodem.train import EarlyStopper, train_loop
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -16,12 +15,8 @@ def _make_dataloader(n_batches: int, value: float = 1.0) -> list[jnp.ndarray]:
     return [jnp.array(value)] * n_batches
 
 
-def _noop_train(batch: jnp.ndarray) -> None:
-    """Training step that does nothing."""
-
-
-def _identity_eval(batch: jnp.ndarray) -> jnp.ndarray:
-    """Evaluation step that returns the batch value as loss."""
+def _identity_step(batch: jnp.ndarray) -> jnp.ndarray:
+    """Step that returns the batch as a loss."""
     return batch
 
 
@@ -63,8 +58,8 @@ class TestTrainLoop:
             n_epochs=n_epochs,
             dataloader_train=dl,
             dataloader_val=dl,
-            train_batch_fn=_noop_train,
-            eval_batch_fn=_identity_eval,
+            train_batch_fn=_identity_step,
+            eval_batch_fn=_identity_step,
         )
         assert epochs_completed == n_epochs
 
@@ -75,8 +70,8 @@ class TestTrainLoop:
             n_epochs=3,
             dataloader_train=dl,
             dataloader_val=dl,
-            train_batch_fn=_noop_train,
-            eval_batch_fn=_identity_eval,
+            train_batch_fn=_identity_step,
+            eval_batch_fn=_identity_step,
         )
         assert float(best) == pytest.approx(0.5)
 
@@ -89,8 +84,8 @@ class TestTrainLoop:
             n_epochs=100,
             dataloader_train=dl,
             dataloader_val=dl,
-            train_batch_fn=_noop_train,
-            eval_batch_fn=_identity_eval,
+            train_batch_fn=_identity_step,
+            eval_batch_fn=_identity_step,
             early_stopper=stopper,
         )
         # patience=2: epoch1 (best), epoch2 (counter=1), epoch3 (counter=2 => stop)
@@ -107,8 +102,8 @@ class TestTrainLoop:
             n_epochs=n_epochs,
             dataloader_train=dl,
             dataloader_val=dl,
-            train_batch_fn=_noop_train,
-            eval_batch_fn=_identity_eval,
+            train_batch_fn=_identity_step,
+            eval_batch_fn=_identity_step,
             on_train_epoch_start=lambda: train_calls.append(1),
             on_val_epoch_start=lambda: val_calls.append(1),
         )
@@ -120,10 +115,11 @@ class TestTrainLoop:
         interrupt_at_epoch = 2
         call_count = [0]
 
-        def train_fn(batch: jnp.ndarray) -> None:
+        def train_fn(batch: jnp.ndarray) -> jnp.ndarray:
             call_count[0] += 1
             if call_count[0] >= interrupt_at_epoch:
                 raise KeyboardInterrupt
+            return batch
 
         dl = _make_dataloader(1)
         # Should NOT raise; execution must resume after train_loop returns
@@ -132,7 +128,7 @@ class TestTrainLoop:
             dataloader_train=dl,
             dataloader_val=dl,
             train_batch_fn=train_fn,
-            eval_batch_fn=_identity_eval,
+            eval_batch_fn=_identity_step,
         )
         assert epochs_completed < 100
         # best_val_loss should be a numeric value (either float or jax scalar)
@@ -143,8 +139,9 @@ class TestTrainLoop:
         batch_size, features = 8, 10
         dl = [jnp.ones((batch_size, features))] * 3
 
-        def train_fn(batch: jnp.ndarray) -> None:
+        def train_fn(batch: jnp.ndarray) -> jnp.ndarray:
             assert batch.shape == (batch_size, features)
+            return jnp.zeros((batch_size, features))
 
         def eval_fn(batch: jnp.ndarray) -> jnp.ndarray:
             return jnp.mean(batch)
@@ -168,8 +165,8 @@ class TestTrainLoop:
             n_epochs=n_epochs,
             dataloader_train=dl,
             dataloader_val=dl,
-            train_batch_fn=_noop_train,
-            eval_batch_fn=_identity_eval,
+            train_batch_fn=_identity_step,
+            eval_batch_fn=_identity_step,
             print_every=print_every,
         )
         captured = capsys.readouterr()
