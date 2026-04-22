@@ -8,7 +8,7 @@ from flax import nnx
 
 
 class RandomCallModel(Protocol):
-    def __call__(self, x, rngs=nnx.Rngs) -> jax.Array: ...
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array: ...
 
 
 class SimpleCNN1D(nnx.Module):
