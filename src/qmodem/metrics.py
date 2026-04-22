@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Protocol, SupportsIndex
 
-import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
+from flax import nnx
 
 from qmodem.module import RandomCallModel, mc_sample
 
