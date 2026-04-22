@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, SupportsIndex
 
 import jax
@@ -46,13 +47,25 @@ class LabelledDataSource(Protocol):
     def __getitem__(self, idx: SupportsIndex) -> tuple[jax.Array, jax.Array]: ...
 
 
-def compute_rmse(test_datasource: LabelledDataSource, model: RandomCallModel) -> float:
+@dataclass
+class MetricsContext:
+    num_mc_samples: int = 10
+    eval_grid_resolution: int = 100
+
+
+def compute_rmse(
+    test_datasource: LabelledDataSource,
+    model: RandomCallModel,
+    context: MetricsContext = MetricsContext(),
+) -> float:
     """Computes the root mean square error between the predictions on the model on a
     test dataset and the labels.
 
     Args:
         test_datasource (LabelledDataSource): test dataset
         model (nnx.Module): data model, assumed to be deterministic (e.g. dropout is disabled)
+        context (MetricsContext): metrics configuration. Not used for RMSE
+            but included for consistency with other metrics.
 
     Returns:
         float: RMSE value.
@@ -65,7 +78,9 @@ def compute_rmse(test_datasource: LabelledDataSource, model: RandomCallModel) ->
 
 
 def compute_point_crps(
-    test_datasource: LabelledDataSource, model: RandomCallModel
+    test_datasource: LabelledDataSource,
+    model: RandomCallModel,
+    context: MetricsContext = MetricsContext(),
 ) -> float:
     """Computes the mean CRPS between the model samples and the labels on a test
     dataset.
@@ -73,14 +88,14 @@ def compute_point_crps(
     Args:
         test_datasource (LabelledDataSource): test dataset
         model (nnx.Module): data model, assumed to be stochastic (e.g. Monte Carlo Dropout)
+        context (MetricsContext, optional): metrics configuration, including number of
+            Monte Carlo samples and grid resolution for CRPS evaluation.
 
     Returns:
         float: mean CRPS value.
     """
 
-    keys = jax.random.split(
-        jax.random.key(0), 10
-    )  # TODO fix hardcoded number of samples
+    keys = jax.random.split(jax.random.key(0), context.num_mc_samples)
     y_pred_samples = mc_sample(
         model, test_datasource.X, keys
     )  # pass entire dataset at once
@@ -88,6 +103,7 @@ def compute_point_crps(
     total_crps = 0.0
 
     # y_pred_samples has shape (num_samples, batch_size), but we need to iterate over the batch dimension
+    # TODO: vectorise the loop with jax.vmap or jax.lax.fori_loop
     for i in range(test_datasource.X.shape[0]):
         y_true = test_datasource.y[i]
         samples_predicted = y_pred_samples[:, i]
@@ -95,7 +111,7 @@ def compute_point_crps(
         x_grid = jnp.linspace(
             jnp.min(samples_predicted),
             jnp.max(samples_predicted),
-            num=100,  # TODO fix hardcoded number of grid points
+            num=context.eval_grid_resolution,
         )
 
         total_crps += _point_crps(y_true, samples_predicted, x_grid)
