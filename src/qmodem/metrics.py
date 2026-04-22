@@ -47,7 +47,7 @@ class LabelledDataSource(Protocol):
     def __getitem__(self, idx: SupportsIndex) -> tuple[jax.Array, jax.Array]: ...
 
 
-@dataclass
+@dataclass(frozen=True)
 class MetricsContext:
     num_mc_samples: int = 10
     eval_grid_resolution: int = 100
