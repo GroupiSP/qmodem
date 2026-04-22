@@ -45,7 +45,7 @@ from qmodem.metadata import (
     load_metadata,
     save_metadata,
 )
-from qmodem.metrics import crps
+from qmodem.metrics import _crps
 from qmodem.module import (
     MCDCNN1D,
     QAVICNN1D,
@@ -1747,7 +1747,7 @@ def _predict_het_cnn(
         ref_samples = crps_ref_t_eods[k]
         all_samples = np.concatenate([pred_samples, ref_samples])
         x_grid = jnp.linspace(0, float(all_samples.max()) * 1.1, 500)
-        crps_val = float(crps(jnp.array(pred_samples), jnp.array(ref_samples), x_grid))
+        crps_val = float(_crps(jnp.array(pred_samples), jnp.array(ref_samples), x_grid))
         crps_values.append(crps_val)
         print(
             f"  [{k + 1:2d}/{len(crps_eval_indices)}] t={t:7.1f}s | "
@@ -1905,7 +1905,7 @@ def _predict_mcd_cnn(
         all_samples = np.concatenate([pred_samples_arr, ref_samples])
         x_grid = jnp.linspace(0, float(all_samples.max()) * 1.1, 500)
         crps_val = float(
-            crps(jnp.array(pred_samples_arr), jnp.array(ref_samples), x_grid)
+            _crps(jnp.array(pred_samples_arr), jnp.array(ref_samples), x_grid)
         )
         crps_values.append(crps_val)
         print(
@@ -2070,7 +2070,7 @@ def _predict_bayes_cnn(
         all_samples = np.concatenate([pred_samples_arr, ref_samples])
         x_grid = jnp.linspace(0, float(all_samples.max()) * 1.1, 500)
         crps_val = float(
-            crps(jnp.array(pred_samples_arr), jnp.array(ref_samples), x_grid)
+            _crps(jnp.array(pred_samples_arr), jnp.array(ref_samples), x_grid)
         )
         crps_values.append(crps_val)
         print(
@@ -2267,7 +2267,7 @@ def _predict_qavi_cnn(
         ref_samples = crps_ref_t_eods[k]
         all_samples = np.concatenate([pred_samples, ref_samples])
         x_grid = jnp.linspace(0, float(all_samples.max()) * 1.1, 500)
-        crps_val = float(crps(jnp.array(pred_samples), jnp.array(ref_samples), x_grid))
+        crps_val = float(_crps(jnp.array(pred_samples), jnp.array(ref_samples), x_grid))
         crps_values.append(crps_val)
         print(
             f"  [{k + 1:2d}/{len(crps_eval_indices)}] t={t:7.1f}s | "
