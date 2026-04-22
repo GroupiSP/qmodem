@@ -31,7 +31,7 @@ def _crps(samples_dist_0, samples_dist_1, x_grid):
 
 
 def _point_crps(y_true, samples_predicted, x_grid):
-    F0 = jnp.where(x_grid <= y_true, 0.0, 1.0)
+    F0 = jnp.where(x_grid < y_true, 0.0, 1.0)
     F1 = jax.vmap(_cdf, in_axes=(0, None), out_axes=0)(x_grid, samples_predicted)
 
     crps_value = jnp.trapezoid(jnp.square(F0 - F1), x_grid)
