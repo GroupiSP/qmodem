@@ -920,7 +920,7 @@ def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Arra
         jax.Array: MC samples with shape (n_samples, n_x, n_outputs).
     """
 
-    @nnx.vmap(in_axes=(None, None, 0), out_axes=1)
+    @nnx.vmap(in_axes=(None, None, 0), out_axes=0)
     def forward(model, x, key):
         return model(x, rngs=nnx.Rngs(key))
 
