@@ -56,7 +56,12 @@ from qmodem.module import (
     nll_loss,
     nll_loss_mcd,
 )
-from qmodem.train import EarlyStopper, train_loop
+from qmodem.train import (
+    EarlyStopper,
+    ReportConditionEvery,
+    train_loop,
+    train_report_print,
+)
 from qmodem.utils import (
     SHARED_PARAMS,
     TEST_SEED,
@@ -771,7 +776,10 @@ def _train_het_cnn(
 
     print("Starting training...")
     print("=" * 70)
+
     early_stopper = EarlyStopper(patience=patience, min_delta=1e-4)
+    report_condition = ReportConditionEvery(print_every)
+    reporter = train_report_print
 
     best_val_loss, _ = train_loop(
         n_epochs=n_epochs,
@@ -780,7 +788,8 @@ def _train_het_cnn(
         train_batch_fn=lambda batch: train_step(model, optimizer, batch),
         eval_batch_fn=lambda batch: eval_step(model, batch),
         early_stopper=early_stopper,
-        print_every=print_every,
+        report_condition=report_condition,
+        reporter=reporter,
         on_train_epoch_start=model.train,
         on_val_epoch_start=model.eval,
     )
@@ -878,6 +887,8 @@ def _train_mcd_cnn(
     print("Starting training...")
     print("=" * 70)
     early_stopper = EarlyStopper(patience=patience, min_delta=1e-4)
+    report_condition = ReportConditionEvery(print_every=print_every)
+    reporter = train_report_print
 
     best_val_loss, _ = train_loop(
         n_epochs=n_epochs,
@@ -886,7 +897,8 @@ def _train_mcd_cnn(
         train_batch_fn=lambda batch: train_step(model, optimizer, batch),
         eval_batch_fn=lambda batch: eval_step(model, batch),
         early_stopper=early_stopper,
-        print_every=print_every,
+        report_condition=report_condition,
+        reporter=reporter,
         on_train_epoch_start=model.train,
         on_val_epoch_start=model.eval,
     )
@@ -992,7 +1004,11 @@ def _train_bayes_cnn(
 
     print("Starting training...")
     print("=" * 70)
+
     early_stopper = EarlyStopper(patience=patience, min_delta=1e-4)
+    report_condition = ReportConditionEvery(print_every)
+    reporter = train_report_print
+
     global_step = 0
 
     def train_batch_fn(batch: Any) -> None:
@@ -1015,7 +1031,8 @@ def _train_bayes_cnn(
         train_batch_fn=train_batch_fn,
         eval_batch_fn=eval_batch_fn,
         early_stopper=early_stopper,
-        print_every=print_every,
+        report_condition=report_condition,
+        reporter=reporter,
     )
 
     metadata: TrainingMetadata = {
