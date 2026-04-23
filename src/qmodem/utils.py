@@ -20,23 +20,8 @@ BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_conf
 CMAPSS_DIR_PATH = (
     Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "CMAPSSData"
 )
-CMAPSS_FD001_TRAIN_TRAIN_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "data"
-    / "processed"
-    / "cmapss_fd001_train_train.csv"
-)
-CMAPSS_FD001_TRAIN_VAL_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "data"
-    / "processed"
-    / "cmapss_fd001_train_val.csv"
-)
-CMAPSS_FD001_TRAIN_TEST_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "data"
-    / "processed"
-    / "cmapss_fd001_train_test.csv"
+PROCESSED_DATA_DIR_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "data" / "processed"
 )
 
 # ---------------------------------------------------------------------------
