@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from enum import StrEnum, auto
-from typing import Any
+from typing import Any, Callable, Iterable, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -46,6 +46,46 @@ class EarlyStopper:
             return False
 
 
+@dataclass(frozen=True)
+class TrainingReportContext:
+    epoch: int
+    train_loss: float
+    val_loss: float
+    best_val_loss: float
+
+
+type ReportCondition = Callable[[TrainingReportContext], bool]
+
+
+class TrainingReporter(Protocol):
+    def __call__(self, context: TrainingReportContext) -> None: ...
+
+
+def train_report_print(context: TrainingReportContext) -> None:
+    print(
+        f"Epoch {context.epoch:3d} | "
+        f"Train Loss: {context.train_loss:.6f} | "
+        f"Val Loss: {context.val_loss:.6f} | "
+        f"Best Val Loss: {context.best_val_loss:.6f}"
+    )
+
+
+def train_report_none(context: TrainingReportContext) -> None:
+    pass
+
+
+def train_report_log(context: TrainingReportContext) -> None:
+    raise NotImplementedError("train_report_log is not implemented yet.")
+
+
+class ReportConditionEvery:
+    def __init__(self, print_every: int) -> None:
+        self.print_every = print_every
+
+    def __call__(self, context: TrainingReportContext) -> bool:
+        return (context.epoch + 1) % self.print_every == 0 or context.epoch == 0
+
+
 def train_loop(
     n_epochs: int,
     dataloader_train: Iterable,
@@ -54,7 +94,8 @@ def train_loop(
     eval_batch_fn: Callable[[Any], jax.Array],
     *,
     early_stopper: EarlyStopper | None = None,
-    print_every: int = 1,
+    reporter: TrainingReporter = train_report_print,
+    report_condition: ReportCondition = ReportConditionEvery(print_every=1),
     on_train_epoch_start: Callable[[], None] | None = None,
     on_val_epoch_start: Callable[[], None] | None = None,
     on_validation_improvement: Callable[[], None] | None = None,
@@ -68,7 +109,7 @@ def train_loop(
     3. Evaluates train loss by calling ``eval_batch_fn`` on ``dataloader_train``.
     4. Calls ``on_val_epoch_start`` (if provided).
     5. Evaluates validation loss by calling ``eval_batch_fn`` on ``dataloader_val``.
-    6. Prints progress every ``print_every`` epochs and on the first epoch.
+    6. Calls ``reporter`` with a context containing epoch and loss information if ``report_condition`` is satisfied.
     7. Checks early stopping if an ``early_stopper`` is provided.
 
     A ``KeyboardInterrupt`` exits the loop gracefully: the training status at
@@ -81,7 +122,8 @@ def train_loop(
         train_batch_fn: Callable that takes a batch and performs one training step.
         eval_batch_fn: Callable that takes a batch and returns a scalar loss value.
         early_stopper: Optional :class:`EarlyStopper` instance.
-        print_every: Print progress every this many epochs (also prints epoch 1).
+        reporter: Optional callback for reporting training progress.
+        report_condition: Optional callback that determines when to call the reporter.
         on_train_epoch_start: Optional callback called before the training phase.
         on_val_epoch_start: Optional callback called before the validation phase.
         on_validation_improvement: Optional callback called when validation loss improves.
@@ -115,17 +157,20 @@ def train_loop(
 
             epochs_completed = epoch + 1
 
-            if (epoch + 1) % print_every == 0 or epoch == 0:
-                print(
-                    f"Epoch {epoch + 1:3d}/{n_epochs} | "
-                    f"Train Loss: {train_loss:.6f} | "
-                    f"Val Loss: {val_loss:.6f}"
-                )
-
             if val_loss < best_val_loss:
                 best_val_loss = float(val_loss)
                 if on_validation_improvement is not None:
                     on_validation_improvement()
+
+            report_context = TrainingReportContext(
+                epoch=epoch,
+                train_loss=train_loss.item(),
+                val_loss=val_loss.item(),
+                best_val_loss=best_val_loss,
+            )
+
+            if report_condition(report_context):
+                reporter(report_context)
 
             if early_stopper is not None and early_stopper(val_loss):
                 break
