@@ -11,6 +11,7 @@ dependencies = [
     "click>=8.0",
     "jax-ai-stack>=2025.10.28",
     "lib-eod-simulation",
+    "optuna>=4.8.0",
     "pandas>=3.0.2",
     "pennylane>=0.44.0",
     "scikit-learn>=1.8.0",
