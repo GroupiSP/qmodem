@@ -1,6 +1,7 @@
 from enum import StrEnum
 
 import jax
+import mlflow
 import optax
 import optuna
 import pandas as pd
@@ -10,6 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from qmodem import LSTM, create_dataloaders
 from qmodem.data import CMAPSSDataSource
 from qmodem.metrics import compute_point_crps
+from qmodem.tracking import MLFlowSetup, setup_mlflow_tracking
 from qmodem.train import (
     EarlyStopper,
     TrainingReportContext,
@@ -30,6 +32,7 @@ N_EPOCHS = 1000
 NUM_SENSORS = 9
 PATIENCE = 10
 PRINT_EVERY = 10
+N_TRIALS = 2
 SEED = 42
 
 
@@ -75,87 +78,116 @@ def eval_step(model: nnx.Module, batch: jax.Array):
 
 
 def objective(trial: optuna.Trial) -> float:
-    scaler = StandardScaler()
+    with mlflow.start_run(nested=True):
+        scaler = StandardScaler()
 
-    train_df, val_df = load_datasets()
+        train_df, val_df = load_datasets()
 
-    window_size = trial.suggest_int(Hyperparameter.WINDOW_SIZE, 10, 50)
+        window_size = trial.suggest_int(Hyperparameter.WINDOW_SIZE, 10, 50)
 
-    ds_train = CMAPSSDataSource(
-        train_df, train_or_test="train", scaler=scaler, window_size=window_size
-    )
-    ds_val = CMAPSSDataSource(
-        val_df, train_or_test="test", scaler=scaler, window_size=window_size
-    )
+        ds_train = CMAPSSDataSource(
+            train_df, train_or_test="train", scaler=scaler, window_size=window_size
+        )
+        ds_val = CMAPSSDataSource(
+            val_df, train_or_test="test", scaler=scaler, window_size=window_size
+        )
 
-    dl_train, dl_val = create_dataloaders(
-        ds_train=ds_train,
-        ds_val=ds_val,
-        batch_size=BATCH_SIZE,
-        seed_train=SEED,
-        seed_val=SEED + 1,
-        shuffle_train=False,
-        shuffle_val=False,
-    )
+        dl_train, dl_val = create_dataloaders(
+            ds_train=ds_train,
+            ds_val=ds_val,
+            batch_size=BATCH_SIZE,
+            seed_train=SEED,
+            seed_val=SEED + 1,
+            shuffle_train=False,
+            shuffle_val=False,
+        )
 
-    model = LSTM(
-        input_size=NUM_SENSORS,
-        hidden_size=trial.suggest_int(Hyperparameter.HIDDEN_SIZE, 20, 100),
-        dropout_rate=trial.suggest_float(Hyperparameter.DROPOUT_RATE, 0.1, 0.5),
-        rngs=nnx.Rngs(0),
-    )
+        model = LSTM(
+            input_size=NUM_SENSORS,
+            hidden_size=trial.suggest_int(Hyperparameter.HIDDEN_SIZE, 20, 100),
+            dropout_rate=trial.suggest_float(Hyperparameter.DROPOUT_RATE, 0.1, 0.5),
+            rngs=nnx.Rngs(0),
+        )
 
-    schedule = optax.cosine_decay_schedule(
-        init_value=trial.suggest_float(Hyperparameter.LR, 1e-4, 1e-2, log=True),
-        decay_steps=N_EPOCHS * (len(ds_train) // BATCH_SIZE),
-        alpha=0.1,
-    )
+        schedule = optax.cosine_decay_schedule(
+            init_value=trial.suggest_float(Hyperparameter.LR, 1e-4, 1e-2, log=True),
+            decay_steps=N_EPOCHS * (len(ds_train) // BATCH_SIZE),
+            alpha=0.1,
+        )
 
-    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
-    early_stopper = EarlyStopper(patience=PATIENCE, min_delta=1e-4)
+        optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
+        early_stopper = EarlyStopper(patience=PATIENCE, min_delta=1e-4)
 
-    model_state_best = jax.tree.map(
-        lambda x: x, nnx.state(model, nnx.Param)
-    )  # initial model state copy
+        model_state_best = jax.tree.map(
+            lambda x: x, nnx.state(model, nnx.Param)
+        )  # initial model state copy
 
-    def on_validation_improvement():
-        global model_state_best
-        model_state_best = jax.tree.map(lambda x: x, nnx.state(model, nnx.Param))
+        def on_validation_improvement():
+            global model_state_best
+            model_state_best = jax.tree.map(lambda x: x, nnx.state(model, nnx.Param))
 
-    train_loop(
-        n_epochs=N_EPOCHS,
-        dataloader_train=dl_train,
-        dataloader_val=dl_val,
-        train_batch_fn=lambda batch: train_step(model, optimizer, batch),
-        eval_batch_fn=lambda batch: eval_step(model, batch),
-        early_stopper=early_stopper,
-        report_condition=report_condition_every,
-        reporter=reporter,
-        on_train_epoch_start=model.train,
-        on_val_epoch_start=model.eval,
-        on_validation_improvement=on_validation_improvement,
-    )
+        train_loop(
+            n_epochs=N_EPOCHS,
+            dataloader_train=dl_train,
+            dataloader_val=dl_val,
+            train_batch_fn=lambda batch: train_step(model, optimizer, batch),
+            eval_batch_fn=lambda batch: eval_step(model, batch),
+            early_stopper=early_stopper,
+            report_condition=report_condition_every,
+            reporter=reporter,
+            on_train_epoch_start=model.train,
+            on_val_epoch_start=model.eval,
+            on_validation_improvement=on_validation_improvement,
+        )
 
-    nnx.update(model, model_state_best)
+        nnx.update(model, model_state_best)
 
-    model.train()  # enable dropout for stochastic predictions
-    mean_crps = compute_point_crps(ds_val, model)
+        model.train()  # enable dropout for stochastic predictions
+        mean_crps = compute_point_crps(ds_val, model)
+
+        # Log to MLFlow
+        mlflow.log_params(trial.params)
+        mlflow.log_metric("mean_crps", mean_crps)
 
     return mean_crps
 
 
 def main():
+    # setup MLFlow tracking
+    tracking_setup = MLFlowSetup(
+        run_name="hyperparameter_optimization",
+        experiment_name="cmapss_lstm_optuna_random_search",
+        tags={
+            "model": "lstm",
+            "dataset": "cmapss",
+            "optimizer": "adam",
+            "scheduler": "cosine",
+            "hp_sampler": "random_search",
+        },
+    )
+    setup_mlflow_tracking(tracking_setup)  # the setup also starts the MLFlow run
+
     hp_sampler = optuna.samplers.RandomSampler(seed=SEED)
     study = optuna.create_study(sampler=hp_sampler, direction="minimize")
-    study.optimize(objective, n_trials=20)
+    study.optimize(objective, n_trials=N_TRIALS)
 
     print("Best trial:")
-    trial = study.best_trial
+    best_trial = study.best_trial
 
-    print(f"Value: {trial.value}")
+    print(f"Value: {best_trial.value}")
     print("Params: ")
-    for key, value in trial.params.items():
+    for key, value in best_trial.params.items():
         print(f"{key}: {value}")
+
+    mlflow.log_params(best_trial.params)  # log best trial params to the parent run
+
+    # log general parameters
+    mlflow.log_param("n_trials", N_TRIALS)
+    mlflow.log_param("batch_size", BATCH_SIZE)
+    mlflow.log_param("n_epochs", N_EPOCHS)
+    mlflow.log_param("seed", SEED)
+
+    mlflow.end_run()
 
 
 if __name__ == "__main__":
