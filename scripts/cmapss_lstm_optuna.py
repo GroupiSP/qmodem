@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from qmodem import LSTM, create_dataloaders
 from qmodem.data import CMAPSSDataSource
 from qmodem.metrics import compute_point_crps
-from qmodem.tracking import MLFlowSetup, Tags, setup_mlflow_tracking
+from qmodem.tracking import MLFlowSetup, Tags, track_mlflow
 from qmodem.train import (
     EarlyStopper,
     TrainingReportContext,
@@ -28,7 +28,7 @@ class Hyperparameter(StrEnum):
 
 
 BATCH_SIZE = 10
-N_EPOCHS = 1000
+N_EPOCHS = 10
 NUM_SENSORS = 9
 PATIENCE = 5
 PRINT_EVERY = 10
@@ -159,29 +159,27 @@ def main():
         experiment_name="cmapss_lstm_optuna_random_search",
         tags=Tags(),  # choices here correspond to the defaults
     )
-    setup_mlflow_tracking(tracking_setup)  # the setup also starts the MLFlow run
 
-    hp_sampler = optuna.samplers.RandomSampler(seed=SEED)
-    study = optuna.create_study(sampler=hp_sampler, direction="minimize")
-    study.optimize(objective, n_trials=N_TRIALS)
+    with track_mlflow(tracking_setup):
+        hp_sampler = optuna.samplers.RandomSampler(seed=SEED)
+        study = optuna.create_study(sampler=hp_sampler, direction="minimize")
+        study.optimize(objective, n_trials=N_TRIALS)
 
-    print("Best trial:")
-    best_trial = study.best_trial
+        print("Best trial:")
+        best_trial = study.best_trial
 
-    print(f"Value: {best_trial.value}")
-    print("Params: ")
-    for key, value in best_trial.params.items():
-        print(f"{key}: {value}")
+        print(f"Value: {best_trial.value}")
+        print("Params: ")
+        for key, value in best_trial.params.items():
+            print(f"{key}: {value}")
 
-    mlflow.log_params(best_trial.params)  # log best trial params to the parent run
+        mlflow.log_params(best_trial.params)  # log best trial params to the parent run
 
-    # log general parameters
-    mlflow.log_param("n_trials", N_TRIALS)
-    mlflow.log_param("batch_size", BATCH_SIZE)
-    mlflow.log_param("n_epochs", N_EPOCHS)
-    mlflow.log_param("seed", SEED)
-
-    mlflow.end_run()
+        # log general parameters
+        mlflow.log_param("n_trials", N_TRIALS)
+        mlflow.log_param("batch_size", BATCH_SIZE)
+        mlflow.log_param("n_epochs", N_EPOCHS)
+        mlflow.log_param("seed", SEED)
 
 
 if __name__ == "__main__":

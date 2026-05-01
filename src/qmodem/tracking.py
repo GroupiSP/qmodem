@@ -1,6 +1,8 @@
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import StrEnum, auto
 from pathlib import Path
+from typing import Generator
 
 import mlflow
 
@@ -62,8 +64,8 @@ class MLFlowSetup:
             raise NotImplementedError("Remote tracking server is not supported yet.")
 
 
-# TODO: turn into a context manager that also ends the run at the end of the context
-def setup_mlflow_tracking(setup: MLFlowSetup) -> None:
+@contextmanager
+def track_mlflow(setup: MLFlowSetup) -> Generator[None, None, None]:
     mlflow.set_tracking_uri(setup.backend_store)
 
     exp_name = mlflow.get_experiment_by_name(setup.experiment_name)
@@ -76,9 +78,14 @@ def setup_mlflow_tracking(setup: MLFlowSetup) -> None:
     )
     mlflow.set_experiment(experiment_id=exp_id)
 
-    mlflow.start_run(run_name=setup.run_name)
-    if setup.tags:
+    try:
+        mlflow.start_run(run_name=setup.run_name)
         mlflow.set_tags(asdict(setup.tags))
+
+        yield
+
+    finally:
+        mlflow.end_run()
 
 
 # TODO: implement
