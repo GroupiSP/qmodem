@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from qmodem import LSTM, create_dataloaders
 from qmodem.data import CMAPSSDataSource
 from qmodem.metrics import compute_point_crps
-from qmodem.tracking import MLFlowSetup, setup_mlflow_tracking
+from qmodem.tracking import MLFlowSetup, Tags, setup_mlflow_tracking
 from qmodem.train import (
     EarlyStopper,
     TrainingReportContext,
@@ -30,7 +30,7 @@ class Hyperparameter(StrEnum):
 BATCH_SIZE = 10
 N_EPOCHS = 1000
 NUM_SENSORS = 9
-PATIENCE = 10
+PATIENCE = 5
 PRINT_EVERY = 10
 N_TRIALS = 2
 SEED = 42
@@ -157,13 +157,7 @@ def main():
     tracking_setup = MLFlowSetup(
         run_name="hyperparameter_optimization",
         experiment_name="cmapss_lstm_optuna_random_search",
-        tags={
-            "model": "lstm",
-            "dataset": "cmapss",
-            "optimizer": "adam",
-            "scheduler": "cosine",
-            "hp_sampler": "random_search",
-        },
+        tags=Tags(),  # choices here correspond to the defaults
     )
     setup_mlflow_tracking(tracking_setup)  # the setup also starts the MLFlow run
 

@@ -1,20 +1,60 @@
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
+from enum import StrEnum, auto
 from pathlib import Path
 
 import mlflow
 
 from .utils import ROOT_DIR
 
-# TODO: implement a dataclass for tags
+
+class DatasetChoice(StrEnum):
+    BATTERY = auto()
+    CMAPSS = auto()
 
 
-@dataclass
+class ModelChoice(StrEnum):
+    CNN = auto()
+    LSTM = auto()
+
+
+class OptimizerChoice(StrEnum):
+    ADAM = auto()
+    SGD = auto()
+
+
+class SchedulerChoice(StrEnum):
+    COSINE = auto()
+    STEP = auto()
+
+
+class HPSamplerChoice(StrEnum):
+    RANDOM = auto()
+    TPE = auto()
+
+
+class HPPrunerChoice(StrEnum):
+    ASHA = auto()
+    MEDIAN = auto()
+    NOP = auto()
+
+
+@dataclass(frozen=True)
+class Tags:
+    model: ModelChoice = ModelChoice.LSTM
+    dataset: DatasetChoice = DatasetChoice.CMAPSS
+    optimizer: OptimizerChoice = OptimizerChoice.ADAM
+    scheduler: SchedulerChoice = SchedulerChoice.COSINE
+    hp_sampler: HPSamplerChoice = HPSamplerChoice.RANDOM
+    hp_pruner: HPPrunerChoice = HPPrunerChoice.MEDIAN
+
+
+@dataclass(frozen=True)
 class MLFlowSetup:
     run_name: str
     experiment_name: str
+    tags: Tags
     backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
     artifact_store: str | Path = ROOT_DIR / "mlruns"
-    tags: dict[str, str] | None = field(default_factory=dict)
     tracking_server: str | None = None
 
     def __post_init__(self):
@@ -38,7 +78,7 @@ def setup_mlflow_tracking(setup: MLFlowSetup) -> None:
 
     mlflow.start_run(run_name=setup.run_name)
     if setup.tags:
-        mlflow.set_tags(setup.tags)
+        mlflow.set_tags(asdict(setup.tags))
 
 
 # TODO: implement
