@@ -31,3 +31,10 @@ phme26/trained/*
 !phme26/trained/.gitkeep
 phme26/results/*
 !phme26/results/.gitkeep
+
+# MLFlow
+# Cleanup script
+gc_mlflow.sh
+# Runs and artifacts
+mlflow.db
+mlruns/

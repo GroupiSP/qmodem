@@ -16,13 +16,10 @@ from jax.typing import ArrayLike
 # ---------------------------------------------------------------------------
 # Shared paths
 # ---------------------------------------------------------------------------
-BATT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "battery_config.json"
-CMAPSS_DIR_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "CMAPSSData"
-)
-PROCESSED_DATA_DIR_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "processed"
-)
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+BATT_CONFIG_PATH = ROOT_DIR / "battery_config.json"
+CMAPSS_DIR_PATH = ROOT_DIR / "data" / "raw" / "CMAPSSData"
+PROCESSED_DATA_DIR_PATH = ROOT_DIR / "data" / "processed"
 
 # ---------------------------------------------------------------------------
 # Shared seeds
