@@ -1,4 +1,5 @@
 from enum import StrEnum
+from functools import partial
 from multiprocessing import Pool
 
 import jax
@@ -36,7 +37,7 @@ NUM_SENSORS = 9
 PATIENCE = 10
 PRINT_EVERY = 10
 N_TRIALS = 20
-N_PROCESSES = 4
+N_PROCESSES = 5
 SEED = 42
 
 
@@ -81,8 +82,8 @@ def eval_step(model: nnx.Module, batch: jax.Array):
     return mse_loss(model, batch)
 
 
-def objective(trial: optuna.Trial) -> float:
-    with mlflow.start_run(nested=True):
+def objective(trial: optuna.Trial, parent_run_id: str) -> float:
+    with mlflow.start_run(nested=True, parent_run_id=parent_run_id):
         scaler = StandardScaler()
 
         train_df, val_df = load_datasets()
@@ -156,7 +157,7 @@ def objective(trial: optuna.Trial) -> float:
     return mean_crps
 
 
-def run_optimization(sampler_seed: int) -> optuna.Study:
+def run_optimization(sampler_seed: int, parent_run_id: str) -> optuna.Study:
     # The sampler seed needs to be different for every process to avoid identical trials.
     hp_sampler = optuna.samplers.RandomSampler(seed=sampler_seed)
 
@@ -166,7 +167,11 @@ def run_optimization(sampler_seed: int) -> optuna.Study:
         storage=JournalStorage(JournalFileBackend("hpo.log")),
         load_if_exists=True,  # important for multiprocessing to avoid race conditions
     )
-    study.optimize(objective, n_trials=N_TRIALS // N_PROCESSES)
+    study.optimize(
+        partial(objective, parent_run_id=parent_run_id),
+        # TODO: make n_trials an argument to handle non divisible cases.
+        n_trials=N_TRIALS // N_PROCESSES,
+    )
     return study
 
 
@@ -177,9 +182,10 @@ def main():
         tags=Tags(),  # choices here correspond to the defaults
     )
 
-    with track_mlflow(tracking_setup):
+    with track_mlflow(tracking_setup) as parent_run:
+        args = [(SEED + i, parent_run.info.run_id) for i in range(N_PROCESSES)]
         with Pool(processes=N_PROCESSES) as pool:
-            studies = pool.map(run_optimization, [SEED + i for i in range(N_PROCESSES)])
+            studies = pool.starmap(run_optimization, args)
 
         best_study = min(studies, key=lambda s: s.best_value)
 
