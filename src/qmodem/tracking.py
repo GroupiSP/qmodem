@@ -14,6 +14,11 @@ class DatasetChoice(StrEnum):
     CMAPSS = auto()
 
 
+class LossChoice(StrEnum):
+    MSE = auto()
+    NLL = auto()
+
+
 class ModelChoice(StrEnum):
     CNN = auto()
     LSTM = auto()
@@ -42,8 +47,9 @@ class HPPrunerChoice(StrEnum):
 
 @dataclass(frozen=True)
 class Tags:
-    model: ModelChoice = ModelChoice.LSTM
     dataset: DatasetChoice = DatasetChoice.CMAPSS
+    loss: LossChoice = LossChoice.MSE
+    model: ModelChoice = ModelChoice.LSTM
     optimizer: OptimizerChoice = OptimizerChoice.ADAM
     scheduler: SchedulerChoice = SchedulerChoice.COSINE
     hp_sampler: HPSamplerChoice = HPSamplerChoice.RANDOM
