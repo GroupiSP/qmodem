@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import StrEnum, auto
@@ -71,7 +73,7 @@ class MLFlowSetup:
 
 
 @contextmanager
-def track_mlflow(setup: MLFlowSetup) -> Generator[None, None, None]:
+def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
     mlflow.set_tracking_uri(setup.backend_store)
 
     exp_name = mlflow.get_experiment_by_name(setup.experiment_name)
@@ -85,10 +87,10 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[None, None, None]:
     mlflow.set_experiment(experiment_id=exp_id)
 
     try:
-        mlflow.start_run(run_name=setup.run_name)
+        active_run = mlflow.start_run(run_name=setup.run_name)
         mlflow.set_tags(asdict(setup.tags))
 
-        yield
+        yield active_run
 
     finally:
         mlflow.end_run()

@@ -38,3 +38,6 @@ gc_mlflow.sh
 # Runs and artifacts
 mlflow.db
 mlruns/
+
+# Log files
+*.log
