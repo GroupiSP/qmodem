@@ -18,7 +18,9 @@ from jax.typing import ArrayLike
 # ---------------------------------------------------------------------------
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 BATT_CONFIG_PATH = ROOT_DIR / "battery_config.json"
-CMAPSS_DIR_PATH = ROOT_DIR / "data" / "raw" / "CMAPSSData"
+RAW_DATA_DIR_PATH = ROOT_DIR / "data" / "raw"
+BATTERY_DATA_DIR_PATH = RAW_DATA_DIR_PATH / "battery"
+CMAPSS_DIR_PATH = RAW_DATA_DIR_PATH / "CMAPSSData"
 PROCESSED_DATA_DIR_PATH = ROOT_DIR / "data" / "processed"
 
 # ---------------------------------------------------------------------------
