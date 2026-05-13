@@ -30,7 +30,6 @@ import orbax.checkpoint as ocp
 from flax import nnx
 from matplotlib.figure import Figure
 
-from qmodem.data import BatterySimulationTimeWindowSource
 from qmodem.generate import generate_test_data, generate_train_data
 from qmodem.metadata import (
     BaseModelParams,
@@ -81,6 +80,13 @@ METHOD_LABELS: dict[str, str] = {
     "mcd_cnn": "MCD",
     "qavi_cnn": "QAVI",
 }
+
+
+class BatterySimulationTimeWindowSource:
+    """Data source for time-windowed battery simulation data."""
+
+    def __init__(self):
+        raise DeprecationWarning("Just a placeholder. To be deprecated soon.")
 
 
 @dataclasses.dataclass
