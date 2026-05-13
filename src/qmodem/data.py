@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Protocol, SupportsIndex
+import functools
+import pathlib
+from typing import Any, Callable, Protocol, Sequence, SupportsIndex
 
 import jax
 import jax.numpy as jnp
@@ -195,6 +196,82 @@ class DataSource(Protocol):
         ...
 
 
+class DataPipeline:
+    def __init__(self, steps: Sequence[Callable]) -> None:
+        self.steps = steps
+
+    def __call__(self, x: Sequence[pd.DataFrame]) -> tuple[jax.Array, jax.Array]:
+        for step in self.steps:
+            x = step(x)
+        return x
+
+
+def get_time_windows_and_join(
+    dfs: Sequence[pd.DataFrame], window_size: int, stride: int
+) -> tuple[np.ndarray, np.ndarray]:
+    voltage_windows: list[np.ndarray] = []
+    rul_windows: list[float] = []
+
+    for df in dfs:
+        voltage: np.ndarray = df["voltage_sim_0"].values
+        ruls: np.ndarray = (df["time"].iloc[-1] - df["time"]).values
+        vw_i, rw_i = _make_windows(
+            voltage, ruls, window_size=window_size, stride=stride
+        )
+        voltage_windows.extend(vw_i)
+        rul_windows.extend(rw_i)
+
+    return np.array(voltage_windows), np.array(rul_windows)
+
+
+def normalize_ruls(x: tuple[np.ndarray, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    voltage_windows, rul_windows = x
+    max_rul = rul_windows.max()
+    return voltage_windows, rul_windows / max_rul
+
+
+def to_jax(x: tuple[np.ndarray, np.ndarray]) -> tuple[jax.Array, jax.Array]:
+    X, y = x
+    return jnp.array(X), jnp.array(y)
+
+
+def make_battery_data_pipeline(
+    window_size: int = 20, stride: int = 1, normalize: bool = False
+) -> DataPipeline:
+    """Utility function to create a data pipeline for battery simulation data."""
+    steps = [
+        functools.partial(
+            get_time_windows_and_join, window_size=window_size, stride=stride
+        ),
+        normalize_ruls if normalize else lambda x: x,
+        to_jax,
+    ]
+    return DataPipeline(steps)
+
+
+class DataFrameSource:
+    def __init__(
+        self,
+        paths: Sequence[pathlib.Path],
+        pipeline: DataPipeline,
+    ) -> None:
+        try:
+            self.dataframes = [pd.read_csv(path) for path in paths]
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                f"One or more files not found in the provided paths: {paths}"
+            ) from e
+
+        self.pipeline = pipeline
+        self.X, self.y = self.pipeline(self.dataframes)
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
+        return self.X[record_key], self.y[record_key]
+
+
 class BatterySimulationTimeWindowSource:
     def __init__(
         self,
@@ -273,7 +350,7 @@ class BatterySimulationTimeWindowSource:
     @classmethod
     def from_file(
         cls,
-        path: Path | str,
+        path: pathlib.Path | str,
         window_size: int,
         stride: int = 1,
         normalize: bool = False,
@@ -322,7 +399,7 @@ class BatterySimulationTimeWindowSource:
         return obj
 
 
-def _load_cmapss_fd001_train(path: Path) -> pd.DataFrame:
+def _load_cmapss_fd001_train(path: pathlib.Path) -> pd.DataFrame:
     column_names: list[str] = (
         [
             "unit_id",
@@ -349,7 +426,7 @@ def _exclude_constant_sensors(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def prepare_cmapss(path: Path) -> pd.DataFrame:
+def prepare_cmapss(path: pathlib.Path) -> pd.DataFrame:
     """Loads the CMAPSS FD001/train dataset, adds the RUL labels and excludes the
     constant sensors."""
     df = _load_cmapss_fd001_train(path)
