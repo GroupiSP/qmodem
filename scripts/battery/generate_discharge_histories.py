@@ -24,15 +24,16 @@ def generate_train(rng: np.random.Generator, n_histories: int) -> None:
 
 
 def generate_test(rng: np.random.Generator, n_histories: int) -> None:
-    config = les.SimulationConfig(
-        process_noise_distribution=lambda: rng.normal(loc=0.0, scale=3e-3),
-        measurement_noise_distribution=lambda: 0.0,
-        dt=20.0,
-        soc_0=1.0,
-    )
-    result = les.simulate_constant_capacity_simple(n_sim=n_histories, config=config)
-    df = result.to_dataframe()
-    df.to_csv(BATTERY_DATA_DIR_PATH / "test_histories.csv", index=False)
+    for i in range(n_histories):
+        config = les.SimulationConfig(
+            process_noise_distribution=lambda: rng.normal(loc=0.0, scale=3e-3),
+            measurement_noise_distribution=lambda: 0.0,
+            dt=20.0,
+            soc_0=1.0,
+        )
+        result = les.simulate_constant_capacity_simple(n_sim=1, config=config)
+        df = result.to_dataframe()
+        df.to_csv(BATTERY_DATA_DIR_PATH / f"test_history_{i}.csv", index=False)
 
     return
 
