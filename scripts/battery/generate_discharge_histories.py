@@ -37,9 +37,9 @@ def generate_test(rng: np.random.Generator, n_histories: int) -> None:
     return
 
 
-def main():
-    """Generate the training, validation and test discharge histories and saves them to
-    disk.
+def main() -> None:
+    """Single access point to generate the training, validation and test discharge
+    histories and save them to disk.
 
     Train/validation data generation:
     - 100 discharge histories for training, 20 for validation.
