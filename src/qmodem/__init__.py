@@ -6,7 +6,6 @@ from .application import (  # noqa: F401
     populate_rul_ax,
 )
 from .data import (  # noqa: F401
-    BatterySimulationTimeWindowSource,
     CMAPSSAnalyst,
     CMAPSSDataSource,
     create_dataloaders,

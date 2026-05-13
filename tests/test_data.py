@@ -2,43 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import numpy as np
-import pytest
 
 from qmodem.data import (
-    BatterySimulationTimeWindowSource,
-    _back_calculate_rul_linear,
     _make_windows,
 )
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_mock_simulator(n_t: int, t_eod: float = 5.0) -> MagicMock:
-    """Build a mock ``SimulatorSimple`` that returns a single discharge history of
-    length *n_t*."""
-    simulator = MagicMock()
-    simulator.N_simu = 1
-    # v_memo has shape (N_t, 1) — same convention as lib_eod_simulation
-    simulator.v_memo = np.linspace(4.2, 3.0, n_t).reshape(n_t, 1)
-    simulator.t_eods = np.array([t_eod])
-    return simulator
-
-
-def _patch_run_discharge(n_t: int, t_eod: float = 5.0):
-    """Return a *patch* context-manager that replaces ``_run_discharge`` with a
-    deterministic stub producing a history of length *n_t*."""
-    voltage = np.linspace(4.2, 3.0, n_t)
-
-    def _stub(_config, _soc_0):
-        return voltage.copy(), t_eod
-
-    return patch("qmodem.data._run_discharge", side_effect=_stub)
 
 
 def _windows_per_history(n_t: int, window_size: int, stride: int) -> int:
@@ -57,24 +29,6 @@ def _windows_per_history(n_t: int, window_size: int, stride: int) -> int:
     if count == 0:
         count = 1
     return count
-
-
-# ---------------------------------------------------------------------------
-# Tests for _back_calculate_rul_linear
-# ---------------------------------------------------------------------------
-
-
-class TestBackCalculateRulLinear:
-    def test_basic(self) -> None:
-        ruls = _back_calculate_rul_linear(t_eod=10.0, N_t=5)
-        assert ruls.shape == (5,)
-        np.testing.assert_allclose(ruls[0], 10.0)
-        np.testing.assert_allclose(ruls[-1], 0.0)
-
-    def test_with_t0(self) -> None:
-        ruls = _back_calculate_rul_linear(t_eod=10.0, N_t=3, t_0=2.0)
-        np.testing.assert_allclose(ruls[0], 8.0)
-        np.testing.assert_allclose(ruls[-1], 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -125,186 +79,3 @@ class TestMakeWindows:
         w1, _ = _make_windows(voltage, ruls, window_size=4, stride=1)
         w2, _ = _make_windows(voltage, ruls, window_size=4, stride=5)
         assert len(w2) < len(w1)
-
-
-# ---------------------------------------------------------------------------
-# Tests for BatterySimulationTimeWindowSource
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("n_histories", [1, 3, 5])
-def test_time_window_source_uses_all_histories(n_histories: int) -> None:
-    """BatterySimulationTimeWindowSource must produce windows from every history."""
-    n_t = 10
-    window_size = 3
-    stride = 1
-
-    with _patch_run_discharge(n_t):
-        source = BatterySimulationTimeWindowSource(
-            simulator_config={},
-            n_histories=n_histories,
-            window_size=window_size,
-            stride=stride,
-        )
-
-    expected_windows = n_histories * _windows_per_history(n_t, window_size, stride)
-    assert len(source) == expected_windows, (
-        f"Expected {expected_windows} windows for {n_histories} history(ies), "
-        f"got {len(source)}"
-    )
-
-
-def test_time_window_source_normalize_true() -> None:
-    """With normalize=True all targets must be in [0, 1]."""
-    with _patch_run_discharge(n_t=10):
-        source = BatterySimulationTimeWindowSource(
-            simulator_config={},
-            n_histories=2,
-            window_size=3,
-            normalize=True,
-        )
-    assert float(np.max(source.y)) <= 1.0
-    assert float(np.min(source.y)) >= 0.0
-
-
-def test_time_window_source_normalize_false() -> None:
-    """With normalize=False targets are raw RUL values (max > 1 for realistic t_eod)."""
-    with _patch_run_discharge(n_t=10, t_eod=5.0):
-        source = BatterySimulationTimeWindowSource(
-            simulator_config={},
-            n_histories=2,
-            window_size=3,
-            normalize=False,
-        )
-    assert float(np.max(source.y)) > 1.0
-
-
-def test_time_window_source_getitem_single_shape() -> None:
-    """__getitem__ with a scalar index returns window (1, window_size) and scalar
-    target."""
-    window_size = 4
-    with _patch_run_discharge(n_t=12):
-        source = BatterySimulationTimeWindowSource(
-            simulator_config={},
-            n_histories=1,
-            window_size=window_size,
-        )
-
-    window, target = source[0]
-    assert window.shape == (1, window_size)
-    assert target.shape == ()
-
-
-def test_time_window_source_getitem_batch_shape() -> None:
-    """__getitem__ with a slice returns windows (batch, 1, window_size) and targets
-    (batch,)."""
-    window_size = 4
-    batch_size = 3
-    with _patch_run_discharge(n_t=12):
-        source = BatterySimulationTimeWindowSource(
-            simulator_config={},
-            n_histories=1,
-            window_size=window_size,
-        )
-
-    windows, targets = source[:batch_size]
-    assert windows.shape == (batch_size, 1, window_size)
-    assert targets.shape == (batch_size,)
-
-
-def test_time_window_source_soc_range() -> None:
-    """All sampled SoC₀ values must lie within the requested range."""
-    soc_range = (0.2, 0.8)
-    with _patch_run_discharge(n_t=10):
-        source = BatterySimulationTimeWindowSource(
-            simulator_config={},
-            n_histories=50,
-            window_size=3,
-            soc_range=soc_range,
-        )
-    assert all(soc_range[0] <= s <= soc_range[1] for s in source.soc_0s)
-
-
-def test_time_window_source_short_histories_included() -> None:
-    """Histories shorter than window_size are padded, not skipped."""
-    voltage_short = np.array([4.0, 3.5])
-
-    def _stub(_config, _soc_0):
-        return voltage_short.copy(), 1.0
-
-    with patch("qmodem.data._run_discharge", side_effect=_stub):
-        source = BatterySimulationTimeWindowSource(
-            simulator_config={},
-            n_histories=3,
-            window_size=5,
-        )
-    # Each short history should produce at least one window
-    assert len(source) >= 3
-
-
-# ---------------------------------------------------------------------------
-# Tests for BatterySimulationTimeWindowSource.from_file
-# ---------------------------------------------------------------------------
-
-
-class TestFromFile:
-    @pytest.fixture
-    def train_file(self, tmp_path: Path) -> Path:
-        """Create a minimal train .npz file."""
-        n_histories = 3
-        n_t = 15
-        voltages = np.empty(n_histories, dtype=object)
-        t_eods = np.zeros(n_histories)
-        soc_0s = np.zeros(n_histories)
-        for i in range(n_histories):
-            voltages[i] = np.linspace(4.2, 3.0, n_t)
-            t_eods[i] = 5.0
-            soc_0s[i] = 0.5 + 0.1 * i
-
-        path = tmp_path / "train.npz"
-        np.savez(path, voltages=voltages, t_eods=t_eods, soc_0s=soc_0s)
-        return path
-
-    def test_loads_without_error(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2
-        )
-        assert len(source) > 0
-
-    def test_has_expected_attributes(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2
-        )
-        assert hasattr(source, "X")
-        assert hasattr(source, "y")
-        assert hasattr(source, "y_max")
-        assert hasattr(source, "soc_0s")
-
-    def test_getitem_returns_correct_shapes(self, train_file: Path) -> None:
-        window_size = 5
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=window_size, stride=2
-        )
-        x, y = source[0]
-        assert x.shape == (1, window_size)
-        assert y.shape == ()
-
-    def test_normalize_true(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2, normalize=True
-        )
-        assert float(np.max(source.y)) <= 1.0
-        assert float(np.min(source.y)) >= 0.0
-
-    def test_normalize_false(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2, normalize=False
-        )
-        # t_eod=5.0 so max RUL should be > 1
-        assert float(np.max(source.y)) > 1.0
-
-    def test_soc_0s_loaded(self, train_file: Path) -> None:
-        source = BatterySimulationTimeWindowSource.from_file(
-            train_file, window_size=5, stride=2
-        )
-        assert len(source.soc_0s) == 3
