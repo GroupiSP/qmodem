@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import pathlib
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum, auto
 
 import lib_eod_simulation as les
 import mlflow
 import numpy as np
+import pandas as pd
 
 from qmodem.tracking import MLFlowSetup, track_mlflow
-from qmodem.utils import BATTERY_DATA_DIR_PATH
 
 # TODO: track the data generator parameters (and the data itself?) with MLFlow.
 
@@ -89,12 +90,26 @@ class Hyperparameters:
 hp = Hyperparameters()
 
 
-def generate_train(rng: np.random.Generator) -> None:
+def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
+    df.drop(
+        columns=["rul_probability", "eod_reached_sim_0"], inplace=True
+    )  # Drop the RUL probability column
+    df.rename(
+        columns={"time": "time", "soc_sim_0": "soc", "voltage_sim_0": "voltage"},
+        inplace=True,
+    )
+    df.insert(0, "run_id", run_id)  # Add a run_id column for tracking
+    return None
+
+
+def generate_train(rng: np.random.Generator) -> pd.DataFrame:
     soc_0s = rng.uniform(
         low=hp.soc_range_train_val[0],
         high=hp.soc_range_train_val[1],
         size=hp.n_histories_train + hp.n_histories_val,
     )
+
+    out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
 
     for i, soc_0 in enumerate(soc_0s):
         config = les.SimulationConfig(
@@ -105,12 +120,18 @@ def generate_train(rng: np.random.Generator) -> None:
         )
         result = les.simulate_constant_capacity_simple(n_sim=1, config=config)
         df = result.to_dataframe()
-        df.to_csv(BATTERY_DATA_DIR_PATH / f"train_history_{i}.csv", index=False)
 
-    return
+        # Modify the dataframe and append it to the output one
+        _modify_dataframe(df, i)
+
+        out_df = pd.concat([out_df, df], ignore_index=True)
+
+    return out_df
 
 
-def generate_test(rng: np.random.Generator) -> None:
+def generate_test(rng: np.random.Generator) -> pd.DataFrame:
+    out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
+
     for i in range(hp.n_histories_test):
         config = les.SimulationConfig(
             process_noise_distribution=lambda: rng.normal(**hp.process_noise_params),
@@ -120,9 +141,21 @@ def generate_test(rng: np.random.Generator) -> None:
         )
         result = les.simulate_constant_capacity_simple(n_sim=1, config=config)
         df = result.to_dataframe()
-        df.to_csv(BATTERY_DATA_DIR_PATH / f"test_history_{i}.csv", index=False)
 
-    return
+        _modify_dataframe(df, i)
+
+        out_df = pd.concat([out_df, df], ignore_index=True)
+
+    return out_df
+
+
+def save_dataframe_to_file(df: pd.DataFrame, path: pathlib.Path) -> None:
+    df.to_csv(path, index=False)
+
+
+def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
+    dataset = mlflow.data.from_pandas(df, name=name)
+    mlflow.log_input(dataset=dataset, context=context)
 
 
 def main() -> None:
@@ -138,6 +171,14 @@ def main() -> None:
     - 10 test cases.
     - Different RNG to ensure independent test data.
     """
+    BATTERY_DATA_DIR = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "data"
+        / "raw"
+        / "battery"
+    )
+
+    # MLFlow setup
     run_tags = {
         "case_study": "battery",
         "stage": "data_generation",
@@ -153,8 +194,14 @@ def main() -> None:
 
         mlflow.log_params(asdict(hp))
 
-        generate_train(train_rng)
-        generate_test(test_rng)
+        train_df = generate_train(train_rng)
+        test_df = generate_test(test_rng)
+
+        save_dataframe_to_file(train_df, path=BATTERY_DATA_DIR / "train.csv")
+        save_dataframe_to_file(test_df, path=BATTERY_DATA_DIR / "test.csv")
+
+        track_dataframe(train_df, name="battery_train", context="train")
+        track_dataframe(test_df, name="battery_test", context="test")
 
 
 if __name__ == "__main__":
