@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 import mlflow
 
@@ -62,7 +62,7 @@ class Tags:
 class MLFlowSetup:
     run_name: str
     experiment_name: str
-    tags: Tags
+    tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
     artifact_store: str | Path = ROOT_DIR / "mlruns"
     tracking_server: str | None = None
@@ -88,7 +88,7 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
 
     try:
         active_run = mlflow.start_run(run_name=setup.run_name)
-        mlflow.set_tags(asdict(setup.tags))
+        mlflow.set_tags(setup.tags)
 
         yield active_run
 
