@@ -6,6 +6,7 @@ from typing import Any
 
 import flax.nnx as nnx
 import grain
+import optax
 import pandas as pd
 
 from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
@@ -24,6 +25,8 @@ class Hyperparameters:
     sampler_seeds: tuple[int, int] = (42, 0)
     net_init_seed: int = 0
     drop_remainder: bool = False
+    learning_rate: float = 1e-2
+    n_epochs: int = 500
 
 
 def get_dataframes(
@@ -104,10 +107,17 @@ def main() -> None:
         drop_remainder=hp.drop_remainder,
     )
 
-    # Model
+    # Model, schedule, optimizer
     model = Net(rngs=nnx.Rngs(hp.net_init_seed))
     n_params = count_parameters(model)  # TODO: track
     print(f"Model has {n_params} parameters.")
+
+    schedule = optax.cosine_decay_schedule(
+        init_value=hp.learning_rate,
+        decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
+        alpha=0.1,
+    )
+    nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
 
 
 if __name__ == "__main__":
