@@ -4,10 +4,12 @@ import pathlib
 from dataclasses import dataclass
 from typing import Any
 
+import flax.nnx as nnx
 import grain
 import pandas as pd
 
 from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
+from qmodem.utils import count_parameters
 
 from .hnn_model import Net
 
@@ -103,7 +105,9 @@ def main() -> None:
     )
 
     # Model
-    Net()
+    model = Net(rngs=nnx.Rngs(hp.net_init_seed))
+    n_params = count_parameters(model)  # TODO: track
+    print(f"Model has {n_params} parameters.")
 
 
 if __name__ == "__main__":

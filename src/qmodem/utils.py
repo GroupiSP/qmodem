@@ -225,7 +225,7 @@ def restore_model_from_checkpoint(
 
 
 # ---------------------------------------------------------------------------
-# JAX (AI) utilities
+# JAX (AI Stack) utilities
 # ---------------------------------------------------------------------------
 
 
@@ -260,3 +260,8 @@ def states_equal(s1: ArrayLike, s2: ArrayLike) -> bool:
     """
     leaves_equal = jax.tree.leaves(jax.tree.map(jnp.array_equal, s1, s2))
     return all(leaves_equal)
+
+
+def count_parameters(model: nnx.Module) -> int:
+    """Count the total number of parameters in a flax.nnx.Module."""
+    return sum(p.size for p in jax.tree.leaves(nnx.state(model, nnx.Param)))
