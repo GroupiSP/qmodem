@@ -41,12 +41,13 @@ class Net(nnx.Module):
         # GaussianBlock to output mean and variance
         self.gauss = GaussianBlock(n_filters, 1, rngs=rngs)
 
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs | None = None) -> jax.Array:
         """Forward pass through the heteroscedastic CNN.
 
         Args:
             x (jax.Array): Input with shape (batch, window_size, 1).
                            Accepts variable-length windows.
+            rngs (nnx.Rngs | None): RNGs at call time. Ignored in this model.
 
         Returns:
             jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).

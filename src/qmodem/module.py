@@ -927,42 +927,11 @@ def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Arra
     return forward(model, x, keys)
 
 
-def nll_loss(model: nnx.Module, batch: jax.Array, beta: float = 0.0) -> jax.Array:
-    """Negative log-likelihood loss based on a Gaussian predictive distribution.
-
-    Implements the standard NLL (Equation (31) in
-    https://doi.org/10.1016/j.ymssp.2023.110796) when ``beta=0``. When
-    ``beta>0``, applies variance weighting as proposed in
-    https://arxiv.org/pdf/2203.09168 (beta-NLL).
-
-    Args:
-        model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
-        batch (jax.Array): batched input data.
-        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
-            ``0.5`` is the value recommended in the beta-NLL paper. Defaults to
-            ``0.0``.
-
-    Returns:
-        jax.Array: loss value for the batch.
-    """
-
-    xs, labels = batch
-    outputs = model(xs)
-    means, variances = outputs[:, 0], outputs[:, 1]
-    variances = jnp.clip(variances, min=1e-6)
-    losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
-
-    if beta > 0:
-        losses = losses * jax.lax.stop_gradient(variances) ** beta
-
-    return jnp.mean(losses)
-
-
-def nll_loss_mcd(
+def nll_loss(
     model: nnx.Module,
     batch: jax.Array,
     beta: float = 0.0,
-    rngs: Optional[nnx.Rngs] = None,
+    rngs: nnx.Rngs | None = None,
 ) -> jax.Array:
     """NLL loss for models that require RNGs at call time (e.g. MC Dropout).
 
@@ -973,14 +942,14 @@ def nll_loss_mcd(
         model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
         batch (jax.Array): batched input data.
         beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
-        rngs (nnx.Rngs, optional): passed to the forward method of the model.
-            When ``None``, dropout uses its internal RNG state.
+        rngs (nnx.Rngs | None): passed to the forward method of the model. Can
+            be ``None`` for non-stochastic models.
 
     Returns:
         jax.Array: loss value for the batch.
     """
     xs, labels = batch
-    outputs = model(xs) if rngs is None else model(xs, rngs=rngs)
+    outputs = model(xs, rngs=rngs)
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
