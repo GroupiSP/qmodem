@@ -164,26 +164,23 @@ class DataPipeline:
     def __init__(self, steps: Sequence[Callable]) -> None:
         self.steps = steps
 
-    def __call__(self, x: Sequence[pd.DataFrame]) -> tuple[jax.Array, jax.Array]:
+    def __call__(self, x: pd.DataFrame) -> tuple[jax.Array, jax.Array]:
         for step in self.steps:
             x = step(x)
         return x
 
 
 def get_time_windows_and_join(
-    dfs: Sequence[pd.DataFrame], window_size: int, stride: int
+    df: pd.DataFrame, window_size: int, stride: int
 ) -> tuple[np.ndarray, np.ndarray]:
     voltage_windows: list[np.ndarray] = []
     rul_windows: list[float] = []
 
-    for df in dfs:
-        voltage: np.ndarray = df["voltage_sim_0"].values
-        ruls: np.ndarray = (df["time"].iloc[-1] - df["time"]).values
-        vw_i, rw_i = _make_windows(
-            voltage, ruls, window_size=window_size, stride=stride
-        )
-        voltage_windows.extend(vw_i)
-        rul_windows.extend(rw_i)
+    voltage: np.ndarray = df["voltage"].values
+    ruls: np.ndarray = (df["time"].iloc[-1] - df["time"]).values
+    voltage_windows, rul_windows = _make_windows(
+        voltage, ruls, window_size=window_size, stride=stride
+    )
 
     return np.array(voltage_windows), np.array(rul_windows)
 
@@ -216,18 +213,11 @@ def make_battery_data_pipeline(
 class DataFrameSource:
     def __init__(
         self,
-        paths: Sequence[pathlib.Path],
+        df: pd.DataFrame,
         pipeline: DataPipeline,
     ) -> None:
-        try:
-            self.dataframes = [pd.read_csv(path) for path in paths]
-        except FileNotFoundError as e:
-            raise FileNotFoundError(
-                f"One or more files not found in the provided paths: {paths}"
-            ) from e
-
         self.pipeline = pipeline
-        self.X, self.y = self.pipeline(self.dataframes)
+        self.X, self.y = self.pipeline(df)
 
     def __len__(self) -> int:
         return len(self.y)

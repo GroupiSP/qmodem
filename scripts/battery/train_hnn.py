@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 import grain
+import pandas as pd
 
 from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
 
@@ -12,6 +13,7 @@ from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
 @dataclass
 class Hyperparameters:
     # TODO: this should become shared among the battery scripts.
+    # TODO: use defaults
     batch_size: int
     window_size: int
     stride: int
@@ -20,12 +22,17 @@ class Hyperparameters:
     drop_remainder: bool
 
 
-def get_data_paths(data_dir: pathlib.Path) -> tuple[Sequence[pathlib.Path]]:
-    all_tv_paths = sorted(data_dir.glob("train_history_[0-9]*.csv"))
-    training_paths = [p for p in all_tv_paths if int(p.stem.split("_")[-1]) < 100]
-    validation_paths = [p for p in all_tv_paths if int(p.stem.split("_")[-1]) >= 100]
-    test_paths = sorted(data_dir.glob("test_history_[0-9]*.csv"))
-    return training_paths, validation_paths, test_paths
+def get_dataframes(
+    train_path: pathlib.Path, test_path: pathlib.Path
+) -> tuple[pd.DataFrame, pd.Dataframe, pd.DataFrame]:
+    train_df = pd.read_csv(train_path)
+    # Split the train dataframe: if the run ID is < 100, then it goes in the training set, otherwise in the validation set. This way we ensure that the same RNG seed will always produce the same split.
+    train_df, val_df = (
+        train_df[train_df["run_id"] < 100],
+        train_df[train_df["run_id"] >= 100],
+    )
+    test_df = pd.read_csv(test_path)
+    return train_df, val_df, test_df
 
 
 def create_dataloaders(
@@ -78,16 +85,18 @@ def main() -> None:
         / "battery"
     )
 
-    training_paths, validation_paths, test_paths = get_data_paths(RAW_DATA_DIR)
+    train_path, test_path = RAW_DATA_DIR / "train.csv", RAW_DATA_DIR / "test.csv"
 
     # Build the data sources, including windowing and normalization
     data_pipeline = make_battery_data_pipeline(
         window_size=hp.window_size, stride=hp.stride, normalize=hp.normalize_rul
     )
 
-    ds_train = DataFrameSource(paths=list(training_paths), pipeline=data_pipeline)
-    ds_val = DataFrameSource(paths=list(validation_paths), pipeline=data_pipeline)
-    DataFrameSource(paths=list(test_paths), pipeline=data_pipeline)
+    train_df, val_df, test_df = get_dataframes(train_path, test_path)
+
+    ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline)
+    ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline)
+    # ds_test = DataFrameSource(df=test_df, pipeline=data_pipeline)
 
     # Dataloaders
     create_dataloaders(
