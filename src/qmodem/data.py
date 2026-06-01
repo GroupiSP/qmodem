@@ -35,7 +35,7 @@ def _make_windows(
 
     Returns:
         A tuple ``(windows, targets)`` where each window has shape
-        ``(1, window_size)`` and each target is a scalar RUL value.
+        ``(window_size, 1)`` and each target is a scalar RUL value.
     """
     N_t = len(voltage)
 
@@ -49,16 +49,13 @@ def _make_windows(
     windows: list[np.ndarray] = []
     targets: list[float] = []
 
-    end = 0
     for start in range(0, N_t - window_size, stride):
         end = start + window_size
-        windows.append(voltage[start:end].reshape(1, -1))
-        targets.append(float(ruls[end]) if end < N_t else 0.0)
+        windows.append(voltage[start:end].reshape(-1, 1))
+        targets.append(float(ruls[end]))
 
-    # Trailing window covering the very end of the history.
-    if end < N_t:
-        windows.append(voltage[-window_size:].reshape(1, -1))
-        targets.append(0.0)
+    windows.append(voltage[-window_size:].reshape(-1, 1))
+    targets.append(0.0)
 
     return windows, targets
 
@@ -176,11 +173,15 @@ def get_time_windows_and_join(
     voltage_windows: list[np.ndarray] = []
     rul_windows: list[float] = []
 
-    voltage: np.ndarray = df["voltage"].values
-    ruls: np.ndarray = (df["time"].iloc[-1] - df["time"]).values
-    voltage_windows, rul_windows = _make_windows(
-        voltage, ruls, window_size=window_size, stride=stride
-    )
+    unit_ids = df["run_id"].unique()
+    for unit_id in unit_ids:
+        unit_df = df[df["run_id"] == unit_id].sort_values("time")
+        voltage = unit_df["voltage"].values
+        ruls = unit_df["time"].iloc[-1] - unit_df["time"].values
+
+        vw_i, rw_i = _make_windows(voltage, ruls, window_size, stride)
+        voltage_windows.extend(vw_i)
+        rul_windows.extend(rw_i)
 
     return np.array(voltage_windows), np.array(rul_windows)
 
