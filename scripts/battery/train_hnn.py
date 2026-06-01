@@ -17,13 +17,13 @@ from qmodem.module import GaussianBlock
 @dataclass
 class Hyperparameters:
     # TODO: this should become shared among the battery scripts.
-    # TODO: use defaults
-    batch_size: int
-    window_size: int
-    stride: int
-    normalize_rul: bool
-    sampler_seeds: tuple[int, int]
-    drop_remainder: bool
+    batch_size: int = 32
+    window_size: int = 20
+    stride: int = 1
+    normalize_rul: bool = True
+    sampler_seeds: tuple[int, int] = (42, 0)
+    net_init_seed: int = 0
+    drop_remainder: bool = False
 
 
 class Net(nnx.Module):
@@ -130,14 +130,7 @@ def create_dataloaders(
 
 
 def main() -> None:
-    hp = Hyperparameters(
-        batch_size=32,
-        window_size=20,
-        stride=1,
-        normalize_rul=True,
-        sampler_seeds=(42, 0),
-        drop_remainder=False,
-    )
+    hp = Hyperparameters()
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -167,6 +160,8 @@ def main() -> None:
         sampler_seeds=hp.sampler_seeds,
         drop_remainder=hp.drop_remainder,
     )
+
+    # Model
 
 
 if __name__ == "__main__":
