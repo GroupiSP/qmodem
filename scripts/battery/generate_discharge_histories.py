@@ -87,9 +87,6 @@ class Hyperparameters:
     test_seed: int = 123
 
 
-hp = Hyperparameters()
-
-
 def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
     df.drop(
         columns=["rul_probability", "eod_reached_sim_0"], inplace=True
@@ -102,7 +99,7 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
     return None
 
 
-def generate_train(rng: np.random.Generator) -> pd.DataFrame:
+def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame:
     soc_0s = rng.uniform(
         low=hp.soc_range_train_val[0],
         high=hp.soc_range_train_val[1],
@@ -129,7 +126,7 @@ def generate_train(rng: np.random.Generator) -> pd.DataFrame:
     return out_df
 
 
-def generate_test(rng: np.random.Generator) -> pd.DataFrame:
+def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame:
     out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
 
     for i in range(hp.n_histories_test):
@@ -178,6 +175,8 @@ def main() -> None:
         / "battery"
     )
 
+    hp = Hyperparameters()
+
     # MLFlow setup
     run_tags = {
         "case_study": "battery",
@@ -194,8 +193,8 @@ def main() -> None:
 
         mlflow.log_params(asdict(hp))
 
-        train_df = generate_train(train_rng)
-        test_df = generate_test(test_rng)
+        train_df = generate_train(train_rng, hp)
+        test_df = generate_test(test_rng, hp)
 
         save_dataframe_to_file(train_df, path=BATTERY_DATA_DIR / "train.csv")
         save_dataframe_to_file(test_df, path=BATTERY_DATA_DIR / "test.csv")
