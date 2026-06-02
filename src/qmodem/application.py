@@ -53,7 +53,6 @@ from qmodem.module import (
     HeteroscedasticCNN1D,
     elbo_nll_loss,
     nll_loss,
-    nll_loss_mcd,
 )
 from qmodem.train import (
     EarlyStopper,
@@ -880,7 +879,7 @@ def _train_mcd_cnn(
     @nnx.jit
     def train_step(model, optimizer, batch):
         def loss_fn(model):
-            return nll_loss_mcd(model, batch, beta=0.5)
+            return nll_loss(model, batch, beta=0.5)
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
@@ -888,7 +887,7 @@ def _train_mcd_cnn(
 
     @nnx.jit
     def eval_step(model, batch):
-        return nll_loss_mcd(model, batch)
+        return nll_loss(model, batch)
 
     print("Starting training...")
     print("=" * 70)

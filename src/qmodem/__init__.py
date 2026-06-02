@@ -41,7 +41,6 @@ from .module import (  # noqa: F401
     elbo_nll_loss,
     mse_loss,
     nll_loss,
-    nll_loss_mcd,
 )
 from .utils import (  # noqa: F401
     BATT_CONFIG_PATH,
