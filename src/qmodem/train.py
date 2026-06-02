@@ -94,6 +94,7 @@ def train_loop(
     n_epochs: int,
     dataloader_train: Iterable,
     dataloader_val: Iterable,
+    initial_key: jax.Array,
     train_batch_fn: StepFn,
     eval_batch_fn: StepFn,
     early_stopper: EarlyStopper | None = None,
@@ -122,6 +123,7 @@ def train_loop(
         n_epochs: Maximum number of training epochs.
         dataloader_train: Training data loader (re-iterable for loss evaluation).
         dataloader_val: Validation data loader (iterable).
+        initial_key: Initial RNG key that will be advanced at each step.
         train_batch_fn: Callable that takes a batch and performs one training step.
         eval_batch_fn: Callable that takes a batch and returns a scalar loss value.
         early_stopper: Optional :class:`EarlyStopper` instance.
@@ -138,6 +140,8 @@ def train_loop(
     best_val_loss = float("inf")
     epochs_completed = 0
 
+    key = initial_key
+
     try:
         for epoch in range(n_epochs):
             if on_train_epoch_start is not None:
@@ -145,7 +149,8 @@ def train_loop(
 
             train_losses = []
             for batch in dataloader_train:
-                loss = train_batch_fn(batch)
+                key, _ = jax.random.split(key)
+                loss = train_batch_fn(batch, key)
                 train_losses.append(loss)
 
             if on_val_epoch_start is not None:
@@ -153,7 +158,8 @@ def train_loop(
 
             val_losses = []
             for batch in dataloader_val:
-                val_losses.append(eval_batch_fn(batch))
+                key, _ = jax.random.split(key)
+                val_losses.append(eval_batch_fn(batch, key))
 
             train_loss = jnp.mean(jnp.array(train_losses))
             val_loss = jnp.mean(jnp.array(val_losses))
