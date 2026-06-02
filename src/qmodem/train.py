@@ -83,11 +83,11 @@ def train_report_log(context: TrainingReportContext) -> None:
 
 
 class ReportConditionEvery:
-    def __init__(self, print_every: int) -> None:
-        self.print_every = print_every
+    def __init__(self, report_every: int) -> None:
+        self.report_every = report_every
 
     def __call__(self, context: TrainingReportContext) -> bool:
-        return (context.epoch + 1) % self.print_every == 0 or context.epoch == 0
+        return (context.epoch + 1) % self.report_every == 0 or context.epoch == 0
 
 
 def train_loop(
@@ -99,7 +99,7 @@ def train_loop(
     eval_batch_fn: StepFn,
     early_stopper: EarlyStopper | None = None,
     reporter: TrainingReporter = train_report_print,
-    report_condition: ReportCondition = ReportConditionEvery(print_every=1),
+    report_condition: ReportCondition = ReportConditionEvery(report_every=1),
     on_train_epoch_start: Callback | None = None,
     on_val_epoch_start: Callback | None = None,
     on_validation_improvement: Callback | None = None,

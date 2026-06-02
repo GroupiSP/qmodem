@@ -182,7 +182,7 @@ def main() -> None:
     early_stopper = EarlyStopper(
         patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
     )
-    report_condition = ReportConditionEvery(print_every=20)
+    report_condition = ReportConditionEvery(report_every=20)
     reporter = train_report_print
 
     # TODO: track

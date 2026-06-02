@@ -892,7 +892,7 @@ def _train_mcd_cnn(
     print("Starting training...")
     print("=" * 70)
     early_stopper = EarlyStopper(patience=patience, min_delta=1e-4)
-    report_condition = ReportConditionEvery(print_every=print_every)
+    report_condition = ReportConditionEvery(report_every=print_every)
     reporter = train_report_print
 
     best_val_loss, _ = train_loop(
