@@ -927,29 +927,36 @@ def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Arra
     return forward(model, x, keys)
 
 
+def negative_log_likelihood(
+    model: nnx.Module,
+    batch: tuple[jax.Array, jax.Array],
+    rngs: nnx.Rngs,
+    beta: float = 0.0,
+) -> jax.Array:
+    xs, labels = batch
+    # Add a batch dimension to xs for the model's forward pass
+    xs_b = jnp.expand_dims(xs, axis=0)
+    outputs = model(xs_b, rngs=rngs)
+    means, variances = outputs[:, 0], outputs[:, 1]
+    variances = jnp.clip(variances, min=1e-6)
+    losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
+
+    if beta > 0:
+        losses = losses * jax.lax.stop_gradient(variances) ** beta
+
+    return losses
+
+
 def nll_loss(
     model: nnx.Module,
-    batch: jax.Array,
+    batch: tuple[jax.Array, jax.Array],
+    rngs: nnx.Rngs,
     beta: float = 0.0,
-    rngs: nnx.Rngs | None = None,
 ) -> jax.Array:
-    """NLL loss for models that require RNGs at call time (e.g. MC Dropout).
-
-    Same formulation as :func:`nll_loss` but forwards ``rngs`` to the model's
-    forward pass so that stochastic layers (dropout) receive fresh random keys.
-
-    Args:
-        model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
-        batch (jax.Array): batched input data.
-        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
-        rngs (nnx.Rngs | None): passed to the forward method of the model. Can
-            be ``None`` for non-stochastic models.
-
-    Returns:
-        jax.Array: loss value for the batch.
-    """
     xs, labels = batch
-    outputs = model(xs, rngs=rngs)
+    # Add a batch dimension to xs for the model's forward pass
+    xs_b = jnp.expand_dims(xs, axis=0)
+    outputs = model(xs_b, rngs=rngs)
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
