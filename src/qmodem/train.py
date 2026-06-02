@@ -15,6 +15,14 @@ type StepFn = Callable[[jax.Array, jax.Array], jax.Array]
 type Callback = Callable[[], None]
 
 
+@dataclass(frozen=True)
+class TrainingReportContext:
+    epoch: int
+    train_loss: float
+    val_loss: float
+    best_val_loss: float
+
+
 class TrainingReporter(Protocol):
     def __call__(self, context: TrainingReportContext) -> None: ...
 
@@ -55,14 +63,6 @@ class EarlyStopper:
                 )
                 return True
             return False
-
-
-@dataclass(frozen=True)
-class TrainingReportContext:
-    epoch: int
-    train_loss: float
-    val_loss: float
-    best_val_loss: float
 
 
 def train_report_print(context: TrainingReportContext) -> None:
