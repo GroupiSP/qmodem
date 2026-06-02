@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum, auto
-from typing import Any, Callable, Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 import jax
 import jax.numpy as jnp
 
 type ReportCondition = Callable[[TrainingReportContext], bool]
+
+# The first argument is the batch, the second is the RNG key.
+type StepFn = Callable[[jax.Array, jax.Array], jax.Array]
+
+type Callback = Callable[[], None]
+
+
+class TrainingReporter(Protocol):
+    def __call__(self, context: TrainingReportContext) -> None: ...
 
 
 class EarlyStopState(StrEnum):
@@ -56,10 +65,6 @@ class TrainingReportContext:
     best_val_loss: float
 
 
-class TrainingReporter(Protocol):
-    def __call__(self, context: TrainingReportContext) -> None: ...
-
-
 def train_report_print(context: TrainingReportContext) -> None:
     print(
         f"Epoch {context.epoch:3d} | "
@@ -89,15 +94,14 @@ def train_loop(
     n_epochs: int,
     dataloader_train: Iterable,
     dataloader_val: Iterable,
-    train_batch_fn: Callable[[Any], jax.Array],
-    eval_batch_fn: Callable[[Any], jax.Array],
-    *,
+    train_batch_fn: StepFn,
+    eval_batch_fn: StepFn,
     early_stopper: EarlyStopper | None = None,
     reporter: TrainingReporter = train_report_print,
     report_condition: ReportCondition = ReportConditionEvery(print_every=1),
-    on_train_epoch_start: Callable[[], None] | None = None,
-    on_val_epoch_start: Callable[[], None] | None = None,
-    on_validation_improvement: Callable[[], None] | None = None,
+    on_train_epoch_start: Callback | None = None,
+    on_val_epoch_start: Callback | None = None,
+    on_validation_improvement: Callback | None = None,
 ) -> tuple[float, int]:
     """Run a training loop with optional early stopping and graceful interruption.
 
