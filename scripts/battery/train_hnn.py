@@ -13,6 +13,12 @@ import pandas as pd
 
 from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
 from qmodem.module import negative_log_likelihood
+from qmodem.train import (
+    EarlyStopper,
+    ReportConditionEvery,
+    train_loop,
+    train_report_print,
+)
 from qmodem.utils import count_parameters
 
 from .hnn_model import Net
@@ -151,10 +157,10 @@ def main() -> None:
         return loss
 
     # Do a single train step for debugging purposes
-    batch = next(iter(dataloader_train))
-    key = jax.random.PRNGKey(hp.train_rng_seed)
-    loss = train_step(model, batch, key, optimizer)
-    print(f"Train step loss: {loss:.6f}")
+    # batch = next(iter(dataloader_train))
+    # key = jax.random.PRNGKey(hp.train_rng_seed)
+    # loss = train_step(model, batch, key, optimizer)
+    # print(f"Train step loss: {loss:.6f}")
 
     @nnx.jit
     def eval_step(
@@ -168,31 +174,31 @@ def main() -> None:
         return jnp.mean(per_sample_nll(model, batch, keys))
 
     # Do an eval step for debugging purposes
-    batch = next(iter(dataloader_train))
-    key, _ = jax.random.split(key)
-    loss = eval_step(model, batch, key)
-    print(f"Eval step loss: {loss:.6f}")
+    # batch = next(iter(dataloader_train))
+    # key, _ = jax.random.split(key)
+    # loss = eval_step(model, batch, key)
+    # print(f"Eval step loss: {loss:.6f}")
 
-    # early_stopper = EarlyStopper(
-    #     patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
-    # )
-    # report_condition = ReportConditionEvery(hp.print_every)
-    # reporter = train_report_print
+    early_stopper = EarlyStopper(
+        patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
+    )
+    report_condition = ReportConditionEvery(print_every=20)
+    reporter = train_report_print
 
-    # # TODO: handle RNGs in the training loop
-    # # TODO: track
-    # best_val_loss, _ = train_loop(
-    #     n_epochs=hp.n_epochs,
-    #     dataloader_train=dataloader_train,
-    #     dataloader_val=dataloader_val,
-    #     train_batch_fn=lambda batch: train_step(model, optimizer, batch),
-    #     eval_batch_fn=lambda batch: eval_step(model, batch),
-    #     early_stopper=early_stopper,
-    #     report_condition=report_condition,
-    #     reporter=reporter,
-    #     on_train_epoch_start=model.train,
-    #     on_val_epoch_start=model.eval,
-    # )
+    # TODO: track
+    best_val_loss, epochs_completed = train_loop(
+        n_epochs=hp.n_epochs,
+        dataloader_train=dataloader_train,
+        dataloader_val=dataloader_val,
+        initial_key=jax.random.PRNGKey(hp.train_rng_seed),
+        train_batch_fn=lambda batch, key: train_step(model, batch, key, optimizer),
+        eval_batch_fn=lambda batch, key: eval_step(model, batch, key),
+        early_stopper=early_stopper,
+        report_condition=report_condition,
+        reporter=reporter,
+        on_train_epoch_start=model.train,
+        on_val_epoch_start=model.eval,
+    )
 
 
 if __name__ == "__main__":
