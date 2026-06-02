@@ -6,10 +6,13 @@ from typing import Any
 
 import flax.nnx as nnx
 import grain
+import jax
+import jax.numpy as jnp
 import optax
 import pandas as pd
 
 from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
+from qmodem.module import negative_log_likelihood
 from qmodem.utils import count_parameters
 
 from .hnn_model import Net
@@ -24,9 +27,13 @@ class Hyperparameters:
     normalize_rul: bool = True
     sampler_seeds: tuple[int, int] = (42, 0)
     net_init_seed: int = 0
+    train_rng_seed: int = 1
     drop_remainder: bool = False
     learning_rate: float = 1e-2
     n_epochs: int = 500
+    beta_nll: float = 0.5
+    early_stopping_patience: int = 50
+    early_stopping_min_delta: float = 1e-4
 
 
 def get_dataframes(
@@ -99,7 +106,7 @@ def main() -> None:
     # ds_test = DataFrameSource(df=test_df, pipeline=data_pipeline)
 
     # Dataloaders
-    create_dataloaders(
+    dataloader_train, dataloader_val = create_dataloaders(
         ds_train=ds_train,
         ds_val=ds_val,
         batch_size=hp.batch_size,
@@ -110,14 +117,72 @@ def main() -> None:
     # Model, schedule, optimizer
     model = Net(rngs=nnx.Rngs(hp.net_init_seed))
     n_params = count_parameters(model)  # TODO: track
-    print(f"Model has {n_params} parameters.")
+    print(f"Model has {n_params} parameters.")  # TODO: remove
 
     schedule = optax.cosine_decay_schedule(
         init_value=hp.learning_rate,
         decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
         alpha=0.1,
     )
-    nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
+    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
+
+    @nnx.jit
+    def train_step(
+        model: nnx.Module,
+        batch: jax.Array,
+        key: jax.Array,
+        optimizer: nnx.Optimizer,
+    ) -> jax.Array:
+        # Split the keys for the batch
+        keys = jax.random.split(key, batch[0].shape[0])
+
+        @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
+        def per_sample_nll(model, sample, sample_key):
+            # Build the RNG here to avoid crossing different trace levels.
+            rngs = nnx.Rngs(dropout=sample_key)
+            return negative_log_likelihood(model, sample, rngs, beta=hp.beta_nll)
+
+        def loss_fn(model):
+            return jnp.mean(per_sample_nll(model, batch, keys))
+
+        loss, grads = nnx.value_and_grad(loss_fn)(model)
+        optimizer.update(model, grads)
+        return loss
+
+    # Do a single train step for debugging purposes
+    batch = next(iter(dataloader_train))
+    key = jax.random.PRNGKey(hp.train_rng_seed)
+    loss = train_step(model, batch, key, optimizer)
+    print(f"Train step loss: {loss:.6f}")
+
+    # @nnx.jit
+    # def eval_step(
+    #     model: nnx.Module,
+    #     batch: jax.Array,
+    #     rngs: nnx.Rngs,
+    # ) -> jax.Array:
+    #     return nll_loss(model, batch, rngs, hp.beta_nll)
+
+    # early_stopper = EarlyStopper(
+    #     patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
+    # )
+    # report_condition = ReportConditionEvery(hp.print_every)
+    # reporter = train_report_print
+
+    # # TODO: handle RNGs in the training loop
+    # # TODO: track
+    # best_val_loss, _ = train_loop(
+    #     n_epochs=hp.n_epochs,
+    #     dataloader_train=dataloader_train,
+    #     dataloader_val=dataloader_val,
+    #     train_batch_fn=lambda batch: train_step(model, optimizer, batch),
+    #     eval_batch_fn=lambda batch: eval_step(model, batch),
+    #     early_stopper=early_stopper,
+    #     report_condition=report_condition,
+    #     reporter=reporter,
+    #     on_train_epoch_start=model.train,
+    #     on_val_epoch_start=model.eval,
+    # )
 
 
 if __name__ == "__main__":
