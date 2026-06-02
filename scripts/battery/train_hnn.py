@@ -126,6 +126,13 @@ def main() -> None:
     )
     optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
 
+    # Loss evaluation functions and steps for the training.
+    @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
+    def per_sample_nll(model, sample, sample_key):
+        # Build the RNG here to avoid crossing different trace levels.
+        rngs = nnx.Rngs(dropout=sample_key)
+        return negative_log_likelihood(model, sample, rngs, beta=hp.beta_nll)
+
     @nnx.jit
     def train_step(
         model: nnx.Module,
@@ -135,12 +142,6 @@ def main() -> None:
     ) -> jax.Array:
         # Split the keys for the batch
         keys = jax.random.split(key, batch[0].shape[0])
-
-        @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
-        def per_sample_nll(model, sample, sample_key):
-            # Build the RNG here to avoid crossing different trace levels.
-            rngs = nnx.Rngs(dropout=sample_key)
-            return negative_log_likelihood(model, sample, rngs, beta=hp.beta_nll)
 
         def loss_fn(model):
             return jnp.mean(per_sample_nll(model, batch, keys))
@@ -155,13 +156,22 @@ def main() -> None:
     loss = train_step(model, batch, key, optimizer)
     print(f"Train step loss: {loss:.6f}")
 
-    # @nnx.jit
-    # def eval_step(
-    #     model: nnx.Module,
-    #     batch: jax.Array,
-    #     rngs: nnx.Rngs,
-    # ) -> jax.Array:
-    #     return nll_loss(model, batch, rngs, hp.beta_nll)
+    @nnx.jit
+    def eval_step(
+        model: nnx.Module,
+        batch: jax.Array,
+        key: jax.Array,
+    ) -> jax.Array:
+        # Split the keys for the batch
+        keys = jax.random.split(key, batch[0].shape[0])
+
+        return jnp.mean(per_sample_nll(model, batch, keys))
+
+    # Do an eval step for debugging purposes
+    batch = next(iter(dataloader_train))
+    key, _ = jax.random.split(key)
+    loss = eval_step(model, batch, key)
+    print(f"Eval step loss: {loss:.6f}")
 
     # early_stopper = EarlyStopper(
     #     patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
