@@ -7,6 +7,8 @@ from typing import Any, Callable, Iterable, Protocol
 import jax
 import jax.numpy as jnp
 
+type ReportCondition = Callable[[TrainingReportContext], bool]
+
 
 class EarlyStopState(StrEnum):
     WAITING_FOR_IMPROVEMENT = auto()
@@ -52,9 +54,6 @@ class TrainingReportContext:
     train_loss: float
     val_loss: float
     best_val_loss: float
-
-
-type ReportCondition = Callable[[TrainingReportContext], bool]
 
 
 class TrainingReporter(Protocol):
