@@ -39,7 +39,6 @@ from .module import (  # noqa: F401
     SimpleCNN1D,
     StandardBayesConv1D,
     elbo_nll_loss,
-    mse_loss,
     nll_loss,
 )
 from .utils import (  # noqa: F401

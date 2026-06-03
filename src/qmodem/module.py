@@ -1008,18 +1008,43 @@ def elbo_nll_loss(
     return nll + kl
 
 
-def mse_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
-    """Mean squared error loss.
-
-    Args:
-        model (nnx.Module): neural network model.
-        batch (jax.Array): batched input data.
-        rngs (nnx.Rngs): passed to the forward method of the model.
-    Returns:
-        jax.Array: loss value for the batch.
-    """
+def mse(
+    model: nnx.Module,
+    batch: tuple[jax.Array, jax.Array],
+    rngs: nnx.Rngs,
+) -> jax.Array:
     xs, labels = batch
-    outputs = model(xs)
-    losses = jnp.square(outputs - labels)
+    outputs = model(xs, rngs=rngs)
+    losses = jnp.square(outputs[:, 0] - labels)
 
     return jnp.mean(losses)
+
+
+def train_step_simple(
+    model: nnx.Module,
+    batch: tuple[jax.Array, jax.Array],
+    key: jax.Array,
+    optimizer: nnx.Optimizer,
+) -> jax.Array:
+    """Single training step with MSE loss."""
+
+    def loss_fn(model):
+        return mse(model, batch, rngs=nnx.Rngs(key))
+
+    loss, grads = nnx.value_and_grad(loss_fn)(model)
+    optimizer.update(model, grads)
+    return loss
+
+
+def eval_step_simple(
+    model: nnx.Module,
+    batch: tuple[jax.Array, jax.Array],
+    key: jax.Array,
+    optimizer: nnx.Optimizer,
+) -> jax.Array:
+    """Single evaluation step with MSE loss."""
+
+    def loss_fn(model):
+        return mse(model, batch, rngs=nnx.Rngs(key))
+
+    return loss_fn(model)

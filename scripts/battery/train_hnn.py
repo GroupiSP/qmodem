@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import logging
 import pathlib
 from dataclasses import dataclass
 from typing import Any
@@ -8,16 +10,17 @@ import flax.nnx as nnx
 import grain
 import jax
 import jax.numpy as jnp
+import mlflow
 import optax
 import pandas as pd
 
 from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
 from qmodem.module import negative_log_likelihood
+from qmodem.tracking import MLFlowSetup, track_mlflow
 from qmodem.train import (
     EarlyStopper,
-    ReportConditionEvery,
+    LogReporter,
     train_loop,
-    train_report_print,
 )
 from qmodem.utils import count_parameters
 
@@ -89,6 +92,16 @@ def create_dataloaders(
 
 
 def main() -> None:
+    log_stram = io.StringIO()
+    logging.basicConfig(
+        level=logging.INFO,
+        force=True,
+        handlers=[
+            logging.StreamHandler(),  # console (stderr)
+            logging.StreamHandler(log_stram),  # in-memory stream for MLflow logging
+        ],
+    )
+
     hp = Hyperparameters()
 
     RAW_DATA_DIR = (
@@ -122,8 +135,6 @@ def main() -> None:
 
     # Model, schedule, optimizer
     model = Net(rngs=nnx.Rngs(hp.net_init_seed))
-    n_params = count_parameters(model)  # TODO: track
-    print(f"Model has {n_params} parameters.")  # TODO: remove
 
     schedule = optax.cosine_decay_schedule(
         init_value=hp.learning_rate,
@@ -156,49 +167,49 @@ def main() -> None:
         optimizer.update(model, grads)
         return loss
 
-    # Do a single train step for debugging purposes
-    # batch = next(iter(dataloader_train))
-    # key = jax.random.PRNGKey(hp.train_rng_seed)
-    # loss = train_step(model, batch, key, optimizer)
-    # print(f"Train step loss: {loss:.6f}")
-
     @nnx.jit
     def eval_step(
         model: nnx.Module,
         batch: jax.Array,
         key: jax.Array,
+        optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
         # Split the keys for the batch
         keys = jax.random.split(key, batch[0].shape[0])
 
         return jnp.mean(per_sample_nll(model, batch, keys))
 
-    # Do an eval step for debugging purposes
-    # batch = next(iter(dataloader_train))
-    # key, _ = jax.random.split(key)
-    # loss = eval_step(model, batch, key)
-    # print(f"Eval step loss: {loss:.6f}")
-
     early_stopper = EarlyStopper(
         patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
     )
-    report_condition = ReportConditionEvery(report_every=20)
-    reporter = train_report_print
 
-    # TODO: track
-    best_val_loss, epochs_completed = train_loop(
-        n_epochs=hp.n_epochs,
-        dataloader_train=dataloader_train,
-        dataloader_val=dataloader_val,
-        initial_key=jax.random.PRNGKey(hp.train_rng_seed),
-        train_batch_fn=lambda batch, key: train_step(model, batch, key, optimizer),
-        eval_batch_fn=lambda batch, key: eval_step(model, batch, key),
-        early_stopper=early_stopper,
-        report_condition=report_condition,
-        reporter=reporter,
-        on_train_epoch_start=model.train,
-        on_val_epoch_start=model.eval,
-    )
+    with track_mlflow(
+        MLFlowSetup(
+            run_name="train_hnn",
+            experiment_name="battery_default",
+            tags={
+                "model": "HNN",
+                "case_study": "battery",
+                "stage": "training",
+            },
+        )
+    ):
+        mlflow.log_param("n_params", count_parameters(model))
+
+        train_loop(
+            n_epochs=hp.n_epochs,
+            dataloader_train=dataloader_train,
+            dataloader_val=dataloader_val,
+            initial_key=jax.random.PRNGKey(hp.train_rng_seed),
+            model=model,
+            optimizer=optimizer,
+            train_batch_fn=train_step,
+            eval_batch_fn=eval_step,
+            callbacks=[LogReporter(log_every=10)],
+            early_stopper=early_stopper,
+        )
+
+        mlflow.log_text(log_stram.getvalue(), "training_log.txt")
 
 
 if __name__ == "__main__":
