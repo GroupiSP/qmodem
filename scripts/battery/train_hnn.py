@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 import io
 import logging
 import pathlib
-from dataclasses import dataclass
 from typing import Any
 
 import flax.nnx as nnx
@@ -27,7 +27,7 @@ from qmodem.utils import count_parameters
 from .hnn_model import Net
 
 
-@dataclass
+@dataclasses.dataclass
 class Hyperparameters:
     # TODO: this should become shared among the battery scripts.
     batch_size: int = 32
@@ -194,6 +194,7 @@ def main() -> None:
             },
         )
     ):
+        mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
 
         train_loop(
