@@ -72,7 +72,6 @@ def create_dataloaders(
     drop_remainder: bool = False,
 ) -> tuple[Any, Any]:
     """Create Grain DataLoaders for training and validation."""
-    from grain.transforms import Batch
 
     sampler_train = grain.samplers.IndexSampler(
         num_records=len(ds_train), num_epochs=1, shuffle=True, seed=sampler_seeds[0]
@@ -80,7 +79,9 @@ def create_dataloaders(
     dataloader_train = grain.DataLoader(
         data_source=ds_train,
         sampler=sampler_train,
-        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
+        operations=[
+            grain.transforms.Batch(batch_size=batch_size, drop_remainder=drop_remainder)
+        ],
         worker_count=0,
     )
 
@@ -90,7 +91,9 @@ def create_dataloaders(
     dataloader_val = grain.DataLoader(
         data_source=ds_val,
         sampler=sampler_val,
-        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
+        operations=[
+            grain.transforms.Batch(batch_size=batch_size, drop_remainder=drop_remainder)
+        ],
         worker_count=0,
     )
 
