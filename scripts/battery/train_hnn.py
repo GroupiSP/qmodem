@@ -16,7 +16,12 @@ import pandas as pd
 
 from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
 from qmodem.module import negative_log_likelihood
-from qmodem.tracking import MLFlowSetup, mlflow_track_model_best_state, track_mlflow
+from qmodem.tracking import (
+    MLFlowSetup,
+    mlflow_track_losses,
+    mlflow_track_model_best_state,
+    track_mlflow,
+)
 from qmodem.train import (
     EarlyStopper,
     LogReporter,
@@ -206,7 +211,11 @@ def main() -> None:
             optimizer=optimizer,
             train_batch_fn=train_step,
             eval_batch_fn=eval_step,
-            callbacks=[LogReporter(log_every=10), mlflow_track_model_best_state],
+            callbacks=[
+                LogReporter(log_every=10),
+                mlflow_track_model_best_state,
+                mlflow_track_losses,
+            ],
             early_stopper=early_stopper,
         )
 

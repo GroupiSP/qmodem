@@ -116,6 +116,13 @@ def mlflow_track_model_best_state(
             mlflow.log_artifacts(str(ckpt_path), artifact_path="best_model_state")
 
 
+def mlflow_track_losses(phase: TrainingPhase, context: TrainingContext) -> None:
+    if phase == TrainingPhase.EPOCH_END:
+        mlflow.log_metric("train_loss", context.train_loss, step=context.epoch)
+        mlflow.log_metric("val_loss", context.val_loss, step=context.epoch)
+        mlflow.log_metric("best_val_loss", context.best_val_loss, step=context.epoch)
+
+
 # TODO: implement
 def get_tags_from_mlflow_run(run_id: str) -> dict[str, str]:
     pass
