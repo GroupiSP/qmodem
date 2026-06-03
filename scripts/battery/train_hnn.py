@@ -43,11 +43,12 @@ class Hyperparameters:
     net_init_seed: int = 0
     train_rng_seed: int = 1
     drop_remainder: bool = False
-    learning_rate: float = 1e-2
+    learning_rate: float = 1e-3
     n_epochs: int = 500
     beta_nll: float = 0.5
     early_stopping_patience: int = 50
     early_stopping_min_delta: float = 1e-4
+    scheduler_alpha: float = 0.1
 
 
 def get_dataframes(
@@ -144,7 +145,7 @@ def main() -> None:
     schedule = optax.cosine_decay_schedule(
         init_value=hp.learning_rate,
         decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
-        alpha=0.1,
+        alpha=hp.scheduler_alpha,
     )
     optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
 
@@ -190,7 +191,7 @@ def main() -> None:
 
     with track_mlflow(
         MLFlowSetup(
-            run_name="train_hnn",
+            run_name="train_hnn_1",
             experiment_name="battery_default",
             tags={
                 "model": "HNN",
