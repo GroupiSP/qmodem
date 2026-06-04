@@ -71,6 +71,17 @@ class MLFlowSetup:
     backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
     artifact_store: str | Path = ROOT_DIR / "mlruns"
     tracking_server: str | None = None
+    """Configuration for an MLflow tracking run.
+
+    Attributes:
+        run_name: Human-readable name for the MLflow run.
+        experiment_name: Name of the MLflow experiment to log under.
+        run_id: Optional existing run ID to resume. If None, a new run is created.
+        tags: Arbitrary key-value tags attached to the run.
+        backend_store: SQLAlchemy URI for the MLflow backend store.
+        artifact_store: Local path where artifacts are stored.
+        tracking_server: Remote tracking server URI (not yet supported).
+    """
 
     def __post_init__(self):
         if self.tracking_server is not None:
