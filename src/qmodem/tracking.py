@@ -64,8 +64,8 @@ class Tags:
 
 @dataclass(frozen=True)
 class MLFlowSetup:
-    run_name: str
     experiment_name: str
+    run_name: str | None = None
     run_id: str | None = None
     tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
@@ -74,8 +74,8 @@ class MLFlowSetup:
     """Configuration for an MLflow tracking run.
 
     Attributes:
-        run_name: Human-readable name for the MLflow run.
         experiment_name: Name of the MLflow experiment to log under.
+        run_name: Optional human-readable name for the MLflow run. If None, MLflow will auto-generate a name.
         run_id: Optional existing run ID to resume. If None, a new run is created.
         tags: Arbitrary key-value tags attached to the run.
         backend_store: SQLAlchemy URI for the MLflow backend store.
