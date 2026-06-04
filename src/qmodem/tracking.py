@@ -66,6 +66,7 @@ class Tags:
 class MLFlowSetup:
     run_name: str
     experiment_name: str
+    run_id: str | None = None
     tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
     artifact_store: str | Path = ROOT_DIR / "mlruns"
@@ -91,7 +92,7 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
     mlflow.set_experiment(experiment_id=exp_id)
 
     try:
-        active_run = mlflow.start_run(run_name=setup.run_name)
+        active_run = mlflow.start_run(run_id=setup.run_id, run_name=setup.run_name)
         mlflow.set_tags(setup.tags)
 
         yield active_run
