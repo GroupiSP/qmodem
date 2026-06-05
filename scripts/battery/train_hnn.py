@@ -127,11 +127,10 @@ def main() -> None:
         window_size=hp.window_size, stride=hp.stride, normalize=hp.normalize_rul
     )
 
-    train_df, val_df, test_df = get_dataframes(train_path, test_path)
+    train_df, val_df, _ = get_dataframes(train_path, test_path)
 
     ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline)
     ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline)
-    # ds_test = DataFrameSource(df=test_df, pipeline=data_pipeline)
 
     # Dataloaders
     dataloader_train, dataloader_val = create_dataloaders(
@@ -194,12 +193,13 @@ def main() -> None:
 
     with track_mlflow(
         MLFlowSetup(
-            run_name="train_hnn_1",
+            run_name="hnn",
             experiment_name="battery_default",
             tags={
                 "model": "HNN",
                 "case_study": "battery",
-                "stage": "training",
+                "stage": "prototyping",
+                "publication": "phme26",
             },
         )
     ):
