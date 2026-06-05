@@ -120,36 +120,8 @@ def main() -> None:
         / "battery"
     )
 
-    train_path, test_path = RAW_DATA_DIR / "train.csv", RAW_DATA_DIR / "test.csv"
-
-    # Build the data sources, including windowing and normalization
-    data_pipeline = make_battery_data_pipeline(
-        window_size=hp.window_size, stride=hp.stride, normalize=hp.normalize_rul
-    )
-
-    train_df, val_df, _ = get_dataframes(train_path, test_path)
-
-    ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline)
-    ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline)
-
-    # Dataloaders
-    dataloader_train, dataloader_val = create_dataloaders(
-        ds_train=ds_train,
-        ds_val=ds_val,
-        batch_size=hp.batch_size,
-        sampler_seeds=hp.sampler_seeds,
-        drop_remainder=hp.drop_remainder,
-    )
-
     # Model, schedule, optimizer
     model = Net(rngs=nnx.Rngs(hp.net_init_seed))
-
-    schedule = optax.cosine_decay_schedule(
-        init_value=hp.learning_rate,
-        decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
-        alpha=hp.scheduler_alpha,
-    )
-    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
 
     # Loss evaluation functions and steps for the training.
     @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
@@ -203,8 +175,33 @@ def main() -> None:
             },
         )
     ):
-        mlflow.log_params(dataclasses.asdict(hp))
-        mlflow.log_param("n_params", count_parameters(model))
+        # Build the data sources, including windowing and normalization
+        data_pipeline = make_battery_data_pipeline(
+            window_size=hp.window_size, stride=hp.stride, normalize=hp.normalize_rul
+        )
+
+        train_df, val_df, _ = get_dataframes(
+            RAW_DATA_DIR / "train.csv", RAW_DATA_DIR / "test.csv"
+        )
+
+        ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline)
+        ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline)
+
+        # Dataloaders
+        dataloader_train, dataloader_val = create_dataloaders(
+            ds_train=ds_train,
+            ds_val=ds_val,
+            batch_size=hp.batch_size,
+            sampler_seeds=hp.sampler_seeds,
+            drop_remainder=hp.drop_remainder,
+        )
+
+        schedule = optax.cosine_decay_schedule(
+            init_value=hp.learning_rate,
+            decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
+            alpha=hp.scheduler_alpha,
+        )
+        optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
 
         train_loop(
             n_epochs=hp.n_epochs,
@@ -223,6 +220,8 @@ def main() -> None:
             early_stopper=early_stopper,
         )
 
+        mlflow.log_params(dataclasses.asdict(hp))
+        mlflow.log_param("n_params", count_parameters(model))
         mlflow.log_text(log_stram.getvalue(), "training_log.txt")
 
 
