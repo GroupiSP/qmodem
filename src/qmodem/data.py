@@ -6,6 +6,7 @@ from typing import Any, Callable, Protocol, Sequence, SupportsIndex
 
 import jax
 import jax.numpy as jnp
+import mlflow
 import numpy as np
 import pandas as pd
 from grain import DataLoader
@@ -186,9 +187,13 @@ def get_time_windows_and_join(
     return np.array(voltage_windows), np.array(rul_windows)
 
 
-def normalize_ruls(x: tuple[np.ndarray, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+def normalize_ruls(
+    x: tuple[np.ndarray, np.ndarray],
+    tracker: Callable[[str, Any], None] = mlflow.log_param,
+) -> tuple[np.ndarray, np.ndarray]:
     voltage_windows, rul_windows = x
     max_rul = rul_windows.max()
+    tracker("max_rul_train", max_rul)
     return voltage_windows, rul_windows / max_rul
 
 
