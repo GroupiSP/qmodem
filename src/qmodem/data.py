@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import functools
 import pathlib
 from typing import Any, Callable, Protocol, Sequence, SupportsIndex
 
 import jax
 import jax.numpy as jnp
-import mlflow
 import numpy as np
 import pandas as pd
 from grain import DataLoader
@@ -187,33 +185,26 @@ def get_time_windows_and_join(
     return np.array(voltage_windows), np.array(rul_windows)
 
 
-def normalize_ruls(
+def add_feature_dimension_to_y(
     x: tuple[np.ndarray, np.ndarray],
-    tracker: Callable[[str, Any], None] = mlflow.log_param,
 ) -> tuple[np.ndarray, np.ndarray]:
     voltage_windows, rul_windows = x
-    max_rul = rul_windows.max()
-    tracker("max_rul_train", max_rul)
-    return voltage_windows, rul_windows / max_rul
+    return voltage_windows, rul_windows.reshape(-1, 1)
+
+
+def normalize_ruls(
+    x: tuple[np.ndarray, np.ndarray],
+    transform_fn: Callable[[np.ndarray], np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    voltage_windows, rul_windows = x
+    return voltage_windows, transform_fn(
+        rul_windows
+    ).ravel()  # ravel make sure the output is 1-D for the rest of the workflow
 
 
 def to_jax(x: tuple[np.ndarray, np.ndarray]) -> tuple[jax.Array, jax.Array]:
     X, y = x
     return jnp.array(X), jnp.array(y)
-
-
-def make_battery_data_pipeline(
-    window_size: int = 20, stride: int = 1, normalize: bool = False
-) -> DataPipeline:
-    """Utility function to create a data pipeline for battery simulation data."""
-    steps = [
-        functools.partial(
-            get_time_windows_and_join, window_size=window_size, stride=stride
-        ),
-        normalize_ruls if normalize else lambda x: x,
-        to_jax,
-    ]
-    return DataPipeline(steps)
 
 
 class DataFrameSource:

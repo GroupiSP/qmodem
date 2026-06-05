@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import io
 import logging
 import pathlib
@@ -13,8 +14,17 @@ import jax.numpy as jnp
 import mlflow
 import optax
 import pandas as pd
+import sklearn.preprocessing as skpp
 
-from qmodem.data import DataFrameSource, DataSource, make_battery_data_pipeline
+from qmodem.data import (
+    DataFrameSource,
+    DataPipeline,
+    DataSource,
+    add_feature_dimension_to_y,
+    get_time_windows_and_join,
+    normalize_ruls,
+    to_jax,
+)
 from qmodem.module import negative_log_likelihood
 from qmodem.tracking import (
     MLFlowSetup,
@@ -43,10 +53,10 @@ class Hyperparameters:
     net_init_seed: int = 0
     train_rng_seed: int = 1
     drop_remainder: bool = False
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e-2
     n_epochs: int = 500
-    beta_nll: float = 0.5
-    early_stopping_patience: int = 50
+    beta_nll: float = 0.0
+    early_stopping_patience: int = 10
     early_stopping_min_delta: float = 1e-4
     scheduler_alpha: float = 0.1
 
@@ -123,6 +133,53 @@ def main() -> None:
     # Model, schedule, optimizer
     model = Net(rngs=nnx.Rngs(hp.net_init_seed))
 
+    # Build the data sources, including windowing and normalization
+    scaler = skpp.MinMaxScaler(feature_range=(0, 1))
+    data_pipeline_train = DataPipeline(
+        [
+            functools.partial(
+                get_time_windows_and_join,
+                window_size=hp.window_size,
+                stride=hp.stride,
+            ),
+            add_feature_dimension_to_y,
+            functools.partial(normalize_ruls, transform_fn=scaler.fit_transform)
+            if hp.normalize_rul
+            else lambda x: x,
+            to_jax,
+        ]
+    )
+    data_pipeline_val = DataPipeline(
+        [
+            functools.partial(
+                get_time_windows_and_join,
+                window_size=hp.window_size,
+                stride=hp.stride,
+            ),
+            add_feature_dimension_to_y,
+            functools.partial(normalize_ruls, transform_fn=scaler.transform)
+            if hp.normalize_rul
+            else lambda x: x,
+            to_jax,
+        ]
+    )
+
+    train_df, val_df, _ = get_dataframes(
+        RAW_DATA_DIR / "train.csv", RAW_DATA_DIR / "test.csv"
+    )
+
+    ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline_train)
+    ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline_val)
+
+    # Dataloaders
+    dataloader_train, dataloader_val = create_dataloaders(
+        ds_train=ds_train,
+        ds_val=ds_val,
+        batch_size=hp.batch_size,
+        sampler_seeds=hp.sampler_seeds,
+        drop_remainder=hp.drop_remainder,
+    )
+
     # Loss evaluation functions and steps for the training.
     @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
     def per_sample_nll(model, sample, sample_key):
@@ -159,13 +216,20 @@ def main() -> None:
 
         return jnp.mean(per_sample_nll(model, batch, keys))
 
+    schedule = optax.cosine_decay_schedule(
+        init_value=hp.learning_rate,
+        decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
+        alpha=hp.scheduler_alpha,
+    )
+    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
+
     early_stopper = EarlyStopper(
         patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
     )
 
     with track_mlflow(
         MLFlowSetup(
-            run_name="hnn",
+            run_name="hnn-3",
             experiment_name="battery_default",
             tags={
                 "model": "HNN",
@@ -175,33 +239,9 @@ def main() -> None:
             },
         )
     ):
-        # Build the data sources, including windowing and normalization
-        data_pipeline = make_battery_data_pipeline(
-            window_size=hp.window_size, stride=hp.stride, normalize=hp.normalize_rul
-        )
-
-        train_df, val_df, _ = get_dataframes(
-            RAW_DATA_DIR / "train.csv", RAW_DATA_DIR / "test.csv"
-        )
-
-        ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline)
-        ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline)
-
-        # Dataloaders
-        dataloader_train, dataloader_val = create_dataloaders(
-            ds_train=ds_train,
-            ds_val=ds_val,
-            batch_size=hp.batch_size,
-            sampler_seeds=hp.sampler_seeds,
-            drop_remainder=hp.drop_remainder,
-        )
-
-        schedule = optax.cosine_decay_schedule(
-            init_value=hp.learning_rate,
-            decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
-            alpha=hp.scheduler_alpha,
-        )
-        optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
+        mlflow.sklearn.log_model(scaler, artifact_path="sklearn_scaler")
+        mlflow.log_params(dataclasses.asdict(hp))
+        mlflow.log_param("n_params", count_parameters(model))
 
         train_loop(
             n_epochs=hp.n_epochs,
@@ -220,8 +260,6 @@ def main() -> None:
             early_stopper=early_stopper,
         )
 
-        mlflow.log_params(dataclasses.asdict(hp))
-        mlflow.log_param("n_params", count_parameters(model))
         mlflow.log_text(log_stram.getvalue(), "training_log.txt")
 
 
