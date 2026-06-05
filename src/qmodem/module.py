@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional, Protocol, Sequence
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
+
+logger = logging.getLogger(__name__)
 
 
 class RandomCallModel(Protocol):
@@ -933,6 +936,19 @@ def negative_log_likelihood(
     rngs: nnx.Rngs,
     beta: float = 0.0,
 ) -> jax.Array:
+    """Gaussian NLL loss for heteroscedastic regression.
+
+    Args:
+       model (nnx.Module): Heteroscedastic regression model with Gaussian output.
+       batch (tuple[jax.Array, jax.Array]): Batched input data (xs, labels).
+       rngs (nnx.Rngs): RNGs for stochastic forward pass (if applicable).
+       beta (float): Variance-weighting exponent. Implements the beta-NLL loss in arXiv:2203.09168.
+           ``0.0`` gives standard NLL.
+
+    Returns:
+        jax.Array: Per-sample NLL losses with shape (batch,).
+    """
+
     xs, labels = batch
     # Add a batch dimension to xs for the model's forward pass
     xs_b = jnp.expand_dims(xs, axis=0)
@@ -942,6 +958,10 @@ def negative_log_likelihood(
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
 
     if beta > 0:
+        # TODO: This implementation of the beta-NLL loss might be wrong. Revisit.
+        logger.warning(
+            "The beta-NLL loss implementation is untested and might be incorrect for beta > 0. Please use beta=0."
+        )
         losses = losses * jax.lax.stop_gradient(variances) ** beta
 
     return losses
