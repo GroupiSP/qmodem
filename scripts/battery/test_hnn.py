@@ -7,6 +7,7 @@ from typing import Iterator
 
 import flax.nnx as nnx
 import jax
+import jax.numpy as jnp
 import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import mlflow
@@ -40,6 +41,7 @@ class TestCaseMetrics:
 class Hyperparameters:
     test_rng_seed: int = 123
     test_n_soc0s: int = 200
+    test_n_mc_samples: int = 100
 
 
 def compute_squared_errors(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
@@ -134,6 +136,16 @@ def run_discharges_from_intermediate_socs(
 #     return lower_bound, upper_bound
 
 
+def mc_sample_model(
+    model: Net, X: np.ndarray, n_samples: int, rng_key: jax.Array
+) -> jax.Array:
+    mu, sigma = model(X, rngs=nnx.Rngs(dropout=rng_key)).squeeze()  # Shape (2,)
+
+    rng_key, _ = jax.random.split(rng_key)
+    samples = mu + sigma * jax.random.normal(rng_key, shape=(n_samples, 1))
+    return samples
+
+
 def main() -> None:
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -196,13 +208,15 @@ def main() -> None:
                 previous_voltage_window = test_data.voltage[
                     int_idx - int(run_params_training["window_size"]) : int_idx + 1
                 ]
-                X = previous_voltage_window.reshape(1, -1, 1)
+                X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
+                samples_pred = mc_sample_model(
+                    model, X, n_samples=hp.test_n_mc_samples, rng_key=key
+                )
 
-                key, _ = jax.random.split(key)
-                y = model(X, rngs=nnx.Rngs(dropout=key))
+                y = jnp.average(samples_pred, axis=0, keepdims=True)
                 y = scaler.inverse_transform(y)
 
-                ruls_pred.append(y[0, 0])
+                ruls_pred.append(y.item())
 
             # Plot true and predicted RULs against time for the current test case.
             axes[test_case_id].plot(
