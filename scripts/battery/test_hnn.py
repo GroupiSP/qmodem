@@ -40,7 +40,7 @@ class TestCaseMetrics:
 @dataclasses.dataclass(frozen=True)
 class Hyperparameters:
     test_rng_seed: int = 123
-    test_n_soc0s: int = 200
+    test_n_soc0s: int = 10
     test_n_mc_samples: int = 100
 
 
@@ -138,12 +138,12 @@ def run_discharges_from_intermediate_socs(
 
 def mc_sample_model(
     model: Net, X: np.ndarray, n_samples: int, rng_key: jax.Array
-) -> jax.Array:
-    mu, sigma = model(X, rngs=nnx.Rngs(dropout=rng_key)).squeeze()  # Shape (2,)
+) -> tuple[jax.Array, jax.Array]:
+    mu, var = model(X, rngs=nnx.Rngs(dropout=rng_key)).squeeze()  # Shape (2,)
 
     rng_key, _ = jax.random.split(rng_key)
-    samples = mu + sigma * jax.random.normal(rng_key, shape=(n_samples, 1))
-    return samples
+    samples = mu + jnp.sqrt(var) * jax.random.normal(rng_key, shape=(n_samples, 1))
+    return samples, rng_key
 
 
 def main() -> None:
@@ -201,41 +201,71 @@ def main() -> None:
             N_t = len(test_data.time)
             soc0_idxs = np.linspace(0, N_t - 1, num=hp.test_n_soc0s, dtype=np.int32)
 
+            # True RUL, distribution and bounds.
             ruls_true = test_data.rul[soc0_idxs]
+            ruls_lower_true = []
+            ruls_upper_true = []
+            for sr in run_discharges_from_intermediate_socs(
+                soc_0s=test_data.soc[soc0_idxs],
+            ):
+                samples_true = sr.times_eod - sr.times[0]
+                ruls_lower_true.append(np.percentile(samples_true, 2.5))
+                ruls_upper_true.append(np.percentile(samples_true, 97.5))
+
+            # Predicted RUL, distribution and bounds.
             ruls_pred = []
+            ruls_lower_pred = []
+            ruls_upper_pred = []
             for int_idx in soc0_idxs[1:]:
                 # Get the voltage window that is immediately prior to the test timestamp
                 previous_voltage_window = test_data.voltage[
                     int_idx - int(run_params_training["window_size"]) : int_idx + 1
                 ]
                 X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
-                samples_pred = mc_sample_model(
+                samples_pred, key = mc_sample_model(
                     model, X, n_samples=hp.test_n_mc_samples, rng_key=key
                 )
+                samples_pred = scaler.inverse_transform(samples_pred)
 
                 y = jnp.average(samples_pred, axis=0, keepdims=True)
-                y = scaler.inverse_transform(y)
-
                 ruls_pred.append(y.item())
 
+                ruls_lower_pred.append(jnp.percentile(samples_pred, 2.5))
+                ruls_upper_pred.append(jnp.percentile(samples_pred, 97.5))
+
             # Plot true and predicted RULs against time for the current test case.
+            # TODO: [refac] move plotting to a separate function
             axes[test_case_id].plot(
                 test_data.time[soc0_idxs], ruls_true, label="True RUL"
             )
-            axes[test_case_id].plot(
-                test_data.time[soc0_idxs[1:]], ruls_pred, label="Predicted RUL"
+            axes[test_case_id].fill_between(
+                test_data.time[soc0_idxs],
+                ruls_lower_true,
+                ruls_upper_true,
+                alpha=0.3,
+                label="True RUL CI",
             )
+            axes[test_case_id].plot(
+                test_data.time[soc0_idxs[1:]], ruls_pred, "-o", label="Predicted RUL"
+            )
+            axes[test_case_id].fill_between(
+                test_data.time[soc0_idxs[1:]],
+                ruls_lower_pred,
+                ruls_upper_pred,
+                alpha=0.3,
+                label="Predicted RUL CI",
+            )
+            axes[test_case_id].set_title(f"Test Case {test_case_id}")
+            axes[test_case_id].set_xlabel("Time (s)")
+            axes[test_case_id].set_ylabel("RUL (s)")
+            axes[test_case_id].set_ylim(bottom=0)
+            axes[test_case_id].grid()
+            axes[test_case_id].legend()
 
+        fig.tight_layout()
         mlflow.log_figure(fig, artifact_file="rul_predictions_over_test_cases.png")
 
-        # Run multiple discharge simulations from intermediate SoCs to
-        # reconstruct the true RUL distribution over time.
-        # sim_results = [
-        #     sr
-        #     for sr in run_discharges_from_intermediate_socs(
-        #         soc_0s=test_data.soc[soc0_idxs],
-        #     )
-        # ]
+        # TODO: [feat] Produce the remaining metrics per test case, average them and log them to mlflow.
 
 
 if __name__ == "__main__":
