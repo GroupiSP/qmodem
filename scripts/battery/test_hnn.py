@@ -17,8 +17,8 @@ import pandas as pd
 import sklearn.preprocessing as skpp
 
 from qmodem.tracking import MLFlowSetup, track_mlflow
-
-from .hnn_model import Net
+from scripts.battery.commons import DATA_GEN_RUN_ID
+from scripts.battery.hnn_model import Net
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,7 +170,6 @@ class Hyperparameters:
     test_grid_crps_start: float = 0.0
     test_grid_crps_end: float = 5000.0
     test_grid_crps_num: int = 100
-    test_process_noise_std: float = 3e-3
     test_simulation_dt: float = 20.0
 
 
@@ -263,19 +262,19 @@ def main() -> None:
         / "battery"
     )
 
-    RUN_ID = "b6e03cd77f9f4ab48425225b39e154dc"
+    TRAIN_RUN_ID = "b6e03cd77f9f4ab48425225b39e154dc"
 
     hp = Hyperparameters()
 
     with track_mlflow(
-        MLFlowSetup(experiment_name="battery_default", run_id=RUN_ID)
+        MLFlowSetup(experiment_name="battery_default", run_id=TRAIN_RUN_ID)
     ) as run:
         # Load the mlflow run parameters
         run_params_training = run.data.params
 
         # Load the scaler fitted on the training data.
         scaler: skpp.MinMaxScaler = mlflow.sklearn.load_model(
-            f"runs:/{RUN_ID}/sklearn_scaler"
+            f"runs:/{TRAIN_RUN_ID}/sklearn_scaler"
         )
 
         # Load the model
@@ -287,7 +286,7 @@ def main() -> None:
 
         with tempfile.TemporaryDirectory() as tmp:
             artifact_dir = mlflow.artifacts.download_artifacts(
-                run_id=RUN_ID,
+                run_id=TRAIN_RUN_ID,
                 artifact_path="best_model_state",
                 dst_path=tmp,
             )
@@ -314,9 +313,11 @@ def main() -> None:
             # True RUL, distribution and bounds.
             eval_time_stamps = []
 
+            # Load process noise parameters from the data generation run.
+            data_gen_run = mlflow.get_run(DATA_GEN_RUN_ID)
             sims_iterator = run_discharges_from_intermediate_socs(
                 soc_0s=test_data.soc[soc0_idxs],
-                process_noise_std=hp.test_process_noise_std,
+                process_noise_std=data_gen_run.data.params["process_noise_std"],
                 dt=hp.test_simulation_dt,
             )
 
