@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
+import io
+import logging
 import pathlib
 import tempfile
 
@@ -37,6 +39,16 @@ def mc_sample_model(
 
 
 def main() -> None:
+    log_stream = io.StringIO()
+    logging.basicConfig(
+        level=logging.INFO,
+        force=True,
+        handlers=[
+            logging.StreamHandler(),  # console (stderr)
+            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
+        ],
+    )
+
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
         / "data"
@@ -196,6 +208,8 @@ def main() -> None:
         )
         fig.tight_layout()
         mlflow.log_figure(fig, artifact_file="metrics_per_test_case.png")
+
+        mlflow.log_text(log_stream.getvalue(), artifact_file="test_log.txt")
 
 
 if __name__ == "__main__":
