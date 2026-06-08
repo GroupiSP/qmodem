@@ -22,27 +22,102 @@ from .hnn_model import Net
 
 
 @dataclasses.dataclass(frozen=True)
-class DischargeData:
-    time: np.ndarray
-    soc: np.ndarray
-    voltage: np.ndarray
-    rul: np.ndarray
+class EvalTimeStamp:
+    time: float
+    samples_true: np.ndarray
+    samples_pred: np.ndarray
+
+    @staticmethod
+    def _cdf(x: float, samples: np.ndarray) -> float:
+        if len(samples) == 0:
+            return 0.0
+
+        sorted_samples = np.sort(samples)
+        count = np.sum(sorted_samples <= x)
+        cdf_value = count / len(sorted_samples)
+
+        return cdf_value
+
+    @property
+    def average_true(self) -> float:
+        return np.mean(self.samples_true)
+
+    @property
+    def average_pred(self) -> float:
+        return np.mean(self.samples_pred)
+
+    @property
+    def ci_95_true(self) -> np.ndarray:
+        """NOTE: could be private, but it is kept here for symmetry with the predicted CI."""
+        return np.percentile(self.samples_true, [2.5, 97.5])
+
+    @property
+    def ci_95_pred(self) -> np.ndarray:
+        return np.percentile(self.samples_pred, [2.5, 97.5])
+
+    @property
+    def squared_error(self) -> float:
+        return (self.average_true - self.average_pred) ** 2
+
+    @property
+    def is_covered(self) -> bool:
+        lower_bound_pred, upper_bound_pred = self.ci_95_pred
+        return lower_bound_pred <= self.average_true <= upper_bound_pred
+
+    def crps(self, x_grid: np.ndarray) -> float:
+        F0 = np.array([self._cdf(x, self.samples_true) for x in x_grid])
+        F1 = np.array([self._cdf(x, self.samples_pred) for x in x_grid])
+
+        return np.trapz((F0 - F1) ** 2, x_grid)
 
 
 @dataclasses.dataclass(frozen=True)
-class TestCaseMetrics:
-    squared_errors: np.ndarray
-    coverage: float
-    wsu: float
-    crps: np.ndarray
+class TestCaseResults:
+    eval_time_stamps: list[EvalTimeStamp]
+
+    def __post_init__(self) -> None:
+        self._times: np.ndarray = np.array([ets.time for ets in self.eval_time_stamps])
+
+    @property
+    def squared_errors(self) -> np.ndarray:
+        return np.array([ets.squared_error for ets in self.eval_time_stamps])
+
+    @property
+    def coverage(self) -> float:
+        return np.mean([ets.is_covered for ets in self.eval_time_stamps])
+
+    @property
+    def wsu(self) -> float:
+        return np.dot(
+            (
+                (
+                    self.eval_time_stamps[1:].ci_95_pred[1]
+                    + self.eval_time_stamps[:-1].ci_95_pred[1]
+                )
+                / 2
+                - (
+                    self.eval_time_stamps[1:].ci_95_pred[0]
+                    + self.eval_time_stamps[:-1].ci_95_pred[0]
+                )
+                / 2
+            ),
+            self._times[1:] - self._times[0],
+        )
 
     @property
     def rmse(self) -> float:
         return np.sqrt(np.mean(self.squared_errors))
 
-    @property
-    def mean_crps(self) -> float:
-        return np.mean(self.crps)
+    def average_crps(self, x_grid: np.ndarray) -> float:
+        return np.mean([ets.crps(x_grid=x_grid) for ets in self.eval_time_stamps])
+
+
+@dataclasses.dataclass(frozen=True)
+class DischargeData:
+    time: np.ndarray
+    soc: np.ndarray
+    voltage: np.ndarray
+    rul: np.ndarray
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,56 +131,6 @@ class Hyperparameters:
     test_grid_crps_start: float = 0.0
     test_grid_crps_end: float = 5000.0
     test_grid_crps_num: int = 100
-
-
-def compute_squared_errors(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-    return (y_true - y_pred) ** 2
-
-
-def rmse_model(all_squared_errors: list[np.ndarray]) -> float:
-    """Square root of the average squared errors, where the average is taken across all
-    timestamps and test cases."""
-    return np.sqrt(np.mean([np.mean(ses) for ses in all_squared_errors]))
-
-
-def compute_coverage(
-    y_true: np.ndarray, lower_bounds_pred: np.ndarray, upper_bounds_pred: np.ndarray
-) -> float:
-    return np.mean((y_true >= lower_bounds_pred) & (y_true <= upper_bounds_pred))
-
-
-def compute_wsu(
-    times: np.ndarray, lower_bounds_pred: np.ndarray, upper_bounds_pred: np.ndarray
-) -> float:
-    """NOTE: by definition, the WSU is already aggregated across time, because it is scaled
-    with time."""
-    return np.dot(
-        (
-            (upper_bounds_pred[1:] + upper_bounds_pred[:-1]) / 2
-            - (lower_bounds_pred[1:] + lower_bounds_pred[:-1]) / 2
-        ),
-        times[1:] - times[0],
-    )
-
-
-def compute_crps_at_timestamp(
-    samples_true: np.ndarray, samples_pred: np.ndarray, x_grid: np.ndarray
-) -> float:
-    def _cdf(x: float, samples: np.ndarray) -> float:
-        if len(samples) == 0:
-            return 0.0
-
-        sorted_samples = np.sort(samples)
-        count = np.sum(sorted_samples <= x)
-        cdf_value = count / len(sorted_samples)
-
-        return cdf_value
-
-    F0 = np.array([_cdf(x, samples_true) for x in x_grid])
-    F1 = np.array([_cdf(x, samples_pred) for x in x_grid])
-
-    crps_value = np.trapz((F0 - F1) ** 2, x_grid)
-    return crps_value
 
 
 def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
@@ -142,20 +167,6 @@ def run_discharges_from_intermediate_socs(
         )
         result = les.simulate_constant_capacity_simple(n_sim=100, config=config)
         yield result
-
-
-# def get_rul_confidence_interval(times_eod: np.ndarray) -> tuple[float, float]:
-#     """Compute the 95% confidence interval for the RUL predictions for one stochastic
-#     battery discharge simulation.
-
-#     Args:
-#         times_eod (np.ndarray): Array of shape (n_samples, n_time_steps) containing the predicted EOD times.
-#     Returns:
-#         tuple[float, float]: Lower and upper bounds of the 95% confidence interval for the RUL predictions.
-#     """
-#     lower_bound = np.percentile(times_eod, 2.5, axis=0)
-#     upper_bound = np.percentile(times_eod, 97.5, axis=0)
-#     return lower_bound, upper_bound
 
 
 def mc_sample_model(
