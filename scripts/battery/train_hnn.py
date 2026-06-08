@@ -43,13 +43,13 @@ from scripts.battery.hnn_model import Net
 
 
 def main() -> None:
-    log_stram = io.StringIO()
+    log_stream = io.StringIO()
     logging.basicConfig(
         level=logging.INFO,
         force=True,
         handlers=[
             logging.StreamHandler(),  # console (stderr)
-            logging.StreamHandler(log_stram),  # in-memory stream for MLflow logging
+            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
         ],
     )
 
@@ -60,6 +60,17 @@ def main() -> None:
         / "data"
         / "raw"
         / "battery"
+    )
+
+    mlflow_setup = MLFlowSetup(
+        run_name="hnn-3",
+        experiment_name="battery_default",
+        tags={
+            "model": "HNN",
+            "case_study": "battery",
+            "stage": "prototyping",
+            "publication": "phme26",
+        },
     )
 
     # Model, schedule, optimizer
@@ -159,18 +170,7 @@ def main() -> None:
         patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
     )
 
-    with track_mlflow(
-        MLFlowSetup(
-            run_name="hnn-3",
-            experiment_name="battery_default",
-            tags={
-                "model": "HNN",
-                "case_study": "battery",
-                "stage": "prototyping",
-                "publication": "phme26",
-            },
-        )
-    ):
+    with track_mlflow(mlflow_setup=mlflow_setup):
         mlflow.sklearn.log_model(scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
@@ -192,7 +192,7 @@ def main() -> None:
             early_stopper=early_stopper,
         )
 
-        mlflow.log_text(log_stram.getvalue(), "training_log.txt")
+        mlflow.log_text(log_stream.getvalue(), "training_log.txt")
 
 
 if __name__ == "__main__":

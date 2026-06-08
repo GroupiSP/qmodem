@@ -266,9 +266,9 @@ def main() -> None:
 
     hp = Hyperparameters()
 
-    with track_mlflow(
-        MLFlowSetup(experiment_name="battery_default", run_id=TRAIN_RUN_ID)
-    ) as run:
+    mlflow_setup = MLFlowSetup(experiment_name="battery_default", run_id=TRAIN_RUN_ID)
+
+    with track_mlflow(mlflow_setup=mlflow_setup) as run:
         # Load the mlflow run parameters
         run_params_training = run.data.params
 
