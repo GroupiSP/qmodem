@@ -36,16 +36,36 @@ class TestCaseMetrics:
     wsu: float
     crps: np.ndarray
 
+    @property
+    def rmse(self) -> float:
+        return np.sqrt(np.mean(self.squared_errors))
+
+    @property
+    def mean_crps(self) -> float:
+        return np.mean(self.crps)
+
 
 @dataclasses.dataclass(frozen=True)
 class Hyperparameters:
+    """The `test_` prefix is used to distinguish these hyperparameters from the ones
+    used for training."""
+
     test_rng_seed: int = 123
     test_n_soc0s: int = 10
     test_n_mc_samples: int = 100
+    test_grid_crps_start: float = 0.0
+    test_grid_crps_end: float = 5000.0
+    test_grid_crps_num: int = 100
 
 
 def compute_squared_errors(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
     return (y_true - y_pred) ** 2
+
+
+def rmse_model(all_squared_errors: list[np.ndarray]) -> float:
+    """Square root of the average squared errors, where the average is taken across all
+    timestamps and test cases."""
+    return np.sqrt(np.mean([np.mean(ses) for ses in all_squared_errors]))
 
 
 def compute_coverage(
@@ -57,6 +77,8 @@ def compute_coverage(
 def compute_wsu(
     times: np.ndarray, lower_bounds_pred: np.ndarray, upper_bounds_pred: np.ndarray
 ) -> float:
+    """NOTE: by definition, the WSU is already aggregated across time, because it is scaled
+    with time."""
     return np.dot(
         (
             (upper_bounds_pred[1:] + upper_bounds_pred[:-1]) / 2
@@ -192,6 +214,10 @@ def main() -> None:
 
         # Random PRNG key for sampling the model.
         key = jax.random.PRNGKey(hp.test_rng_seed)
+
+        # rul_grid_crps = np.linspace(
+        #     hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_num
+        # )
 
         for test_case_id in range(10):
             test_data = get_test_case_data(
