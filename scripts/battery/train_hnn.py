@@ -5,21 +5,17 @@ import functools
 import io
 import logging
 import pathlib
-from typing import Any
 
 import flax.nnx as nnx
-import grain
 import jax
 import jax.numpy as jnp
 import mlflow
 import optax
-import pandas as pd
 import sklearn.preprocessing as skpp
 
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
-    DataSource,
     add_feature_dimension_to_y,
     get_time_windows_and_join,
     normalize_ruls,
@@ -38,57 +34,12 @@ from qmodem.train import (
     train_loop,
 )
 from qmodem.utils import count_parameters
-from scripts.battery.commons import TrainHyperparameters
+from scripts.battery.commons import (
+    TrainHyperparameters,
+    create_dataloaders,
+    get_dataframes,
+)
 from scripts.battery.hnn_model import Net
-
-
-def get_dataframes(
-    train_path: pathlib.Path, test_path: pathlib.Path
-) -> tuple[pd.DataFrame, pd.Dataframe, pd.DataFrame]:
-    train_df = pd.read_csv(train_path)
-    # Split the train dataframe: if the run ID is < 100, then it goes in the training set, otherwise in the validation set. This way we ensure that the same RNG seed will always produce the same split.
-    train_df, val_df = (
-        train_df[train_df["run_id"] < 100],
-        train_df[train_df["run_id"] >= 100],
-    )
-    test_df = pd.read_csv(test_path)
-    return train_df, val_df, test_df
-
-
-def create_dataloaders(
-    ds_train: DataSource,
-    ds_val: DataSource,
-    batch_size: int,
-    sampler_seeds: tuple[int, int],
-    drop_remainder: bool = False,
-) -> tuple[Any, Any]:
-    """Create Grain DataLoaders for training and validation."""
-
-    sampler_train = grain.samplers.IndexSampler(
-        num_records=len(ds_train), num_epochs=1, shuffle=True, seed=sampler_seeds[0]
-    )
-    dataloader_train = grain.DataLoader(
-        data_source=ds_train,
-        sampler=sampler_train,
-        operations=[
-            grain.transforms.Batch(batch_size=batch_size, drop_remainder=drop_remainder)
-        ],
-        worker_count=0,
-    )
-
-    sampler_val = grain.samplers.IndexSampler(
-        num_records=len(ds_val), num_epochs=1, shuffle=False, seed=sampler_seeds[1]
-    )
-    dataloader_val = grain.DataLoader(
-        data_source=ds_val,
-        sampler=sampler_val,
-        operations=[
-            grain.transforms.Batch(batch_size=batch_size, drop_remainder=drop_remainder)
-        ],
-        worker_count=0,
-    )
-
-    return dataloader_train, dataloader_val
 
 
 def main() -> None:
