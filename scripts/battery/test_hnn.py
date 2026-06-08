@@ -170,6 +170,8 @@ class Hyperparameters:
     test_grid_crps_start: float = 0.0
     test_grid_crps_end: float = 5000.0
     test_grid_crps_num: int = 100
+    test_process_noise_std: float = 3e-3
+    test_simulation_dt: float = 20.0
 
 
 def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
@@ -194,14 +196,16 @@ def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeD
 
 
 def run_discharges_from_intermediate_socs(
-    soc_0s: np.ndarray,
+    soc_0s: np.ndarray, process_noise_std: float, dt: float
 ) -> Iterator[les.SimulationResult]:
     for soc_0 in soc_0s:
         # TODO: simulation config parameters should be loaded from mlflow.
         config = les.SimulationConfig(
-            process_noise_distribution=lambda: np.random.normal(loc=0.0, scale=3e-3),
+            process_noise_distribution=lambda: np.random.normal(
+                loc=0.0, scale=process_noise_std
+            ),
             measurement_noise_distribution=lambda: 0.0,
-            dt=20.0,
+            dt=dt,
             soc_0=soc_0,
         )
         result = les.simulate_constant_capacity_simple(n_sim=100, config=config)
@@ -275,7 +279,10 @@ def main() -> None:
         )
 
         # Load the model
-        model = Net(rngs=nnx.Rngs(0))
+        # TODO: [refac] Enclose model loading into a function and move it to commons.
+        model = Net(
+            rngs=nnx.Rngs(0)
+        )  # RNGs won't be used for inference, so the seed is arbitrary.
         abstract_state = nnx.state(model, nnx.Param)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -308,7 +315,9 @@ def main() -> None:
             eval_time_stamps = []
 
             sims_iterator = run_discharges_from_intermediate_socs(
-                soc_0s=test_data.soc[soc0_idxs]
+                soc_0s=test_data.soc[soc0_idxs],
+                process_noise_std=hp.test_process_noise_std,
+                dt=hp.test_simulation_dt,
             )
 
             # First timestamp is treated separately, since there is no prediction for it.
