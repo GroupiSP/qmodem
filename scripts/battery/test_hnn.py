@@ -56,13 +56,13 @@ def main() -> None:
         / "battery"
     )
 
-    TRAIN_RUN_ID = "b6e03cd77f9f4ab48425225b39e154dc"
+    TRAIN_RUN_ID = "e65645007e014b1290caa9a121783dc3"
 
     hp = TestHyperparameters()
 
     mlflow_setup = MLFlowSetup(experiment_name="battery_default", run_id=TRAIN_RUN_ID)
 
-    with track_mlflow(mlflow_setup=mlflow_setup) as run:
+    with track_mlflow(setup=mlflow_setup) as run:
         # Load the mlflow run parameters
         run_params_training = run.data.params
 
@@ -111,7 +111,7 @@ def main() -> None:
             data_gen_run = mlflow.get_run(DATA_GEN_RUN_ID)
             sims_iterator = run_discharges_from_intermediate_socs(
                 soc_0s=test_data.soc[soc0_idxs],
-                process_noise_std=data_gen_run.data.params["process_noise_std"],
+                process_noise_std=float(data_gen_run.data.params["process_noise_std"]),
                 dt=hp.test_simulation_dt,
             )
 

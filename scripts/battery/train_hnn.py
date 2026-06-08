@@ -63,7 +63,7 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="hnn-3",
+        run_name="hnn-4",
         experiment_name="battery_default",
         tags={
             "model": "HNN",
@@ -170,7 +170,7 @@ def main() -> None:
         patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
     )
 
-    with track_mlflow(mlflow_setup=mlflow_setup):
+    with track_mlflow(setup=mlflow_setup):
         mlflow.sklearn.log_model(scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
