@@ -38,27 +38,8 @@ from qmodem.train import (
     train_loop,
 )
 from qmodem.utils import count_parameters
-
-from .hnn_model import Net
-
-
-@dataclasses.dataclass
-class Hyperparameters:
-    # TODO: this should become shared among the battery scripts.
-    batch_size: int = 32
-    window_size: int = 20
-    stride: int = 1
-    normalize_rul: bool = True
-    sampler_seeds: tuple[int, int] = (42, 0)
-    net_init_seed: int = 0
-    train_rng_seed: int = 1
-    drop_remainder: bool = False
-    learning_rate: float = 1e-2
-    n_epochs: int = 500
-    beta_nll: float = 0.0
-    early_stopping_patience: int = 10
-    early_stopping_min_delta: float = 1e-4
-    scheduler_alpha: float = 0.1
+from scripts.battery.commons import TrainHyperparameters
+from scripts.battery.hnn_model import Net
 
 
 def get_dataframes(
@@ -121,7 +102,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters()
+    hp = TrainHyperparameters()
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
