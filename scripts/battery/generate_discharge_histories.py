@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum, auto
+from typing import Any
 
 import lib_eod_simulation as les
 import mlflow
@@ -74,14 +75,11 @@ class Hyperparameters:
     measurement_noise_distribution: ProcessNoiseDistribution = (
         ProcessNoiseDistribution.ZERO
     )
-    process_noise_params: dict[str, float] = field(
-        default_factory=lambda: dist_name_to_params[ProcessNoiseDistribution.NORMAL](
-            loc=0.0, scale=3e-3
-        )
-    )
-    measurement_noise_params: dict[str, float] = field(
-        default_factory=lambda: dist_name_to_params[ProcessNoiseDistribution.ZERO]()
-    )
+    # TODO: noise parameter tracking can be improved by using `dist_name_to_params`. But it
+    # is not a prio right now.
+    process_noise_loc: float = 0.0
+    process_noise_std: float = 3e-3
+    measurement_noise_param: Any = None
     soc_range_train_val: tuple[float, float] = (0.05, 1.0)
     train_seed: int = 42
     test_seed: int = 123
@@ -110,7 +108,9 @@ def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFram
 
     for i, soc_0 in enumerate(soc_0s):
         config = les.SimulationConfig(
-            process_noise_distribution=lambda: rng.normal(**hp.process_noise_params),
+            process_noise_distribution=lambda: rng.normal(
+                loc=hp.process_noise_loc, scale=hp.process_noise_std
+            ),
             measurement_noise_distribution=lambda: 0.0,
             dt=hp.dt,
             soc_0=soc_0,
@@ -131,7 +131,9 @@ def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame
 
     for i in range(hp.n_histories_test):
         config = les.SimulationConfig(
-            process_noise_distribution=lambda: rng.normal(**hp.process_noise_params),
+            process_noise_distribution=lambda: rng.normal(
+                loc=hp.process_noise_loc, scale=hp.process_noise_std
+            ),
             measurement_noise_distribution=lambda: 0.0,
             dt=hp.dt,
             soc_0=1.0,
