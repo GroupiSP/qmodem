@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import pathlib
 import tempfile
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import flax.nnx as nnx
 import jax
@@ -65,7 +65,7 @@ class EvalTimeStamp:
         F0 = np.array([self._cdf(x, self.samples_true) for x in x_grid])
         F1 = np.array([self._cdf(x, self.samples_pred) for x in x_grid])
 
-        return np.trapz((F0 - F1) ** 2, x_grid)
+        return np.trapezoid((F0 - F1) ** 2, x_grid)
 
 
 @dataclasses.dataclass
@@ -78,28 +78,34 @@ class TestCaseResults:
 
     @property
     def squared_errors(self) -> np.ndarray:
-        return np.array([ets.squared_error for ets in self.eval_time_stamps])
+        return np.array([ets.squared_error for ets in self.eval_time_stamps[1:]])
 
     @property
     def coverage(self) -> float:
-        return np.mean([ets.is_covered for ets in self.eval_time_stamps])
+        return np.mean([ets.is_covered for ets in self.eval_time_stamps[1:]])
 
     @property
     def wsu(self) -> float:
         return np.dot(
             (
-                (
-                    self.eval_time_stamps[1:].ci_95_pred[1]
-                    + self.eval_time_stamps[:-1].ci_95_pred[1]
+                np.array(
+                    [
+                        (ets_t.ci_95_pred[1] + ets_t1.ci_95_pred[1]) / 2
+                        for (ets_t, ets_t1) in zip(
+                            self.eval_time_stamps[2:], self.eval_time_stamps[1:-1]
+                        )
+                    ]
                 )
-                / 2
-                - (
-                    self.eval_time_stamps[1:].ci_95_pred[0]
-                    + self.eval_time_stamps[:-1].ci_95_pred[0]
+                - np.array(
+                    [
+                        (ets_t.ci_95_pred[0] + ets_t1.ci_95_pred[0]) / 2
+                        for (ets_t, ets_t1) in zip(
+                            self.eval_time_stamps[2:], self.eval_time_stamps[1:-1]
+                        )
+                    ]
                 )
-                / 2
             ),
-            self._times[1:] - self._times[0],
+            self._times[1:-1] - self._times[0],
         )
 
     @property
@@ -212,6 +218,39 @@ def mc_sample_model(
     return samples, rng_key
 
 
+def bar_plot_metrics_per_test_case(
+    axes: Iterable[plt.Axes],
+    test_case_results: list[TestCaseResults],
+    rul_grid_crps: np.ndarray,
+) -> None:
+    """`axes` is expected to contain 4 subplot axes."""
+    test_case_ids = [tcr.id for tcr in test_case_results]
+    rmses = [tcr.rmse for tcr in test_case_results]
+    coverages = [tcr.coverage for tcr in test_case_results]
+    wsus = [tcr.wsu for tcr in test_case_results]
+    average_crpss = [
+        tcr.average_crps(x_grid=rul_grid_crps) for tcr in test_case_results
+    ]
+
+    metrics = {
+        "RMSE": rmses,
+        "Coverage": coverages,
+        "WSU": wsus,
+        "CRPS": average_crpss,
+    }
+
+    x = np.arange(len(test_case_ids))
+    for ax, metric in zip(axes, metrics.keys()):
+        ax.bar(x, metrics[metric])
+        ax.set_xticks(x)
+        ax.set_xticklabels(test_case_ids, rotation=45)
+        ax.set_xlabel("Test Case ID")
+        ax.set_title(metric)
+        ax.grid()
+
+    return
+
+
 def main() -> None:
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -315,6 +354,9 @@ def main() -> None:
                 TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps)
             )
 
+        # Log parameters with MLFlow.
+        mlflow.log_params(dataclasses.asdict(hp))
+
         # Metric 1: plot RUL predictions with CI over time.
         fig, axes = plt.subplots(2, 5, figsize=(15, 6))
         axes = axes.flatten()
@@ -325,11 +367,43 @@ def main() -> None:
         fig.tight_layout()
         mlflow.log_figure(fig, artifact_file="rul_predictions_over_test_cases.png")
 
-        # rul_grid_crps = np.linspace(
-        #     hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_num
-        # )
+        # Metric 2: average RMSE
+        mlflow.log_metric(
+            "rmse_average",
+            np.mean([tcr.rmse for tcr in test_case_results]),
+        )
 
-        # TODO: [feat] Produce the remaining metrics per test case, average them and log them to mlflow.
+        # Metric 3: average coverage
+        mlflow.log_metric(
+            "coverage_average",
+            np.mean([tcr.coverage for tcr in test_case_results]),
+        )
+
+        # Metric 4: average WSU
+        mlflow.log_metric(
+            "wsu_average",
+            np.mean([tcr.wsu for tcr in test_case_results]),
+        )
+
+        # Metric 5: average CRPS over a common grid.
+        rul_grid_crps = np.linspace(
+            hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_num
+        )
+        mlflow.log_metric(
+            "crps_average",
+            np.mean(
+                [tcr.average_crps(x_grid=rul_grid_crps) for tcr in test_case_results]
+            ),
+        )
+
+        # Metric 6: bar plot of all metrics per test case.
+        fig, axes = plt.subplots(2, 2, figsize=(10, 6))
+        axes = axes.flatten()
+        bar_plot_metrics_per_test_case(
+            axes=axes, test_case_results=test_case_results, rul_grid_crps=rul_grid_crps
+        )
+        fig.tight_layout()
+        mlflow.log_figure(fig, artifact_file="metrics_per_test_case.png")
 
 
 if __name__ == "__main__":
