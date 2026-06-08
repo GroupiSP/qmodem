@@ -24,6 +24,7 @@ from .hnn_model import Net
 @dataclasses.dataclass(frozen=True)
 class EvalTimeStamp:
     time: float
+    target: np.ndarray
     samples_true: np.ndarray
     samples_pred: np.ndarray
 
@@ -37,10 +38,6 @@ class EvalTimeStamp:
         cdf_value = count / len(sorted_samples)
 
         return cdf_value
-
-    @property
-    def average_true(self) -> float:
-        return np.mean(self.samples_true)
 
     @property
     def average_pred(self) -> float:
@@ -57,12 +54,12 @@ class EvalTimeStamp:
 
     @property
     def squared_error(self) -> float:
-        return (self.average_true - self.average_pred) ** 2
+        return (self.target - self.average_pred) ** 2
 
     @property
     def is_covered(self) -> bool:
         lower_bound_pred, upper_bound_pred = self.ci_95_pred
-        return lower_bound_pred <= self.average_true <= upper_bound_pred
+        return lower_bound_pred <= self.target <= upper_bound_pred
 
     def crps(self, x_grid: np.ndarray) -> float:
         F0 = np.array([self._cdf(x, self.samples_true) for x in x_grid])
@@ -71,8 +68,9 @@ class EvalTimeStamp:
         return np.trapz((F0 - F1) ** 2, x_grid)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class TestCaseResults:
+    id: int
     eval_time_stamps: list[EvalTimeStamp]
 
     def __post_init__(self) -> None:
@@ -110,6 +108,41 @@ class TestCaseResults:
 
     def average_crps(self, x_grid: np.ndarray) -> float:
         return np.mean([ets.crps(x_grid=x_grid) for ets in self.eval_time_stamps])
+
+    def plot_rul_over_time(self, ax: plt.Axes) -> None:
+        ax.plot(
+            self._times,
+            [rt for rt in [ets.target for ets in self.eval_time_stamps]],
+            label="True RUL",
+        )
+        ax.fill_between(
+            self._times,
+            [ets.ci_95_true[0] for ets in self.eval_time_stamps],
+            [ets.ci_95_true[1] for ets in self.eval_time_stamps],
+            alpha=0.3,
+            label="True RUL CI",
+        )
+        ax.plot(
+            self._times[1:],
+            [ets.average_pred for ets in self.eval_time_stamps[1:]],
+            "-o",
+            label="Predicted RUL",
+        )
+        ax.fill_between(
+            self._times[1:],
+            [ets.ci_95_pred[0] for ets in self.eval_time_stamps[1:]],
+            [ets.ci_95_pred[1] for ets in self.eval_time_stamps[1:]],
+            alpha=0.3,
+            label="Predicted RUL CI",
+        )
+        ax.set_title(f"Test Case {self.id}")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("RUL (s)")
+        ax.set_ylim(bottom=0)
+        ax.grid()
+        ax.legend()
+
+        return
 
 
 @dataclasses.dataclass(frozen=True)
@@ -219,88 +252,82 @@ def main() -> None:
 
         nnx.update(model, restored_state)
 
-        # Create a subplot figure to compare the predictions over the different test cases.
-        fig, axes = plt.subplots(2, 5, figsize=(15, 6))
-        axes = axes.flatten()
-
         # Random PRNG key for sampling the model.
         key = jax.random.PRNGKey(hp.test_rng_seed)
 
-        # rul_grid_crps = np.linspace(
-        #     hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_num
-        # )
-
+        test_case_results = []
         for test_case_id in range(10):
             test_data = get_test_case_data(
                 RAW_DATA_DIR / "test.csv", test_case_id=test_case_id
             )
 
-            N_t = len(test_data.time)
-            soc0_idxs = np.linspace(0, N_t - 1, num=hp.test_n_soc0s, dtype=np.int32)
+            soc0_idxs = np.linspace(
+                0, len(test_data.time) - 1, num=hp.test_n_soc0s, dtype=np.int32
+            )
 
             # True RUL, distribution and bounds.
-            ruls_true = test_data.rul[soc0_idxs]
-            ruls_lower_true = []
-            ruls_upper_true = []
-            for sr in run_discharges_from_intermediate_socs(
-                soc_0s=test_data.soc[soc0_idxs],
-            ):
-                samples_true = sr.times_eod - sr.times[0]
-                ruls_lower_true.append(np.percentile(samples_true, 2.5))
-                ruls_upper_true.append(np.percentile(samples_true, 97.5))
+            eval_time_stamps = []
 
-            # Predicted RUL, distribution and bounds.
-            ruls_pred = []
-            ruls_lower_pred = []
-            ruls_upper_pred = []
-            for int_idx in soc0_idxs[1:]:
-                # Get the voltage window that is immediately prior to the test timestamp
+            sims_iterator = run_discharges_from_intermediate_socs(
+                soc_0s=test_data.soc[soc0_idxs]
+            )
+
+            # First timestamp is treated separately, since there is no prediction for it.
+            sr_0 = next(sims_iterator)
+            eval_time_stamps.append(
+                EvalTimeStamp(
+                    time=test_data.time[soc0_idxs[0]],
+                    target=test_data.rul[soc0_idxs[0]],
+                    samples_true=sr_0.times_eod - sr_0.times[0],
+                    samples_pred=np.array([]),  # No prediction for the first timestamp
+                )
+            )
+
+            i = 1
+            for sr in sims_iterator:
                 previous_voltage_window = test_data.voltage[
-                    int_idx - int(run_params_training["window_size"]) : int_idx + 1
+                    soc0_idxs[i] - int(run_params_training["window_size"]) : soc0_idxs[
+                        i
+                    ]
+                    + 1
                 ]
+
                 X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
+
+                key, _ = jax.random.split(key)
                 samples_pred, key = mc_sample_model(
                     model, X, n_samples=hp.test_n_mc_samples, rng_key=key
                 )
-                samples_pred = scaler.inverse_transform(samples_pred)
 
-                y = jnp.average(samples_pred, axis=0, keepdims=True)
-                ruls_pred.append(y.item())
+                eval_time_stamps.append(
+                    EvalTimeStamp(
+                        time=test_data.time[soc0_idxs[i]],
+                        target=test_data.rul[soc0_idxs[i]],
+                        samples_true=sr.times_eod - sr.times[0],
+                        samples_pred=scaler.inverse_transform(
+                            samples_pred
+                        ),  # Placeholder, will be filled later
+                    )
+                )
+                i += 1
 
-                ruls_lower_pred.append(jnp.percentile(samples_pred, 2.5))
-                ruls_upper_pred.append(jnp.percentile(samples_pred, 97.5))
+            test_case_results.append(
+                TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps)
+            )
 
-            # Plot true and predicted RULs against time for the current test case.
-            # TODO: [refac] move plotting to a separate function
-            axes[test_case_id].plot(
-                test_data.time[soc0_idxs], ruls_true, label="True RUL"
-            )
-            axes[test_case_id].fill_between(
-                test_data.time[soc0_idxs],
-                ruls_lower_true,
-                ruls_upper_true,
-                alpha=0.3,
-                label="True RUL CI",
-            )
-            axes[test_case_id].plot(
-                test_data.time[soc0_idxs[1:]], ruls_pred, "-o", label="Predicted RUL"
-            )
-            axes[test_case_id].fill_between(
-                test_data.time[soc0_idxs[1:]],
-                ruls_lower_pred,
-                ruls_upper_pred,
-                alpha=0.3,
-                label="Predicted RUL CI",
-            )
-            axes[test_case_id].set_title(f"Test Case {test_case_id}")
-            axes[test_case_id].set_xlabel("Time (s)")
-            axes[test_case_id].set_ylabel("RUL (s)")
-            axes[test_case_id].set_ylim(bottom=0)
-            axes[test_case_id].grid()
-            axes[test_case_id].legend()
+        # Metric 1: plot RUL predictions with CI over time.
+        fig, axes = plt.subplots(2, 5, figsize=(15, 6))
+        axes = axes.flatten()
+
+        for test_case_result, ax in zip(test_case_results, axes):
+            test_case_result.plot_rul_over_time(ax)
 
         fig.tight_layout()
         mlflow.log_figure(fig, artifact_file="rul_predictions_over_test_cases.png")
+
+        # rul_grid_crps = np.linspace(
+        #     hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_num
+        # )
 
         # TODO: [feat] Produce the remaining metrics per test case, average them and log them to mlflow.
 
