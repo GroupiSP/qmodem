@@ -722,7 +722,10 @@ class FlipoutConv1D(nnx.Module):
         return mean_out + perturb
 
     def kl_divergence(self) -> jax.Array:
-        """KL(q ‖ p) with unit-normal prior p = N(0, 1)."""
+        """KL(q ‖ p) with unit-normal prior p = N(0, 1).
+
+        Has an analytical form
+        """
 
         def _kl(mu: jax.Array, rho: jax.Array) -> jax.Array:
             sigma = jax.nn.softplus(rho)
