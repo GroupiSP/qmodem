@@ -155,8 +155,9 @@ def train_loop(
             model.train()
             train_losses = []
             for batch in dataloader_train:
-                key, _ = jax.random.split(key)
-                loss = train_batch_fn(model, batch, key, optimizer)
+                splits = jax.random.split(key, num=batch[0].shape[0] + 1)
+                key, subkeys = splits[0], splits[1:]
+                loss = train_batch_fn(model, batch, subkeys, optimizer)
                 train_losses.append(loss)
 
             phase = TrainingPhase.EVAL_START
@@ -166,8 +167,9 @@ def train_loop(
             model.eval()
             val_losses = []
             for batch in dataloader_val:
-                key, _ = jax.random.split(key)
-                val_losses.append(eval_batch_fn(model, batch, key, optimizer))
+                splits = jax.random.split(key, num=batch[0].shape[0] + 1)
+                key, subkeys = splits[0], splits[1:]
+                val_losses.append(eval_batch_fn(model, batch, subkeys, optimizer))
 
             val_loss = jnp.mean(jnp.array(val_losses)).item()
 

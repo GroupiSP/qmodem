@@ -134,12 +134,9 @@ def main() -> None:
     def train_step(
         model: nnx.Module,
         batch: jax.Array,
-        key: jax.Array,
+        keys: jax.Array,
         optimizer: nnx.Optimizer,
     ) -> jax.Array:
-        # Split the keys for the batch
-        keys = jax.random.split(key, batch[0].shape[0])
-
         def loss_fn(model):
             return jnp.mean(per_sample_nll(model, batch, keys))
 
@@ -151,12 +148,9 @@ def main() -> None:
     def eval_step(
         model: nnx.Module,
         batch: jax.Array,
-        key: jax.Array,
+        keys: jax.Array,
         optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
-        # Split the keys for the batch
-        keys = jax.random.split(key, batch[0].shape[0])
-
         return jnp.mean(per_sample_nll(model, batch, keys))
 
     schedule = optax.cosine_decay_schedule(
