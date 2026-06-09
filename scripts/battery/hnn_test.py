@@ -92,7 +92,7 @@ def main() -> None:
         nnx.update(model, restored_state)
 
         # Random PRNG key for sampling the model.
-        key = jax.random.PRNGKey(hp.test_rng_seed)
+        key = jax.random.key(hp.test_rng_seed)
 
         test_case_results = []
         for test_case_id in range(10):
