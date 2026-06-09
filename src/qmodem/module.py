@@ -674,18 +674,18 @@ class FlipoutConv1D(nnx.Module):
         self.bias_mu = nnx.Param(jnp.zeros(out_features))
         self.bias_rho = nnx.Param(jnp.full(out_features, -3.0))
 
-    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """Forward pass with per-sample sign-flipped perturbations.
 
         Args:
             x: Input with shape ``(batch, length, in_features)``.
-            key: JAX PRNG key for weight and sign sampling.
+            rngs: RNGs for weight and sign sampling.
 
         Returns:
             Convolved output with shape ``(batch, L_out, out_features)``.
         """
-        k1, k2, k3, k4 = jax.random.split(key, 4)
-        batch = x.shape[0]
+        k1, k2, k3, k4 = jax.random.split(rngs.params(), 4)
+        batch_size = x.shape[0]
         k_sigma = jax.nn.softplus(self.kernel_rho.value)
         b_sigma = jax.nn.softplus(self.bias_rho.value)
 
@@ -706,8 +706,10 @@ class FlipoutConv1D(nnx.Module):
         eps_b = jax.random.normal(k2, self.bias_mu.value.shape)
 
         # Per-sample sign flips on input/output channels
-        s = jax.random.rademacher(k3, (batch, 1, self.in_features)).astype(x.dtype)
-        r = jax.random.rademacher(k4, (batch, 1, self.out_features)).astype(x.dtype)
+        s = jax.random.rademacher(k3, (batch_size, 1, self.in_features)).astype(x.dtype)
+        r = jax.random.rademacher(k4, (batch_size, 1, self.out_features)).astype(
+            x.dtype
+        )
 
         perturb = jax.lax.conv_general_dilated(
             s * x,
@@ -737,7 +739,7 @@ BayesConvCls = type[StandardBayesConv1D] | type[FlipoutConv1D]
 class BayesCNN1D(nnx.Module):
     def __init__(
         self,
-        conv_cls: BayesConvCls,
+        bayes_conv: BayesConvCls,
         n_filters: int = 4,
         kernel_size: int = 5,
         act_fn: nnx.Module = nnx.gelu,
@@ -752,7 +754,7 @@ class BayesCNN1D(nnx.Module):
         input windows.
 
         Args:
-            conv_cls: Bayesian convolution layer class
+            bayes_conv: Bayesian convolution layer class
                 (:class:`StandardBayesConv1D` or :class:`FlipoutConv1D`).
             n_filters: Number of convolutional filters. Defaults to 4.
             kernel_size: Size of the convolutional kernel. Defaults to 5.
@@ -763,7 +765,7 @@ class BayesCNN1D(nnx.Module):
         self.kernel_size = kernel_size
         self.act_fn = act_fn
 
-        self.conv = conv_cls(
+        self.conv = bayes_conv(
             in_features=1,
             out_features=n_filters,
             kernel_size=kernel_size,
@@ -791,7 +793,7 @@ class BayesCNN1D(nnx.Module):
         x = jnp.transpose(x, (0, 2, 1))
 
         # Bayesian Conv1D with activation
-        x = self.conv(x, key=rngs.params())
+        x = self.conv(x, rngs=rngs)
         x = self.act_fn(x)
 
         # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)

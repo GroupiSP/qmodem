@@ -222,7 +222,7 @@ def mock_bayes_cnn1d(request) -> BayesCNN1D:
     return BayesCNN1D(
         n_filters=4,
         kernel_size=5,
-        conv_cls=request.param,
+        bayes_conv=request.param,
         rngs=nnx.Rngs(params=0),
     )
 
