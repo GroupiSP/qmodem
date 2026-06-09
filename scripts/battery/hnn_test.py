@@ -94,6 +94,7 @@ def main() -> None:
         # Random PRNG key for sampling the model.
         key = jax.random.key(hp.test_rng_seed)
 
+        model.eval()
         test_case_results = []
         for test_case_id in range(10):
             test_data = get_test_case_data(
