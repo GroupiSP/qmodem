@@ -25,7 +25,7 @@ from scripts.battery.commons import (
     get_test_case_data,
     run_discharges_from_intermediate_socs,
 )
-from scripts.battery.hnn_model import Net
+from scripts.battery.mcd_model import Net
 
 
 def mc_sample_model(
