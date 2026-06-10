@@ -819,7 +819,8 @@ class PQCConv1D(nnx.Module):
             rngs: RNGs for weight generation.
         """
         # Generate kernels and bias from the PQC generators
-        kernels_and_bias = [gen(rngs) for gen in self.generators]
+        forked = rngs.fork(len(self.generators))
+        kernels_and_bias = [gen(f) for gen, f in zip(self.generators, forked)]
         kernel = jnp.stack(kernels_and_bias[:-1], axis=-1).reshape(self._kernel_shape)
         bias = kernels_and_bias[-1].reshape(self._bias_shape)
 
