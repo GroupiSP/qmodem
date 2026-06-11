@@ -210,13 +210,13 @@ def train_loop(
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]
                 generator_loss = generator_batch_fn(
-                    model, batch, subkeys, optimizer_generator
+                    model, discriminator, batch, subkeys, optimizer_generator
                 )
 
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]
                 discriminator_loss = discriminator_batch_fn(
-                    discriminator, batch, subkeys, optimizer_discriminator
+                    model, discriminator, batch, subkeys, optimizer_discriminator
                 )
 
                 generator_losses.append(generator_loss)
