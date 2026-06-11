@@ -801,12 +801,14 @@ class PQCConv1D(nnx.Module):
         self.out_features = out_features
         self.kernel_size = kernel_size
         self.padding = padding
-        self.generators = [
-            PQCLinearPPGenerator(
-                quantum_circuit, n_out_linear=quantum_circuit.n_qubits, rngs=rngs
-            )  # linear pp does not change the output dimension of the PQC.
-            for _ in range(out_features + 1)
-        ]  # +1 for bias
+        self.generators = nnx.List(
+            [
+                PQCLinearPPGenerator(
+                    quantum_circuit, n_out_linear=quantum_circuit.n_qubits, rngs=rngs
+                )  # linear pp does not change the output dimension of the PQC.
+                for _ in range(out_features + 1)
+            ]
+        )  # +1 for bias
 
         self._kernel_shape = (kernel_size, in_features, out_features)
         self._bias_shape = (out_features,)
