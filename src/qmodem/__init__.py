@@ -22,7 +22,6 @@ from .module import (  # noqa: F401
     HNNV1,
     LSTM,
     MCDCNN1D,
-    QAVICNN1D,
     BayesCNN1D,
     FlipoutConv1D,
     HeteroscedasticCNN1D,
