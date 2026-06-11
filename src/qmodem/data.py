@@ -197,9 +197,7 @@ def normalize_ruls(
     transform_fn: Callable[[np.ndarray], np.ndarray],
 ) -> tuple[np.ndarray, np.ndarray]:
     voltage_windows, rul_windows = x
-    return voltage_windows, transform_fn(
-        rul_windows
-    ).ravel()  # ravel make sure the output is 1-D for the rest of the workflow
+    return voltage_windows, transform_fn(rul_windows)
 
 
 def to_jax(x: tuple[np.ndarray, np.ndarray]) -> tuple[jax.Array, jax.Array]:
