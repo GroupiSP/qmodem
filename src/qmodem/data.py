@@ -59,47 +59,6 @@ def _make_windows(
     return windows, targets
 
 
-def split_cmapss(
-    df: pd.DataFrame, relative_subset_size: float
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Splits the CMAPSS dataframe into two sub-dataframes.
-
-    Args:
-        df: The CMAPSS dataframe to split.
-        relative_subset_size: The fraction of units to include in the second subset.
-
-    Returns:
-        The two sub-dataframes split from the original.
-    """
-    # shuffle the unit_ids (engine IDs)
-    unit_ids = df["unit_id"].unique()
-
-    # note: the sampling follows the numpy random state.
-    # If reproducibility is desired, set the seed with np.random.seed()
-    # before this step.
-    shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
-
-    # copy the dataframe to a temp variable to avoid modifying the original
-    df = df.copy()
-    df["unit_id"] = pd.Categorical(
-        df["unit_id"], categories=shuffled_unit_ids, ordered=True
-    )
-
-    df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
-
-    num_units = df["unit_id"].nunique()
-
-    # Note: `train` and `test` in the names are just labels for the two splits.
-    num_test_units = int(num_units * relative_subset_size)
-    test_unit_ids = shuffled_unit_ids[:num_test_units]
-    train_unit_ids = shuffled_unit_ids[num_test_units:]
-
-    train_df = df[df["unit_id"].isin(train_unit_ids)]
-    test_df = df[df["unit_id"].isin(test_unit_ids)]
-
-    return train_df, test_df
-
-
 def create_dataloaders(
     ds_train: DataSource,
     ds_val: DataSource,
@@ -255,6 +214,47 @@ def prepare_cmapss(path: pathlib.Path) -> pd.DataFrame:
     df = _add_rul(df)
     df = _exclude_constant_sensors(df)
     return df
+
+
+def split_cmapss(
+    df: pd.DataFrame, relative_subset_size: float
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Splits the CMAPSS dataframe into two sub-dataframes.
+
+    Args:
+        df: The CMAPSS dataframe to split.
+        relative_subset_size: The fraction of units to include in the second subset.
+
+    Returns:
+        The two sub-dataframes split from the original.
+    """
+    # shuffle the unit_ids (engine IDs)
+    unit_ids = df["unit_id"].unique()
+
+    # note: the sampling follows the numpy random state.
+    # If reproducibility is desired, set the seed with np.random.seed()
+    # before this step.
+    shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
+
+    # copy the dataframe to a temp variable to avoid modifying the original
+    df = df.copy()
+    df["unit_id"] = pd.Categorical(
+        df["unit_id"], categories=shuffled_unit_ids, ordered=True
+    )
+
+    df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
+
+    num_units = df["unit_id"].nunique()
+
+    # Note: `train` and `test` in the names are just labels for the two splits.
+    num_test_units = int(num_units * relative_subset_size)
+    test_unit_ids = shuffled_unit_ids[:num_test_units]
+    train_unit_ids = shuffled_unit_ids[num_test_units:]
+
+    train_df = df[df["unit_id"].isin(train_unit_ids)]
+    test_df = df[df["unit_id"].isin(test_unit_ids)]
+
+    return train_df, test_df
 
 
 class CMAPSSAnalyst:
