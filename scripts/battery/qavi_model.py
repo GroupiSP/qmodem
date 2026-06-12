@@ -29,7 +29,7 @@ class LayeredPQC:
         return [qp.expval(qp.PauliZ(i)) for i in range(self.n_qubits)]
 
     def __call__(self, x: jax.Array, params: jax.Array) -> jax.Array:
-        return jnp.array(self.circuit(x.item(), params))
+        return jnp.array(self.circuit(x, params))
 
 
 class Net(nnx.Module):
@@ -90,7 +90,7 @@ class Net(nnx.Module):
         x = self.act_fn(x)
 
         # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=-2, keepdims=True)
+        x = jnp.mean(x, axis=-2)
 
         # GaussianBlock: (batch, n_filters) -> (batch, 2)
         return self.gauss(x)

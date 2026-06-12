@@ -21,7 +21,6 @@ from qmodem.data import (
     normalize_ruls,
     to_jax,
 )
-from qmodem.module import negative_log_likelihood
 from qmodem.tracking import (
     MLFlowSetup,
     mlflow_track_losses,
@@ -65,7 +64,7 @@ class Hyperparameters(TrainHyperparameters):
     discriminator_act_fn: str = "leaky_relu"
     discriminator_init_seed: int = 43
     learning_rate: None = None  # override
-    learning_rate_generator: float = 1e-2
+    learning_rate_generator: float = 1e-3
     learning_rate_discriminator: float = 1e-3
     early_stopping_patience: int = 30  # override
     scheduler_alpha: None = None  # override
@@ -158,66 +157,6 @@ def main() -> None:
         drop_remainder=hp.drop_remainder,
     )
 
-    # Loss evaluation functions and steps for the training.
-    @nnx.vmap(in_axes=(None, None, 0, 0), out_axes=0)
-    def per_sample_discriminator_error(
-        model, discriminator, sample, sample_key
-    ) -> jax.Array:
-        # Build the RNG here to avoid crossing different trace levels.
-        eps = 1e-8
-
-        rngs = nnx.Rngs(params=sample_key)
-        x, y_true = sample
-
-        # Add batch dimension for the model and discriminator
-        x = jnp.expand_dims(x, 0)  # (1, time, features)
-        y_true = jnp.expand_dims(y_true, 0)  # (1, 1)
-
-        y_pred = model(x, rngs)  # (1, 2) -> mu, var
-        mu_pred = y_pred[:, :1]  # (1,1)
-        proba_real = discriminator(
-            jnp.concatenate([x, y_true[:, :, None]], axis=1), rngs
-        )
-        proba_fake = discriminator(
-            jnp.concatenate([x, mu_pred[:, :, None]], axis=1), rngs
-        )
-        error = -jnp.log(proba_real + eps) - jnp.log(1 - proba_fake + eps)
-        return error.squeeze()
-
-    @nnx.vmap(in_axes=(None, None, 0, 0), out_axes=0)
-    def per_sample_generator_error(
-        model, discriminator, sample, sample_key
-    ) -> jax.Array:
-        eps = 1e-8
-
-        rngs = nnx.Rngs(params=sample_key)
-        x, y_true = sample
-
-        # Add batch dimension for the model and discriminator
-        x = jnp.expand_dims(x, 0)  # (1, time, features)
-        y_true = jnp.expand_dims(y_true, 0)  # (1, 1)
-
-        y_pred = model(x, rngs)
-        mu_pred = y_pred[:, :1]  # (1,1)
-        proba_fake = discriminator(
-            jnp.concatenate([x, mu_pred[:, :, None]], axis=1), rngs
-        )
-
-        proba_fake_clipped = jnp.clip(proba_fake, eps, 1 - eps)
-        logits = jnp.log(proba_fake_clipped / (1 - proba_fake_clipped))
-
-        adv_error = (
-            -logits.squeeze()
-        )  # Generator wants to maximize the discriminator's error
-        data_error = negative_log_likelihood(model, sample, rngs, beta=hp.beta_nll)
-
-        return adv_error + data_error
-
-    @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
-    def per_sample_eval_error(model, sample, sample_key) -> jax.Array:
-        rngs = nnx.Rngs(params=sample_key)
-        return negative_log_likelihood(model, sample, rngs, beta=hp.beta_nll)
-
     @nnx.jit
     def discriminator_step(
         model: nnx.Module,
@@ -226,11 +165,25 @@ def main() -> None:
         keys: jax.Array,
         optimizer: nnx.Optimizer,
     ) -> jax.Array:
-        def loss_fn(discriminator) -> jax.Array:
-            # This is the loss for the discriminator.
-            return jnp.mean(
-                per_sample_discriminator_error(model, discriminator, batch, keys)
+        def loss_fn(discriminator):
+            # Build the RNG here to avoid crossing different trace levels.
+            eps = 1e-8
+
+            x, y_true = batch
+            rngs = nnx.Rngs(params=keys[0])
+
+            y_pred = model(x, rngs)  # (1, 2) -> mu, var
+            mu_pred = y_pred[:, :1]  # (1,1)
+
+            proba_real = discriminator(
+                jnp.concatenate([x, y_true[:, :, None]], axis=1), rngs
             )
+            proba_fake = discriminator(
+                jnp.concatenate([x, mu_pred[:, :, None]], axis=1), rngs
+            )
+            error = -jnp.log(proba_real + eps) - jnp.log(1 - proba_fake + eps)
+
+            return jnp.mean(error.squeeze(-1))
 
         loss, grads = nnx.value_and_grad(loss_fn)(discriminator)
         optimizer.update(discriminator, grads)
@@ -244,12 +197,38 @@ def main() -> None:
         keys: jax.Array,
         optimizer: nnx.Optimizer,
     ) -> jax.Array:
-        def loss_fn(model) -> jax.Array:
-            # This is the loss for the generator.
-            return jnp.mean(
-                per_sample_generator_error(model, discriminator, batch, keys)
-            )
+        def loss_fn(model):
+            eps = 1e-8
 
+            xs, y_true = batch  # xs: (batch, ...), y_true: (batch, 1)
+            rngs = nnx.Rngs(
+                params=keys[0]
+            )  # one key suffices — weights are batch-shared
+
+            # PQC generates weights once, conv applied to whole batch
+            y_pred = model(xs, rngs)  # (batch, 2)
+            mu_pred = y_pred[:, :1]  # (batch, 1)
+
+            proba_fake = discriminator(
+                jnp.concatenate([xs, mu_pred[:, :, None]], axis=1), rngs
+            )  # (batch, 1)
+            proba_fake_clipped = jnp.clip(proba_fake, eps, 1 - eps)
+            logits = jnp.log(proba_fake_clipped / (1 - proba_fake_clipped))
+            adv_error = -logits.squeeze(-1)  # (batch,)
+
+            # NLL per sample from already-computed predictions, no second model call
+            mu_pred_1d = y_pred[:, 0]
+            variances_pred_1d = jnp.clip(y_pred[:, 1], min=1e-8)
+            y_true_1d = y_true.squeeze(-1)
+            nll = (
+                0.5 * jnp.log(variances_pred_1d)
+                + 0.5 * jnp.square(y_true_1d - mu_pred_1d) / variances_pred_1d
+            )  # (batch,)
+
+            return jnp.mean(adv_error + nll)
+
+        # Notice that vmapping does not work in this case, because of an
+        # incompatibility downstream with the PenyyLane qnode.
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
         return loss
@@ -261,7 +240,23 @@ def main() -> None:
         keys: jax.Array,
         optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
-        return per_sample_eval_error(model, batch, keys).mean()
+        def loss_fn(model):
+            xs, y_true = batch  # xs: (batch, ...), y_true: (batch, 1)
+            rngs = nnx.Rngs(params=keys[0])
+
+            y_pred = model(xs, rngs)  # (batch, 2)
+            mu_pred_1d = y_pred[:, 0]  # (batch,)
+            variances_pred_1d = jnp.clip(y_pred[:, 1], min=1e-8)  # (batch,)
+            y_true_1d = y_true.squeeze(-1)  # (batch,)
+
+            nll = (
+                0.5 * jnp.log(variances_pred_1d)
+                + 0.5 * jnp.square(y_true_1d - mu_pred_1d) / variances_pred_1d
+            )  # (batch,)
+
+            return jnp.mean(nll)
+
+        return loss_fn(model)
 
     optimizer_discriminator = nnx.Optimizer(
         discriminator, optax.adam(hp.learning_rate_discriminator), wrt=nnx.Param
