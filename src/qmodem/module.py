@@ -771,7 +771,7 @@ class PQCLinearPPGenerator(nnx.Module):
         # Sample x from a uniform [0, 2\pi] distribution
         x = jax.random.uniform(
             rngs.params(),
-            shape=(1,),  # TODO: can the shape be more general?
+            shape=(),  # TODO: can the shape be more general?
             minval=0,
             maxval=2 * jnp.pi,
         )
@@ -821,10 +821,13 @@ class PQCConv1D(nnx.Module):
             rngs: RNGs for weight generation.
         """
         # Generate kernels and bias from the PQC generators
-        forked = rngs.fork(len(self.generators))
-        kernels_and_bias = [gen(f) for gen, f in zip(self.generators, forked)]
+        key = rngs.params()
+        keys = jax.random.split(key, len(self.generators))
+        kernels_and_bias = [
+            gen(nnx.Rngs(params=keys[i])) for i, gen in enumerate(self.generators)
+        ]
         kernel = jnp.stack(kernels_and_bias[:-1], axis=-1).reshape(self._kernel_shape)
-        bias = kernels_and_bias[-1].reshape(self._bias_shape)
+        bias = kernels_and_bias[-1][: self.out_features]  # EV of the first 4 qubits
 
         out = jax.lax.conv_general_dilated(
             x,
