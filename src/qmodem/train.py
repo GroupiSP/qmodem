@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import pathlib
+import tempfile
+import time
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
 from typing import Callable, Iterable
@@ -8,6 +11,8 @@ from typing import Callable, Iterable
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
+import mlflow
+import orbax.checkpoint as ocp
 
 from .module import eval_step_simple, train_step_simple
 
@@ -109,6 +114,29 @@ class LogReporter:
                 f"Val Loss: {context.val_loss:.6f} | "
                 f"Best Val Loss: {context.best_val_loss:.6f}"
             )
+
+
+def mlflow_track_model_best_state(
+    phase: TrainingPhase, context: TrainingContext
+) -> None:
+    if phase == TrainingPhase.BEFORE_RETURN:
+        run = mlflow.active_run()
+        if run is None:
+            return
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ckpt_path = pathlib.Path(tmp_dir) / "best_model_state"
+            checkpointer = ocp.StandardCheckpointer()
+            checkpointer.save(ckpt_path, context.model_best_state)
+            time.sleep(0.1)  # let Orbax finish async writes
+            mlflow.log_artifacts(str(ckpt_path), artifact_path="best_model_state")
+
+
+def mlflow_track_losses(phase: TrainingPhase, context: TrainingContext) -> None:
+    if phase == TrainingPhase.EPOCH_END:
+        mlflow.log_metric("train_loss", context.train_loss, step=context.epoch)
+        mlflow.log_metric("val_loss", context.val_loss, step=context.epoch)
+        mlflow.log_metric("best_val_loss", context.best_val_loss, step=context.epoch)
 
 
 # ==================================================

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import tempfile
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -9,9 +7,7 @@ from pathlib import Path
 from typing import Any, Generator
 
 import mlflow
-import orbax.checkpoint as ocp
 
-from .train import TrainingContext, TrainingPhase
 from .utils import ROOT_DIR
 
 
@@ -110,29 +106,6 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
 
     finally:
         mlflow.end_run()
-
-
-def mlflow_track_model_best_state(
-    phase: TrainingPhase, context: TrainingContext
-) -> None:
-    if phase == TrainingPhase.BEFORE_RETURN:
-        run = mlflow.active_run()
-        if run is None:
-            return
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            ckpt_path = Path(tmp_dir) / "best_model_state"
-            checkpointer = ocp.StandardCheckpointer()
-            checkpointer.save(ckpt_path, context.model_best_state)
-            time.sleep(0.1)  # let Orbax finish async writes
-            mlflow.log_artifacts(str(ckpt_path), artifact_path="best_model_state")
-
-
-def mlflow_track_losses(phase: TrainingPhase, context: TrainingContext) -> None:
-    if phase == TrainingPhase.EPOCH_END:
-        mlflow.log_metric("train_loss", context.train_loss, step=context.epoch)
-        mlflow.log_metric("val_loss", context.val_loss, step=context.epoch)
-        mlflow.log_metric("best_val_loss", context.best_val_loss, step=context.epoch)
 
 
 # TODO: implement

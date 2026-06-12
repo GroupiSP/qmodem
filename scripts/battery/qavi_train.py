@@ -23,13 +23,13 @@ from qmodem.data import (
 )
 from qmodem.tracking import (
     MLFlowSetup,
-    mlflow_track_losses,
-    mlflow_track_model_best_state,
     track_mlflow,
 )
 from qmodem.train_adversarial import (
     EarlyStopper,
     LogReporter,
+    mlflow_track_losses,
+    mlflow_track_model_best_state,
     train_loop,
 )
 from qmodem.utils import count_parameters
