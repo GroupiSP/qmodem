@@ -1,281 +1,24 @@
 from __future__ import annotations
 
-from typing import Optional, Protocol, Sequence
+import logging
+from typing import Protocol
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
+
+logger = logging.getLogger(__name__)
 
 
 class RandomCallModel(Protocol):
     def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array: ...
 
 
-class SimpleCNN1D(nnx.Module):
-    def __init__(
-        self,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Simple 1D CNN for time-series RUL prediction with minimal parameters.
+class PQC(Protocol):
+    n_qubits: int
+    params_shape: tuple[int, ...]
 
-        Architecture: Conv1D -> Activation -> Global Average Pooling -> Dense
-        Accepts variable-length input windows.
-
-        Args:
-            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
-            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
-            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
-            rngs (nnx.Rngs): RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.act_fn = act_fn
-
-        self.conv = nnx.Conv(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",
-            rngs=rngs,
-        )
-
-        # Dense layer to output single RUL prediction
-        self.dense = nnx.Linear(n_filters, 1, rngs=rngs)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        """Forward pass through the CNN.
-
-        Args:
-            x (jax.Array): Input with shape (batch, 1, window_size).
-                           Will be transposed to (batch, window_size, 1).
-                           Accepts variable-length windows.
-
-        Returns:
-            jax.Array: Predicted RUL values with shape (batch,).
-        """
-        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
-        x = jnp.transpose(x, (0, 2, 1))
-
-        # Conv1D with activation
-        x = self.conv(x)
-        x = self.act_fn(x)
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=1)
-
-        # Dense layer to single output
-        x = self.dense(x)
-
-        # Squeeze last dimension: (batch, 1) -> (batch,)
-        return x.squeeze(-1)
-
-
-class HeteroscedasticCNN1D(nnx.Module):
-    def __init__(
-        self,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Heteroscedastic 1D CNN for time-series RUL prediction with uncertainty.
-
-        Architecture: Conv1D -> Activation -> Global Average Pooling -> GaussianBlock
-        Outputs both mean and variance predictions. Accepts variable-length input
-        windows.
-
-        Args:
-            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
-            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
-            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
-            rngs (nnx.Rngs): RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.act_fn = act_fn
-
-        self.conv = nnx.Conv(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",
-            rngs=rngs,
-        )
-
-        # GaussianBlock to output mean and variance
-        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        """Forward pass through the heteroscedastic CNN.
-
-        Args:
-            x (jax.Array): Input with shape (batch, 1, window_size).
-                           Will be transposed to (batch, window_size, 1).
-                           Accepts variable-length windows.
-
-        Returns:
-            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
-        """
-        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
-        x = jnp.transpose(x, (0, 2, 1))
-
-        # Conv1D with activation
-        x = self.conv(x)
-        x = self.act_fn(x)
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=1)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gaussian_block(x)
-
-
-class MCDCNN1D(nnx.Module):
-    def __init__(
-        self,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        dropout_rate: float = 0.1,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """MC Dropout 1D CNN for time-series RUL prediction with uncertainty.
-
-        Architecture: Conv1D -> Activation -> Dropout -> Global Average Pooling ->
-        GaussianBlock. Combines aleatoric uncertainty (GaussianBlock) with epistemic
-        uncertainty (MC Dropout). Accepts variable-length input windows.
-
-        Args:
-            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
-            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
-            dropout_rate (float, optional): Dropout rate. Defaults to 0.1.
-            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
-            rngs (nnx.Rngs): RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.dropout_rate = dropout_rate
-        self.act_fn = act_fn
-
-        self.conv = nnx.Conv(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",
-            rngs=rngs,
-        )
-
-        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
-
-        # GaussianBlock to output mean and variance
-        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
-
-    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
-        """Forward pass through the MC Dropout CNN.
-
-        Args:
-            x (jax.Array): Input with shape (batch, 1, window_size).
-                           Will be transposed to (batch, window_size, 1).
-                           Accepts variable-length windows.
-            rngs (nnx.Rngs, optional): RNGs for dropout sampling. When ``None``,
-                the dropout layer uses its internal RNG state (required inside
-                ``@nnx.jit``).
-
-        Returns:
-            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
-        """
-        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
-        x = jnp.transpose(x, (0, 2, 1))
-
-        # Conv1D with activation and dropout
-        x = self.conv(x)
-        x = self.act_fn(x)
-        x = self.dropout(x) if rngs is None else self.dropout(x, rngs=rngs)
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=1)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gaussian_block(x)
-
-
-class HeteroscedasticCNN1DV1(nnx.Module):
-    def __init__(
-        self,
-        n_filters: int = 8,
-        kernel_size: int = 5,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Heteroscedastic 1D CNN with two conv layers for RUL prediction.
-
-        Architecture: Conv1D -> Act -> Conv1D -> Act -> Global Average Pooling ->
-        GaussianBlock. Outputs both mean and variance predictions. Accepts
-        variable-length input windows.
-
-        Args:
-            n_filters (int, optional): Number of convolutional filters per layer.
-                Defaults to 8.
-            kernel_size (int, optional): Size of the convolutional kernel.
-                Defaults to 5.
-            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
-            rngs (nnx.Rngs): RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.act_fn = act_fn
-
-        # First conv layer: (batch, length, 1) -> (batch, L1, n_filters)
-        self.conv1 = nnx.Conv(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",
-            rngs=rngs,
-        )
-
-        # Second conv layer: (batch, L1, n_filters) -> (batch, L2, n_filters)
-        self.conv2 = nnx.Conv(
-            in_features=n_filters,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",
-            rngs=rngs,
-        )
-
-        # GaussianBlock to output mean and variance
-        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        """Forward pass through the two-layer heteroscedastic CNN.
-
-        Args:
-            x (jax.Array): Input with shape (batch, 1, window_size).
-                           Will be transposed to (batch, window_size, 1).
-                           Accepts variable-length windows.
-
-        Returns:
-            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
-        """
-        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
-        x = jnp.transpose(x, (0, 2, 1))
-
-        # Conv1D layers with activation
-        x = self.act_fn(self.conv1(x))
-        x = self.act_fn(self.conv2(x))
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=1)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gaussian_block(x)
+    def __call__(self, x: jax.Array, params: jax.Array) -> jax.Array: ...
 
 
 class GaussianBlock(nnx.Module):
@@ -298,260 +41,6 @@ class GaussianBlock(nnx.Module):
         var = self.linear_2(x)
         var_positive = nnx.softplus(var)
         return jnp.concat([mu, var_positive], axis=1)
-
-
-class ResNetBlockV0(nnx.Module):
-    def __init__(
-        self,
-        layer_dim: int,
-        act_fn: nnx.Module,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """ResNet block with the same structure as in He et al., 2016 (seminal paper)
-        and with identity initialization."""
-        self.linear_1 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
-        self.norm = nnx.LayerNorm(
-            layer_dim, rngs=rngs, scale_init=nnx.initializers.zeros
-        )
-
-        self.act_fn = act_fn
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        residual = x
-        x = self.act_fn(self.linear_1(x))
-        x = self.linear_2(x)
-        x = self.norm(x)
-        x = x + residual  # Residual connection
-        x = self.act_fn(x)
-        return x
-
-
-class ResNetBlockV1(nnx.Module):
-    def __init__(
-        self,
-        layer_dim: int,
-        dropout_rate: float,
-        act_fn: nnx.Module,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        """ResNet block with layer normalization with identity initialization and
-        dropout on the residual branch."""
-        self.linear1 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
-        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
-        self.linear2 = nnx.Linear(layer_dim, layer_dim, rngs=rngs)
-        self.norm = nnx.LayerNorm(
-            layer_dim,
-            rngs=rngs,
-            scale_init=nnx.initializers.zeros,
-        )
-
-        self.act_fn = act_fn
-
-    def __call__(self, x, rngs: nnx.Rngs):
-        residual = x
-        x = self.linear1(x)
-        x = self.act_fn(x)
-        x = self.dropout(x, rngs=rngs)  # apply Dropout inside the branch
-        x = self.linear2(x)
-        x = self.norm(x)  # Starts as 0 contribution due to init
-        x = x + residual
-        x = self.act_fn(x)
-        return x
-
-
-class MLPBlockV0(nnx.Module):
-    def __init__(
-        self, hidden_dim: int, dropout_rate: float, act_fn: nnx.Module, rngs: nnx.Rngs
-    ):
-        """Linear layer with layer normalization and dropout in between."""
-        self.linear1 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
-        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
-        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
-
-        self.act_fn = act_fn
-
-    def __call__(self, x, rngs: nnx.Rngs):
-        x = self.linear1(x)
-        x = self.norm1(x)
-        x = self.act_fn(x)
-        x = self.dropout(x, rngs=rngs)
-        return x
-
-
-class HNNV0(nnx.Module):
-    def __init__(
-        self,
-        dimensions: Sequence[int],
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Heteroscedastic NN with standard MLP architecture (linear layers and
-        activation function).
-
-        Args:
-            dimensions (Sequence[int]): The dimensions of the layers. The first
-                dimension is the number of input features, while the others are
-                the number of neurons of the hidden layers. Therefore,
-                `N_hidden_layers = len(dimensions) - 1`.
-            act_fn (nnx.Module, optional): The activation function. Defaults to nnx.gelu.
-            rngs (nnx.Rngs): RNGs for the flax internal modules.
-        """
-        self.dim_in = dimensions[0]
-        self.n_hid_layers = len(dimensions) - 1
-        self.act_fn = act_fn
-
-        self.layers = nnx.List(
-            [
-                nnx.Linear(d_i, d_j, rngs=rngs)
-                for d_i, d_j in zip(dimensions[:-1], dimensions[1:])
-            ]
-        )
-
-        # Final layer is a Gaussian one (output=[mu, softplus(var)])
-        self.layers.append(
-            GaussianBlock(input_dim=dimensions[-1], output_dim=1, rngs=rngs)
-        )
-
-    def __call__(self, x: jax.Array) -> jax.Array:
-        for layer in self.layers[:-1]:
-            x = self.act_fn(layer(x))
-
-        # Gaussian layer is applied w/o act function.
-        return self.layers[-1](x)
-
-
-class HNNV1(nnx.Module):
-    def __init__(
-        self,
-        dim_in: int = 1,
-        dim_out: int = 1,
-        dim_resnet_layers: int = 50,
-        num_resnet_layers: int = 2,
-        dim_linear_end: int = 10,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Heteroscedastic NN with ResNet layers.
-
-        Initial and final layers are linear.
-        """
-        self.act_fn = act_fn
-
-        self.linear_start = nnx.Linear(dim_in, dim_resnet_layers, rngs=rngs)
-
-        self.resnets = nnx.List(
-            [
-                ResNetBlockV0(dim_resnet_layers, act_fn=act_fn, rngs=rngs)
-                for _ in range(num_resnet_layers)
-            ]
-        )
-
-        self.linear_end = nnx.Linear(dim_resnet_layers, dim_linear_end, rngs=rngs)
-
-        self.gaussian = GaussianBlock(dim_linear_end, dim_out, rngs=rngs)
-
-    def __call__(self, x: jax.Array, rngs: Optional[nnx.Rngs] = None) -> jax.Array:
-        x = self.act_fn(self.linear_start(x))
-
-        for resnet in self.resnets:
-            # incl. already activation function
-            x = resnet(x)
-
-        x = self.act_fn(self.linear_end(x))
-        return self.gaussian(x, rngs=rngs)
-
-
-class MCDNetV0(nnx.Module):
-    def __init__(
-        self,
-        input_dim: int = 1,
-        hidden_dim: int = 64,
-        output_dim: int = 1,
-        num_blocks: int = 3,
-        dropout_rate: float = 0.1,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        """Dropout network with MLP blocks.
-
-        The blocks include dropout and layer normalization.
-        """
-        # Project input up to hidden dimension
-        self.linear1 = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
-        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
-
-        self.act_fn = act_fn
-
-        # Stack ResNet Blocks
-        self.blocks = nnx.List(
-            [
-                MLPBlockV0(hidden_dim, dropout_rate, act_fn=act_fn, rngs=rngs)
-                for _ in range(num_blocks)
-            ]
-        )
-
-        self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
-
-    def __call__(self, x, rngs: nnx.Rngs):
-        x = self.linear1(x)
-        x = self.norm1(x)
-        x = self.act_fn(x)
-        # No dropout to avoid dropping important features.
-
-        for block in self.blocks:
-            x = block(x, rngs=rngs)
-
-        x = self.linear2(x)
-        return x
-
-
-class MCDNetV1(nnx.Module):
-    def __init__(
-        self,
-        input_dim: int = 1,
-        hidden_dim: int = 32,
-        output_dim: int = 1,
-        num_blocks: int = 3,
-        dropout_rate: float = 0.1,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        """Dropout network with ResNet blocks.
-
-        Dropout is in the residual branch of every block.
-        """
-        # Project input up to hidden dimension
-        self.linear1 = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
-        self.norm1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
-
-        self.act_fn = act_fn
-
-        # Stack ResNet Blocks with dropout
-        self.blocks = [
-            ResNetBlockV1(hidden_dim, dropout_rate, act_fn, rngs)
-            for _ in range(num_blocks)
-        ]
-
-        # Final prediction layer
-        self.linear2 = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
-
-    def __call__(self, x, rngs: nnx.Rngs):
-        x = self.linear1(x)
-        x = self.norm1(x)
-        x = self.act_fn(x)
-
-        for block in self.blocks:
-            x = block(x, rngs=rngs)
-
-        x = self.linear2(x)
-        return x
 
 
 class StandardBayesConv1D(nnx.Module):
@@ -671,18 +160,18 @@ class FlipoutConv1D(nnx.Module):
         self.bias_mu = nnx.Param(jnp.zeros(out_features))
         self.bias_rho = nnx.Param(jnp.full(out_features, -3.0))
 
-    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """Forward pass with per-sample sign-flipped perturbations.
 
         Args:
             x: Input with shape ``(batch, length, in_features)``.
-            key: JAX PRNG key for weight and sign sampling.
+            rngs: RNGs for weight and sign sampling.
 
         Returns:
             Convolved output with shape ``(batch, L_out, out_features)``.
         """
-        k1, k2, k3, k4 = jax.random.split(key, 4)
-        batch = x.shape[0]
+        k1, k2, k3, k4 = jax.random.split(rngs.params(), 4)
+        batch_size = x.shape[0]
         k_sigma = jax.nn.softplus(self.kernel_rho.value)
         b_sigma = jax.nn.softplus(self.bias_rho.value)
 
@@ -703,8 +192,10 @@ class FlipoutConv1D(nnx.Module):
         eps_b = jax.random.normal(k2, self.bias_mu.value.shape)
 
         # Per-sample sign flips on input/output channels
-        s = jax.random.rademacher(k3, (batch, 1, self.in_features)).astype(x.dtype)
-        r = jax.random.rademacher(k4, (batch, 1, self.out_features)).astype(x.dtype)
+        s = jax.random.rademacher(k3, (batch_size, 1, self.in_features)).astype(x.dtype)
+        r = jax.random.rademacher(k4, (batch_size, 1, self.out_features)).astype(
+            x.dtype
+        )
 
         perturb = jax.lax.conv_general_dilated(
             s * x,
@@ -717,7 +208,10 @@ class FlipoutConv1D(nnx.Module):
         return mean_out + perturb
 
     def kl_divergence(self) -> jax.Array:
-        """KL(q ‖ p) with unit-normal prior p = N(0, 1)."""
+        """KL(q ‖ p) with unit-normal prior p = N(0, 1).
+
+        Has an analytical form
+        """
 
         def _kl(mu: jax.Array, rho: jax.Array) -> jax.Array:
             sigma = jax.nn.softplus(rho)
@@ -728,146 +222,100 @@ class FlipoutConv1D(nnx.Module):
         )
 
 
-BayesConvCls = type[StandardBayesConv1D] | type[FlipoutConv1D]
-
-
-class BayesCNN1D(nnx.Module):
-    def __init__(
-        self,
-        conv_cls: BayesConvCls,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Bayesian 1D CNN for time-series RUL prediction with uncertainty.
-
-        Architecture: BayesConv1D -> Activation -> Global Average Pooling ->
-        GaussianBlock. Bayesian version of :class:`HeteroscedasticCNN1D`,
-        trainable with ELBO loss (Bayes by Backprop). Accepts variable-length
-        input windows.
-
-        Args:
-            conv_cls: Bayesian convolution layer class
-                (:class:`StandardBayesConv1D` or :class:`FlipoutConv1D`).
-            n_filters: Number of convolutional filters. Defaults to 4.
-            kernel_size: Size of the convolutional kernel. Defaults to 5.
-            act_fn: Activation function. Defaults to ``nnx.gelu``.
-            rngs: RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.act_fn = act_fn
-
-        self.conv = conv_cls(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=kernel_size,
-            padding="VALID",
-            rngs=rngs,
+class PQCModule(nnx.Module):
+    def __init__(self, quantum_circuit: PQC, rngs: nnx.Rngs):
+        self.quantum_circuit = quantum_circuit
+        # Variational parameters of the PQC (shape depends on the circuit design)
+        self.params = nnx.Param(
+            jax.random.uniform(
+                rngs.params(),
+                shape=quantum_circuit.params_shape,
+                minval=0.0,
+                maxval=2 * jnp.pi,
+            )
         )
-
-        # GaussianBlock to output mean and variance
-        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
 
     def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        """Forward pass through the Bayesian CNN.
-
-        Args:
-            x: Input with shape ``(batch, 1, window_size)``.
-                Will be transposed to ``(batch, window_size, 1)``.
-                Accepts variable-length windows.
-            rngs: RNGs for weight sampling. The ``params`` stream is used
-                to draw a key for the Bayesian convolution layer.
-
-        Returns:
-            Concatenated ``[mu, var_positive]`` with shape ``(batch, 2)``.
-        """
-        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
-        x = jnp.transpose(x, (0, 2, 1))
-
-        # Bayesian Conv1D with activation
-        x = self.conv(x, key=rngs.params())
-        x = self.act_fn(x)
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=1)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gaussian_block(x)
-
-    def kl_divergence(self) -> jax.Array:
-        """Total KL divergence across all Bayesian layers."""
-        return self.conv.kl_divergence()
+        return jnp.array(self.quantum_circuit(x, self.params.value))
 
 
-class QAVICNN1D(nnx.Module):
-    """1D CNN for QAVI-based RUL prediction with externally provided conv weights.
+class PQCLinearPPGenerator(nnx.Module):
+    def __init__(self, quantum_circuit: PQC, n_out_linear: int, rngs: nnx.Rngs):
+        self.pqc_module = PQCModule(quantum_circuit, rngs)
+        self.post_processor = nnx.Linear(
+            quantum_circuit.n_qubits, n_out_linear, rngs=rngs
+        )
 
-    Architecture: functional Conv1D (no internal conv parameters) -> Activation ->
-    Global Average Pooling -> GaussianBlock.  Convolution kernel and bias are
-    generated externally by PQC generators and passed into the forward call.
-    Only the :class:`GaussianBlock` head carries trainable parameters.
-    """
+    def __call__(self, rngs: nnx.Rngs) -> jax.Array:
+        # Sample x from a uniform [0, 2\pi] distribution
+        x = jax.random.uniform(
+            rngs.params(),
+            shape=(),  # TODO: can the shape be more general?
+            minval=0,
+            maxval=2 * jnp.pi,
+        )
+        pqc_out = self.pqc_module(x, rngs)
+        return self.post_processor(pqc_out)
 
+
+class PQCConv1D(nnx.Module):
     def __init__(
         self,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        act_fn: nnx.Module = nnx.gelu,
+        in_features: int,
+        out_features: int,
+        kernel_size: int,
+        padding: str,
+        quantum_circuit: PQC,
         *,
         rngs: nnx.Rngs,
-    ) -> None:
-        """Initialise the QAVI CNN.
+    ):
+        """Bayesian 1D convolutional layer, in which the kernels and biases are
+        generated by a PQC.
 
-        Args:
-            n_filters: Number of convolutional filters. Defaults to 4.
-            kernel_size: Size of the convolutional kernel. Defaults to 5.
-            act_fn: Activation function. Defaults to ``nnx.gelu``.
-            rngs: RNGs for the GaussianBlock parameters.
+        Specifically, the weight generator is a sequence of a PQC and a linear layer
+        which maintains the output dimension of the PQC. One generator is used for each
+        filter of the convolutional layer and one more generator.
         """
-        self.n_filters = n_filters
+        self.in_features = in_features
+        self.out_features = out_features
         self.kernel_size = kernel_size
-        self.act_fn = act_fn
+        self.padding = padding
+        self.generators = nnx.List(
+            [
+                PQCLinearPPGenerator(
+                    quantum_circuit, n_out_linear=quantum_circuit.n_qubits, rngs=rngs
+                )  # linear pp does not change the output dimension of the PQC.
+                for _ in range(out_features + 1)
+            ]
+        )  # +1 for bias
 
-        # GaussianBlock to output mean and variance
-        self.gaussian_block = GaussianBlock(n_filters, 1, rngs=rngs)
+        self._kernel_shape = (kernel_size, in_features, out_features)
+        self._bias_shape = (out_features,)
 
-    def __call__(self, x: jax.Array, kernel: jax.Array, bias: jax.Array) -> jax.Array:
-        """Forward pass with externally provided conv weights.
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
+        """Forward pass: generate one set of weights and convolve the batch.
 
         Args:
-            x: Input with shape ``(batch, 1, window_size)``.
-                Will be transposed to ``(batch, window_size, 1)``.
-            kernel: Convolution kernel with shape
-                ``(kernel_size, 1, n_filters)``.
-            bias: Bias vector with shape ``(n_filters,)``.
-
-        Returns:
-            Concatenated ``[mu, var_positive]`` with shape ``(batch, 2)``.
+            x: Input with shape (batch, length, in_features).
+            rngs: RNGs for weight generation.
         """
-        # Transpose from (batch, 1, window_size) to (batch, window_size, 1)
-        x = jnp.transpose(x, (0, 2, 1))
+        # Generate kernels and bias from the PQC generators
+        key = rngs.params()
+        keys = jax.random.split(key, len(self.generators))
+        kernels_and_bias = [
+            gen(nnx.Rngs(params=keys[i])) for i, gen in enumerate(self.generators)
+        ]
+        kernel = jnp.stack(kernels_and_bias[:-1], axis=-1).reshape(self._kernel_shape)
+        bias = kernels_and_bias[-1][: self.out_features]  # EV of the first 4 qubits
 
-        # Functional Conv1D with externally provided weights
-        x = (
-            jax.lax.conv_general_dilated(
-                x,
-                kernel,
-                window_strides=(1,),
-                padding="VALID",
-                dimension_numbers=("NHC", "HIO", "NHC"),
-            )
-            + bias
+        out = jax.lax.conv_general_dilated(
+            x,
+            kernel,
+            window_strides=(1,),
+            padding=self.padding,
+            dimension_numbers=("NHC", "HIO", "NHC"),
         )
-        x = self.act_fn(x)
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=1)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gaussian_block(x)
+        return out + bias
 
 
 class LSTM(nnx.Module):
@@ -927,123 +375,80 @@ def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Arra
     return forward(model, x, keys)
 
 
-def nll_loss(model: nnx.Module, batch: jax.Array, beta: float = 0.0) -> jax.Array:
-    """Negative log-likelihood loss based on a Gaussian predictive distribution.
-
-    Implements the standard NLL (Equation (31) in
-    https://doi.org/10.1016/j.ymssp.2023.110796) when ``beta=0``. When
-    ``beta>0``, applies variance weighting as proposed in
-    https://arxiv.org/pdf/2203.09168 (beta-NLL).
-
-    Args:
-        model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
-        batch (jax.Array): batched input data.
-        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
-            ``0.5`` is the value recommended in the beta-NLL paper. Defaults to
-            ``0.0``.
-
-    Returns:
-        jax.Array: loss value for the batch.
-    """
-
-    xs, labels = batch
-    outputs = model(xs)
-    means, variances = outputs[:, 0], outputs[:, 1]
-    variances = jnp.clip(variances, min=1e-6)
-    losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
-
-    if beta > 0:
-        losses = losses * jax.lax.stop_gradient(variances) ** beta
-
-    return jnp.mean(losses)
-
-
-def nll_loss_mcd(
+def negative_log_likelihood(
     model: nnx.Module,
-    batch: jax.Array,
-    beta: float = 0.0,
-    rngs: Optional[nnx.Rngs] = None,
-) -> jax.Array:
-    """NLL loss for models that require RNGs at call time (e.g. MC Dropout).
-
-    Same formulation as :func:`nll_loss` but forwards ``rngs`` to the model's
-    forward pass so that stochastic layers (dropout) receive fresh random keys.
-
-    Args:
-        model (nnx.Module): Gaussian neural network with 2 outputs (mean and variance).
-        batch (jax.Array): batched input data.
-        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
-        rngs (nnx.Rngs, optional): passed to the forward method of the model.
-            When ``None``, dropout uses its internal RNG state.
-
-    Returns:
-        jax.Array: loss value for the batch.
-    """
-    xs, labels = batch
-    outputs = model(xs) if rngs is None else model(xs, rngs=rngs)
-    means, variances = outputs[:, 0], outputs[:, 1]
-    variances = jnp.clip(variances, min=1e-6)
-    losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
-
-    if beta > 0:
-        losses = losses * jax.lax.stop_gradient(variances) ** beta
-
-    return jnp.mean(losses)
-
-
-def elbo_nll_loss(
-    model: nnx.Module,
-    batch: jax.Array,
-    *,
+    batch: tuple[jax.Array, jax.Array],
     rngs: nnx.Rngs,
-    n_train: int,
     beta: float = 0.0,
 ) -> jax.Array:
-    """ELBO NLL loss for Bayesian models (Bayes by Backprop).
-
-    Combines the Gaussian NLL data fit with the KL divergence regulariser
-    scaled by ``1 / n_train``::
-
-        L = NLL + KL(q ‖ p) / N
+    """Gaussian NLL loss for heteroscedastic regression.
 
     Args:
-        model (nnx.Module): Bayesian model with Gaussian output and
-            ``kl_divergence()`` method.
-        batch (jax.Array): batched input data ``(xs, labels)``.
-        rngs (nnx.Rngs): RNGs for weight sampling (forwarded to the model).
-        n_train (int): Total number of training samples (for KL scaling).
-        beta (float): Variance-weighting exponent. ``0.0`` gives standard NLL;
+       model (nnx.Module): Heteroscedastic regression model with Gaussian output.
+       batch (tuple[jax.Array, jax.Array]): Batched input data (xs, labels).
+       rngs (nnx.Rngs): RNGs for stochastic forward pass (if applicable).
+       beta (float): Variance-weighting exponent. Implements the beta-NLL loss in arXiv:2203.09168.
+           ``0.0`` gives standard NLL.
 
     Returns:
-        jax.Array: scalar ELBO loss value.
+        jax.Array: Per-sample NLL losses with shape (batch,).
     """
+
+    xs, labels = batch
+    # Add a batch dimension to xs for the model's forward pass
+    xs_b = jnp.expand_dims(xs, axis=0)
+    outputs = model(xs_b, rngs=rngs)
+    means, variances = outputs[:, 0], outputs[:, 1]
+    variances = jnp.clip(variances, min=1e-6)
+    losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
+
+    if beta > 0:
+        # TODO: This implementation of the beta-NLL loss might be wrong. Revisit.
+        logger.warning(
+            "The beta-NLL loss implementation is untested and might be incorrect for beta > 0. Please use beta=0."
+        )
+        losses = losses * jax.lax.stop_gradient(variances) ** beta
+
+    return losses
+
+
+def mse(
+    model: nnx.Module,
+    batch: tuple[jax.Array, jax.Array],
+    rngs: nnx.Rngs,
+) -> jax.Array:
     xs, labels = batch
     outputs = model(xs, rngs=rngs)
-    means, variances = outputs[:, 0], outputs[:, 1]
-    variances = jnp.clip(variances, min=1e-6)
-
-    nll = jnp.mean(
-        0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
-    )
-    if beta > 0:
-        nll = nll * jax.lax.stop_gradient(jnp.mean(variances) ** beta)
-
-    kl = model.kl_divergence() / n_train
-    return nll + kl
-
-
-def mse_loss(model: nnx.Module, batch: jax.Array) -> jax.Array:
-    """Mean squared error loss.
-
-    Args:
-        model (nnx.Module): neural network model.
-        batch (jax.Array): batched input data.
-        rngs (nnx.Rngs): passed to the forward method of the model.
-    Returns:
-        jax.Array: loss value for the batch.
-    """
-    xs, labels = batch
-    outputs = model(xs)
-    losses = jnp.square(outputs - labels)
+    losses = jnp.square(outputs[:, 0] - labels)
 
     return jnp.mean(losses)
+
+
+def train_step_simple(
+    model: nnx.Module,
+    batch: tuple[jax.Array, jax.Array],
+    key: jax.Array,
+    optimizer: nnx.Optimizer,
+) -> jax.Array:
+    """Single training step with MSE loss."""
+
+    def loss_fn(model):
+        return mse(model, batch, rngs=nnx.Rngs(key))
+
+    loss, grads = nnx.value_and_grad(loss_fn)(model)
+    optimizer.update(model, grads)
+    return loss
+
+
+def eval_step_simple(
+    model: nnx.Module,
+    batch: tuple[jax.Array, jax.Array],
+    key: jax.Array,
+    optimizer: nnx.Optimizer,
+) -> jax.Array:
+    """Single evaluation step with MSE loss."""
+
+    def loss_fn(model):
+        return mse(model, batch, rngs=nnx.Rngs(key))
+
+    return loss_fn(model)

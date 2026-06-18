@@ -1,52 +1,16 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Protocol, SupportsIndex
+import pathlib
+from typing import Any, Callable, Protocol, Sequence, SupportsIndex
 
 import jax
 import jax.numpy as jnp
-import lib_eod_simulation as les
 import numpy as np
 import pandas as pd
 from grain import DataLoader
 from grain.samplers import IndexSampler
 from grain.transforms import Batch
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-
-
-def _back_calculate_rul_linear(t_eod: float, N_t: int, t_0: float = 0.0) -> np.ndarray:
-    """Back-calculates RUL values for a linear degradation model.
-
-    Args:
-        t_eod (float): time of end of discharge (failure).
-        N_t (int): number of time steps in the discharge history.
-        t_0 (float): initial time of the discharge history. Defaults to 0.0.
-
-    Returns:
-        np.ndarray: RUL values for each time step, clipped to be non-negative.
-    """
-    ruls = np.linspace(t_eod - t_0, 0.0, N_t)
-    return jnp.array(ruls)
-
-
-def _run_discharge(config: dict[str, Any], soc_0: float) -> tuple[np.ndarray, float]:
-    """Run a single discharge simulation.
-
-    Args:
-        config: Simulator configuration dictionary (any ``N_simu`` / ``SoC_0``
-            values are overridden).
-        soc_0: Initial state of charge for this discharge.
-
-    Returns:
-        A tuple of ``(voltage_history, t_eod)`` where *voltage_history* is a
-        1-D array of shape ``(N_t,)`` and *t_eod* is the end-of-discharge time.
-    """
-    sim_config = config.copy()
-    sim_config["N_simu"] = 1
-    sim_config["SoC_0"] = soc_0
-    sim = les.SimulatorSimple(sim_config)
-    sim.simulate()
-    return sim.v_memo.flatten(), float(sim.t_eods[0])
 
 
 def _make_windows(
@@ -70,7 +34,7 @@ def _make_windows(
 
     Returns:
         A tuple ``(windows, targets)`` where each window has shape
-        ``(1, window_size)`` and each target is a scalar RUL value.
+        ``(window_size, 1)`` and each target is a scalar RUL value.
     """
     N_t = len(voltage)
 
@@ -84,59 +48,15 @@ def _make_windows(
     windows: list[np.ndarray] = []
     targets: list[float] = []
 
-    end = 0
     for start in range(0, N_t - window_size, stride):
         end = start + window_size
-        windows.append(voltage[start:end].reshape(1, -1))
-        targets.append(float(ruls[end]) if end < N_t else 0.0)
+        windows.append(voltage[start:end].reshape(-1, 1))
+        targets.append(float(ruls[end]))
 
-    # Trailing window covering the very end of the history.
-    if end < N_t:
-        windows.append(voltage[-window_size:].reshape(1, -1))
-        targets.append(0.0)
+    windows.append(voltage[-window_size:].reshape(-1, 1))
+    targets.append(0.0)
 
     return windows, targets
-
-
-def split_cmapss(
-    df: pd.DataFrame, relative_subset_size: float
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Splits the CMAPSS dataframe into two sub-dataframes.
-
-    Args:
-        df: The CMAPSS dataframe to split.
-        relative_subset_size: The fraction of units to include in the second subset.
-
-    Returns:
-        The two sub-dataframes split from the original.
-    """
-    # shuffle the unit_ids (engine IDs)
-    unit_ids = df["unit_id"].unique()
-
-    # note: the sampling follows the numpy random state.
-    # If reproducibility is desired, set the seed with np.random.seed()
-    # before this step.
-    shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
-
-    # copy the dataframe to a temp variable to avoid modifying the original
-    df = df.copy()
-    df["unit_id"] = pd.Categorical(
-        df["unit_id"], categories=shuffled_unit_ids, ordered=True
-    )
-
-    df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
-
-    num_units = df["unit_id"].nunique()
-
-    # Note: `train` and `test` in the names are just labels for the two splits.
-    num_test_units = int(num_units * relative_subset_size)
-    test_unit_ids = shuffled_unit_ids[:num_test_units]
-    train_unit_ids = shuffled_unit_ids[num_test_units:]
-
-    train_df = df[df["unit_id"].isin(train_unit_ids)]
-    test_df = df[df["unit_id"].isin(test_unit_ids)]
-
-    return train_df, test_df
 
 
 def create_dataloaders(
@@ -195,134 +115,72 @@ class DataSource(Protocol):
         ...
 
 
-class BatterySimulationTimeWindowSource:
+class DataPipeline:
+    def __init__(self, steps: Sequence[Callable]) -> None:
+        self.steps = steps
+
+    def __call__(self, x: pd.DataFrame) -> tuple[jax.Array, jax.Array]:
+        for step in self.steps:
+            x = step(x)
+        return x
+
+
+def get_time_windows_and_join(
+    df: pd.DataFrame, window_size: int, stride: int
+) -> tuple[np.ndarray, np.ndarray]:
+    voltage_windows: list[np.ndarray] = []
+    rul_windows: list[float] = []
+
+    unit_ids = df["run_id"].unique()
+    for unit_id in unit_ids:
+        unit_df = df[df["run_id"] == unit_id].sort_values("time")
+        voltage = unit_df["voltage"].values
+        ruls = unit_df["time"].iloc[-1] - unit_df["time"].values
+
+        vw_i, rw_i = _make_windows(voltage, ruls, window_size, stride)
+        voltage_windows.extend(vw_i)
+        rul_windows.extend(rw_i)
+
+    return np.array(voltage_windows), np.array(rul_windows)
+
+
+def add_feature_dimension_to_y(
+    x: tuple[np.ndarray, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    voltage_windows, rul_windows = x
+    return voltage_windows, rul_windows.reshape(-1, 1)
+
+
+def normalize_ruls(
+    x: tuple[np.ndarray, np.ndarray],
+    transform_fn: Callable[[np.ndarray], np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    voltage_windows, rul_windows = x
+    return voltage_windows, transform_fn(rul_windows)
+
+
+def to_jax(x: tuple[np.ndarray, np.ndarray]) -> tuple[jax.Array, jax.Array]:
+    X, y = x
+    return jnp.array(X), jnp.array(y)
+
+
+class DataFrameSource:
     def __init__(
         self,
-        simulator_config: dict[str, Any],
-        n_histories: int,
-        window_size: int,
-        stride: int = 1,
-        normalize: bool = False,
-        soc_range: tuple[float, float] = (0.05, 1.0),
+        df: pd.DataFrame,
+        pipeline: DataPipeline,
     ) -> None:
-        """Data source that provides time-windowed, labelled chunks of discharge
-        histories. Each history starts from a ``SoC_0`` sampled uniformly from
-        *soc_range*. A separate simulation with ``N_simu=1`` is run for every history.
-
-        The features are the voltage values in the time window, and the target
-        is the RUL at the time step immediately following the window.
-
-        Args:
-            simulator_config: Base simulator configuration dictionary.  The
-                ``N_simu`` and ``SoC_0`` entries are overridden internally.
-            n_histories: Number of independent discharge histories to generate.
-            window_size: The size of the time window (number of time steps).
-            stride: The stride of the sliding time window (number of time steps
-                to move the window at each step). Defaults to 1.
-            normalize: Normalizes the RUL values (divide by max(RUL)).
-                Defaults to False.
-            soc_range: ``(low, high)`` bounds for the uniform SoC₀ sampling.
-                Defaults to ``(0.05, 1.0)``.
-
-        Note:
-            Discharge histories shorter than *window_size* are left-edge-padded
-            (first voltage value repeated) so they still contribute at least one
-            window.
-        """
-        all_windows: list[np.ndarray] = []
-        all_targets: list[float] = []
-        self.soc_0s: list[float] = []
-
-        for _ in range(n_histories):
-            soc_0 = float(np.random.uniform(*soc_range))
-            self.soc_0s.append(soc_0)
-
-            voltage, t_eod = _run_discharge(simulator_config, soc_0)
-            ruls = _back_calculate_rul_linear(t_eod=t_eod, N_t=len(voltage))
-
-            windows, targets = _make_windows(voltage, ruls, window_size, stride)
-            all_windows.extend(windows)
-            all_targets.extend(targets)
-
-        self.X = jnp.array(all_windows)
-        y_array = jnp.array(all_targets)
-        self.y_max = jnp.max(y_array)
-
-        if normalize:
-            self.y = y_array / self.y_max
-        else:
-            self.y = y_array
+        self.pipeline = pipeline
+        self.X, self.y = self.pipeline(df)
 
     def __len__(self) -> int:
-        """Number of time windows in the dataset."""
         return len(self.y)
 
     def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
-        """Retrieves window and target for the given record_key.
-
-        Args:
-            record_key (SupportsIndex): Index of the window to retrieve.
-
-        Returns:
-            tuple[jax.Array, jax.Array]: A tuple of (window, target) where window
-                has shape (1, window_size) and target has shape (1,) for a scalar
-                index or (batch_size,) for a slice.
-        """
         return self.X[record_key], self.y[record_key]
 
-    @classmethod
-    def from_file(
-        cls,
-        path: Path | str,
-        window_size: int,
-        stride: int = 1,
-        normalize: bool = False,
-    ) -> BatterySimulationTimeWindowSource:
-        """Create a data source from a pre-generated ``.npz`` file.
 
-        The file must contain ``voltages`` (object array of 1-D voltage
-        histories) and ``t_eods`` (1-D array of end-of-discharge times),
-        as produced by :func:`qmodem.generate.generate_train_data`.
-
-        Args:
-            path: Path to the ``.npz`` file.
-            window_size: The size of the time window (number of time steps).
-            stride: The stride of the sliding time window. Defaults to 1.
-            normalize: Normalizes the RUL values (divide by max(RUL)).
-                Defaults to False.
-
-        Returns:
-            A populated ``BatterySimulationTimeWindowSource`` instance.
-        """
-        data = np.load(path, allow_pickle=True)
-        voltages = data["voltages"]
-        t_eods = data["t_eods"]
-        soc_0s = data["soc_0s"] if "soc_0s" in data else []
-
-        obj = cls.__new__(cls)
-        all_windows: list[np.ndarray] = []
-        all_targets: list[float] = []
-        obj.soc_0s = list(soc_0s)
-
-        for voltage, t_eod in zip(voltages, t_eods):
-            ruls = _back_calculate_rul_linear(t_eod=float(t_eod), N_t=len(voltage))
-            windows, targets = _make_windows(voltage, ruls, window_size, stride)
-            all_windows.extend(windows)
-            all_targets.extend(targets)
-
-        obj.X = jnp.array(all_windows)
-        y_array = jnp.array(all_targets)
-        obj.y_max = jnp.max(y_array)
-
-        if normalize:
-            obj.y = y_array / obj.y_max
-        else:
-            obj.y = y_array
-
-        return obj
-
-
-def _load_cmapss_fd001_train(path: Path) -> pd.DataFrame:
+def _load_cmapss_fd001_train(path: pathlib.Path) -> pd.DataFrame:
     column_names: list[str] = (
         [
             "unit_id",
@@ -349,13 +207,54 @@ def _exclude_constant_sensors(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def prepare_cmapss(path: Path) -> pd.DataFrame:
+def prepare_cmapss(path: pathlib.Path) -> pd.DataFrame:
     """Loads the CMAPSS FD001/train dataset, adds the RUL labels and excludes the
     constant sensors."""
     df = _load_cmapss_fd001_train(path)
     df = _add_rul(df)
     df = _exclude_constant_sensors(df)
     return df
+
+
+def split_cmapss(
+    df: pd.DataFrame, relative_subset_size: float
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Splits the CMAPSS dataframe into two sub-dataframes.
+
+    Args:
+        df: The CMAPSS dataframe to split.
+        relative_subset_size: The fraction of units to include in the second subset.
+
+    Returns:
+        The two sub-dataframes split from the original.
+    """
+    # shuffle the unit_ids (engine IDs)
+    unit_ids = df["unit_id"].unique()
+
+    # note: the sampling follows the numpy random state.
+    # If reproducibility is desired, set the seed with np.random.seed()
+    # before this step.
+    shuffled_unit_ids = pd.Series(unit_ids).sample(frac=1).values
+
+    # copy the dataframe to a temp variable to avoid modifying the original
+    df = df.copy()
+    df["unit_id"] = pd.Categorical(
+        df["unit_id"], categories=shuffled_unit_ids, ordered=True
+    )
+
+    df.sort_values(by=["unit_id", "time_cycles"], inplace=True)
+
+    num_units = df["unit_id"].nunique()
+
+    # Note: `train` and `test` in the names are just labels for the two splits.
+    num_test_units = int(num_units * relative_subset_size)
+    test_unit_ids = shuffled_unit_ids[:num_test_units]
+    train_unit_ids = shuffled_unit_ids[num_test_units:]
+
+    train_df = df[df["unit_id"].isin(train_unit_ids)]
+    test_df = df[df["unit_id"].isin(test_unit_ids)]
+
+    return train_df, test_df
 
 
 class CMAPSSAnalyst:

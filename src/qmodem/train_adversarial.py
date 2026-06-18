@@ -6,7 +6,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Protocol
 
 import flax.nnx as nnx
 import jax
@@ -14,14 +14,31 @@ import jax.numpy as jnp
 import mlflow
 import orbax.checkpoint as ocp
 
-from .module import eval_step_simple, train_step_simple
+from .module import eval_step_simple
 
 logger = logging.getLogger(__name__)
 
-# The first argument is the batch, the second is the RNG key.
-type StepFn = Callable[
-    [nnx.Module, tuple[jax.Array, jax.Array], jax.Array, nnx.Optimizer], jax.Array
-]
+
+class TrainStepFn(Protocol):
+    def __call__(
+        self,
+        model: nnx.Module,
+        discriminator: nnx.Module,
+        batch: tuple[jax.Array, jax.Array],
+        keys: jax.Array,
+        optimizer: nnx.Optimizer,  # can be either the generator or discriminator optimizer, depending on the step function
+    ) -> jax.Array: ...
+
+
+class EvalStepFn(Protocol):
+    def __call__(
+        self,
+        model: nnx.Module,
+        batch: tuple[jax.Array, jax.Array],
+        keys: jax.Array,
+        optimizer: nnx.Optimizer,  # generally unused at eval time. Included for symmetry.
+    ) -> jax.Array: ...
+
 
 type Callback = Callable[[TrainingPhase, TrainingContext], None]
 
@@ -37,11 +54,14 @@ class TrainingPhase(Enum):
 @dataclass
 class TrainingContext:
     epoch: int
-    train_loss: float
+    generator_loss: float
+    discriminator_loss: float
     val_loss: float
     best_val_loss: float
     model: nnx.Module
-    optimizer: nnx.Optimizer
+    discriminator: nnx.Module
+    optimizer_generator: nnx.Optimizer
+    optimizer_discriminator: nnx.Optimizer
     model_best_state: nnx.State
 
 
@@ -96,7 +116,8 @@ class PrintReporter:
         if phase == TrainingPhase.EPOCH_END and context.epoch % self.print_every == 0:
             print(
                 f"Epoch {context.epoch:3d} | "
-                f"Train Loss: {context.train_loss:.6f} | "
+                f"Generator Loss: {context.generator_loss:.6f} | "
+                f"Discriminator Loss: {context.discriminator_loss:.6f} | "
                 f"Val Loss: {context.val_loss:.6f} | "
                 f"Best Val Loss: {context.best_val_loss:.6f}"
             )
@@ -110,7 +131,8 @@ class LogReporter:
         if phase == TrainingPhase.EPOCH_END and context.epoch % self.log_every == 0:
             logger.info(
                 f"Epoch {context.epoch:3d} | "
-                f"Train Loss: {context.train_loss:.6f} | "
+                f"Generator Loss: {context.generator_loss:.6f} | "
+                f"Discriminator Loss: {context.discriminator_loss:.6f} | "
                 f"Val Loss: {context.val_loss:.6f} | "
                 f"Best Val Loss: {context.best_val_loss:.6f}"
             )
@@ -134,7 +156,10 @@ def mlflow_track_model_best_state(
 
 def mlflow_track_losses(phase: TrainingPhase, context: TrainingContext) -> None:
     if phase == TrainingPhase.EPOCH_END:
-        mlflow.log_metric("train_loss", context.train_loss, step=context.epoch)
+        mlflow.log_metric("generator_loss", context.generator_loss, step=context.epoch)
+        mlflow.log_metric(
+            "discriminator_loss", context.discriminator_loss, step=context.epoch
+        )
         mlflow.log_metric("val_loss", context.val_loss, step=context.epoch)
         mlflow.log_metric("best_val_loss", context.best_val_loss, step=context.epoch)
 
@@ -150,12 +175,34 @@ def train_loop(
     dataloader_val: Iterable,
     initial_key: jax.Array,
     model: nnx.Module,
-    optimizer: nnx.Optimizer,
-    train_batch_fn: StepFn = train_step_simple,
-    eval_batch_fn: StepFn = eval_step_simple,
+    discriminator: nnx.Module,
+    optimizer_generator: nnx.Optimizer,
+    optimizer_discriminator: nnx.Optimizer,
+    generator_batch_fn: TrainStepFn,  # TODO: add default
+    discriminator_batch_fn: TrainStepFn,  # TODO: add default
+    eval_batch_fn: EvalStepFn = eval_step_simple,
     callbacks: Iterable[Callback] = (LogReporter(),),
     early_stopper: EarlyStopper | None = None,
 ) -> None:
+    """Train loop for adversarial training of a generative supervised model and a
+    discriminator.
+
+    Args:
+        n_epochs: Maximum number of epochs to train for.
+        dataloader_train: Iterable of training batches. Each batch is a tuple of (inputs, targets).
+        dataloader_val: Iterable of validation batches. Each batch is a tuple of (inputs, targets).
+        initial_key: Initial JAX PRNG key for random number generation.
+        model: The generative supervised model to be trained.
+        discriminator: The discriminator model to be trained adversarially against the generative model.
+        optimizer_generator: Optimizer for the generative model.
+        optimizer_discriminator: Optimizer for the discriminator model.
+        generator_batch_fn: Function that performs a training step for the generator. Should return the generator loss for the batch.
+        discriminator_batch_fn: Function that performs a training step for the discriminator. Should return the discriminator loss for the batch.
+        eval_batch_fn: Function that evaluates the generative model on a validation batch. Should return the validation loss for the batch.
+        callbacks: Iterable of callback functions to be called at different phases of training.
+        early_stopper: Optional EarlyStopper instance to enable early stopping based on validation loss.
+    """
+
     def run_callbacks(phase: TrainingPhase, info: TrainingContext) -> None:
         for callback in callbacks:
             callback(phase, info)
@@ -163,11 +210,16 @@ def train_loop(
     phase = TrainingPhase.INIT
     context = TrainingContext(
         epoch=0,
-        train_loss=float("inf"),
+        generator_loss=float("inf"),
+        discriminator_loss=float(
+            "inf"
+        ),  # discrimination is traditionally a maximization problem, but here we work with losses.
         val_loss=float("inf"),
         best_val_loss=float("inf"),
-        model=model,
-        optimizer=optimizer,
+        model=model,  # generative supervised model
+        discriminator=discriminator,
+        optimizer_generator=optimizer_generator,
+        optimizer_discriminator=optimizer_discriminator,
         model_best_state=jax.tree.map(lambda x: x, nnx.state(model, nnx.Param)),
     )
     run_callbacks(phase, context)
@@ -175,21 +227,38 @@ def train_loop(
     key = initial_key
 
     try:
+        discriminator.train()  # discriminator is always in training mode.
+
         for epoch in range(n_epochs):
             phase = TrainingPhase.EPOCH_START
             context.epoch = epoch
             run_callbacks(phase, context)
 
             model.train()
-            train_losses = []
+            generator_losses = []
+            discriminator_losses = []
             for batch in dataloader_train:
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]
-                loss = train_batch_fn(model, batch, subkeys, optimizer)
-                train_losses.append(loss)
+                generator_loss = generator_batch_fn(
+                    model, discriminator, batch, subkeys, optimizer_generator
+                )
+
+                splits = jax.random.split(key, num=batch[0].shape[0] + 1)
+                key, subkeys = splits[0], splits[1:]
+                discriminator_loss = discriminator_batch_fn(
+                    model, discriminator, batch, subkeys, optimizer_discriminator
+                )
+
+                generator_losses.append(generator_loss)
+                discriminator_losses.append(discriminator_loss)
 
             phase = TrainingPhase.EVAL_START
-            context.train_loss = jnp.mean(jnp.array(train_losses)).item()
+            context.generator_loss = jnp.mean(jnp.array(generator_losses)).item()
+            context.discriminator_loss = jnp.mean(
+                jnp.array(discriminator_losses)
+            ).item()
+
             run_callbacks(phase, context)
 
             model.eval()
@@ -197,7 +266,9 @@ def train_loop(
             for batch in dataloader_val:
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]
-                val_losses.append(eval_batch_fn(model, batch, subkeys, optimizer))
+                val_losses.append(
+                    eval_batch_fn(model, batch, subkeys, optimizer_generator)
+                )
 
             val_loss = jnp.mean(jnp.array(val_losses)).item()
 

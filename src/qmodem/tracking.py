@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 import mlflow
 
@@ -60,12 +60,24 @@ class Tags:
 
 @dataclass(frozen=True)
 class MLFlowSetup:
-    run_name: str
     experiment_name: str
-    tags: Tags
+    run_name: str | None = None
+    run_id: str | None = None
+    tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
     artifact_store: str | Path = ROOT_DIR / "mlruns"
     tracking_server: str | None = None
+    """Configuration for an MLflow tracking run.
+
+    Attributes:
+        experiment_name: Name of the MLflow experiment to log under.
+        run_name: Optional human-readable name for the MLflow run. If None, MLflow will auto-generate a name.
+        run_id: Optional existing run ID to resume. If None, a new run is created.
+        tags: Arbitrary key-value tags attached to the run.
+        backend_store: SQLAlchemy URI for the MLflow backend store.
+        artifact_store: Local path where artifacts are stored.
+        tracking_server: Remote tracking server URI (not yet supported).
+    """
 
     def __post_init__(self):
         if self.tracking_server is not None:
@@ -87,8 +99,8 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
     mlflow.set_experiment(experiment_id=exp_id)
 
     try:
-        active_run = mlflow.start_run(run_name=setup.run_name)
-        mlflow.set_tags(asdict(setup.tags))
+        active_run = mlflow.start_run(run_id=setup.run_id, run_name=setup.run_name)
+        mlflow.set_tags(setup.tags)
 
         yield active_run
 
