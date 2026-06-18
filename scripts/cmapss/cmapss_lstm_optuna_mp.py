@@ -12,9 +12,9 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.preprocessing import StandardScaler
 
-from qmodem import LSTM, create_dataloaders
-from qmodem.data import CMAPSSDataSource
+from qmodem.data import CMAPSSDataSource, create_dataloaders
 from qmodem.metrics import compute_point_crps
+from qmodem.module import LSTM
 from qmodem.tracking import MLFlowSetup, Tags, track_mlflow
 from qmodem.train import (
     EarlyStopper,

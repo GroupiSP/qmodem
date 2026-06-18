@@ -7,9 +7,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from qmodem.module import RandomCallModel, mc_sample
-
-# TODO: test this module.
+from .module import RandomCallModel, mc_sample
 
 
 def _cdf(x, samples):
@@ -21,14 +19,6 @@ def _cdf(x, samples):
     cdf_value = count / len(sorted_samples)
 
     return cdf_value
-
-
-def _crps(samples_dist_0, samples_dist_1, x_grid):
-    F0 = jax.vmap(_cdf, in_axes=(0, None), out_axes=0)(x_grid, samples_dist_0)
-    F1 = jax.vmap(_cdf, in_axes=(0, None), out_axes=0)(x_grid, samples_dist_1)
-
-    crps_value = jnp.trapezoid(jnp.square(F0 - F1), x_grid)
-    return crps_value
 
 
 def _point_crps(y_true, samples_predicted, x_grid):
