@@ -5,10 +5,10 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum, auto
 from typing import Any
 
-import lib_eod_simulation as les
 import mlflow
 import numpy as np
 import pandas as pd
+import simbat as sb
 
 from qmodem.tracking import MLFlowSetup, track_mlflow
 
@@ -107,7 +107,7 @@ def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFram
     out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
 
     for i, soc_0 in enumerate(soc_0s):
-        config = les.SimulationConfig(
+        config = sb.SimulationConfig(
             process_noise_distribution=lambda: rng.normal(
                 loc=hp.process_noise_loc, scale=hp.process_noise_std
             ),
@@ -115,7 +115,7 @@ def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFram
             dt=hp.dt,
             soc_0=soc_0,
         )
-        result = les.simulate_constant_capacity_simple(n_sim=1, config=config)
+        result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
         df = result.to_dataframe()
 
         # Modify the dataframe and append it to the output one
@@ -130,7 +130,7 @@ def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame
     out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
 
     for i in range(hp.n_histories_test):
-        config = les.SimulationConfig(
+        config = sb.SimulationConfig(
             process_noise_distribution=lambda: rng.normal(
                 loc=hp.process_noise_loc, scale=hp.process_noise_std
             ),
@@ -138,7 +138,7 @@ def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame
             dt=hp.dt,
             soc_0=1.0,
         )
-        result = les.simulate_constant_capacity_simple(n_sim=1, config=config)
+        result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
         df = result.to_dataframe()
 
         _modify_dataframe(df, i)

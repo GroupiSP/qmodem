@@ -1531,35 +1531,6 @@ wheels = [
 ]
 
 [[package]]
-name = "lib-eod-simulation"
-version = "0.1.0"
-source = { editable = "../lib_eod_simulation" }
-dependencies = [
-    { name = "ipykernel" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "scipy" },
-    { name = "tqdm" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "ipykernel", specifier = ">=7.1.0" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "numpy", specifier = ">=2.4.0" },
-    { name = "pandas", specifier = "<3.0.0" },
-    { name = "scipy", specifier = ">=1.16.3" },
-    { name = "tqdm", specifier = ">=4.67.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "hypothesis", specifier = ">=6.152.4" },
-    { name = "pytest", specifier = ">=9.0.3" },
-]
-
-[[package]]
 name = "mako"
 version = "1.3.12"
 source = { registry = "https://pypi.org/simple" }
@@ -2985,11 +2956,11 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "jax-ai-stack" },
-    { name = "lib-eod-simulation" },
     { name = "mlflow" },
     { name = "optuna" },
     { name = "pennylane" },
     { name = "scikit-learn" },
+    { name = "simbat" },
 ]
 
 [package.dev-dependencies]
@@ -3005,11 +2976,11 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "jax-ai-stack", specifier = ">=2025.10.28" },
-    { name = "lib-eod-simulation", editable = "../lib_eod_simulation" },
     { name = "mlflow", specifier = ">=3.7.0" },
     { name = "optuna", specifier = ">=4.8.0" },
     { name = "pennylane", specifier = ">=0.44.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
+    { name = "simbat", git = "https://github.com/GroupiSP/simbat.git" },
 ]
 
 [package.metadata.requires-dev]
@@ -3233,6 +3204,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/86/59/a451d7420a77ab0b98f7affa3a1d78a313d2f7281a57afb1a34bae8ab412/seaborn-0.13.2.tar.gz", hash = "sha256:93e60a40988f4d65e9f4885df477e2fdaff6b73a9ded434c1ab356dd57eefff7", size = 1457696, upload-time = "2024-01-25T13:21:52.551Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/11/00d3c3dfc25ad54e731d91449895a79e4bf2384dc3ac01809010ba88f6d5/seaborn-0.13.2-py3-none-any.whl", hash = "sha256:636f8336facf092165e27924f223d3c62ca560b1f2bb5dff7ab7fad265361987", size = 294914, upload-time = "2024-01-25T13:21:49.598Z" },
+]
+
+[[package]]
+name = "simbat"
+version = "0.1.0"
+source = { git = "https://github.com/GroupiSP/simbat.git#d8de62b28d6bf1d6df7755ac066cb922cc780967" }
+dependencies = [
+    { name = "ipykernel" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "scipy" },
+    { name = "tqdm" },
 ]
 
 [[package]]

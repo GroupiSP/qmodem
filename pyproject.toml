@@ -10,15 +10,12 @@ requires-python = ">=3.12"
 dependencies = [
     "click>=8.0",
     "jax-ai-stack>=2025.10.28",
-    "lib-eod-simulation",
     "mlflow>=3.7.0",
     "optuna>=4.8.0",
     "pennylane>=0.44.0",
     "scikit-learn>=1.8.0",
+    "simbat",
 ]
-
-[project.scripts]
-qmodem = "qmodem.cli:cli"
 
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
@@ -39,4 +36,4 @@ black = true
 style = "google"
 
 [tool.uv.sources]
-lib-eod-simulation = { path = "../lib_eod_simulation", editable = true }
+simbat = { git = "https://github.com/GroupiSP/simbat.git" }
