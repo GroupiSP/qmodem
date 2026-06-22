@@ -60,13 +60,6 @@ class Tags:
 
 @dataclass(frozen=True)
 class MLFlowSetup:
-    experiment_name: str
-    run_name: str | None = None
-    run_id: str | None = None
-    tags: dict[str, Any] = field(default_factory=dict)
-    backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
-    artifact_store: str | Path = ROOT_DIR / "mlruns"
-    tracking_server: str | None = None
     """Configuration for an MLflow tracking run.
 
     Attributes:
@@ -78,6 +71,14 @@ class MLFlowSetup:
         artifact_store: Local path where artifacts are stored.
         tracking_server: Remote tracking server URI (not yet supported).
     """
+
+    experiment_name: str
+    run_name: str | None = None
+    run_id: str | None = None
+    tags: dict[str, Any] = field(default_factory=dict)
+    backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
+    artifact_store: str | Path = ROOT_DIR / "mlruns"
+    tracking_server: str | None = None
 
     def __post_init__(self):
         if self.tracking_server is not None:

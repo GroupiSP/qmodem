@@ -412,28 +412,31 @@ def negative_log_likelihood(
     return losses
 
 
-def mse(
+def _per_sample_squared_error(
     model: nnx.Module,
-    batch: tuple[jax.Array, jax.Array],
-    rngs: nnx.Rngs,
+    sample: tuple[jax.Array, jax.Array],
+    sample_key: jax.Array,
 ) -> jax.Array:
-    xs, labels = batch
-    outputs = model(xs, rngs=rngs)
+    xs, labels = sample
+    # Add a batch dimension to xs for the model's forward pass
+    xs_b = jnp.expand_dims(xs, axis=0)
+    outputs = model(xs_b, rngs=nnx.Rngs(sample_key))
     losses = jnp.square(outputs[:, 0] - labels)
 
-    return jnp.mean(losses)
+    return losses
 
 
 def train_step_simple(
     model: nnx.Module,
     batch: tuple[jax.Array, jax.Array],
-    key: jax.Array,
+    keys: jax.Array,
     optimizer: nnx.Optimizer,
 ) -> jax.Array:
     """Single training step with MSE loss."""
 
     def loss_fn(model):
-        return mse(model, batch, rngs=nnx.Rngs(key))
+        err_fn = nnx.vmap(_per_sample_squared_error, in_axes=(None, 0, 0), out_axes=0)
+        return jnp.mean(err_fn(model, batch, keys))
 
     loss, grads = nnx.value_and_grad(loss_fn)(model)
     optimizer.update(model, grads)
@@ -443,12 +446,13 @@ def train_step_simple(
 def eval_step_simple(
     model: nnx.Module,
     batch: tuple[jax.Array, jax.Array],
-    key: jax.Array,
+    keys: jax.Array,
     optimizer: nnx.Optimizer,
 ) -> jax.Array:
     """Single evaluation step with MSE loss."""
 
     def loss_fn(model):
-        return mse(model, batch, rngs=nnx.Rngs(key))
+        err_fn = nnx.vmap(_per_sample_squared_error, in_axes=(None, 0, 0), out_axes=0)
+        return jnp.mean(err_fn(model, batch, keys))
 
     return loss_fn(model)

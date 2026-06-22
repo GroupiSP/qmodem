@@ -42,7 +42,7 @@ class TestMakeWindows:
         ruls = np.linspace(5.0, 0.0, 10)
         windows, targets = _make_windows(voltage, ruls, window_size=3, stride=1)
         for w in windows:
-            assert w.shape == (1, 3)
+            assert w.shape == (3, 1)
         assert len(windows) == len(targets)
 
     def test_window_count(self) -> None:
@@ -78,4 +78,4 @@ class TestMakeWindows:
         ruls = np.linspace(5.0, 0.0, n_t)
         w1, _ = _make_windows(voltage, ruls, window_size=4, stride=1)
         w2, _ = _make_windows(voltage, ruls, window_size=4, stride=5)
-        assert len(w2) < len(w1)
+        assert w2[0].size < w1[0].size
