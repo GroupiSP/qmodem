@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
@@ -63,7 +65,7 @@ class Net(nnx.Module):
         x = self.dropout(x, rngs=rngs)
 
         # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=-2, keepdims=True)
+        x = jnp.mean(x, axis=-2)
 
         # GaussianBlock: (batch, n_filters) -> (batch, 2)
         return self.gauss(x)
