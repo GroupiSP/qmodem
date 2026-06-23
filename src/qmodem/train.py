@@ -175,6 +175,7 @@ def train_loop(
 
     key = initial_key
 
+    epoch = 0
     try:
         for epoch in tqdm.tqdm(range(n_epochs), desc="training"):
             phase = TrainingPhase.EPOCH_START

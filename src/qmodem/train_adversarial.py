@@ -227,6 +227,7 @@ def train_loop(
 
     key = initial_key
 
+    epoch = 0
     try:
         discriminator.train()  # discriminator is always in training mode.
 
