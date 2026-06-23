@@ -48,17 +48,6 @@ class HPPrunerChoice(StrEnum):
 
 
 @dataclass(frozen=True)
-class Tags:
-    dataset: DatasetChoice = DatasetChoice.CMAPSS
-    loss: LossChoice = LossChoice.MSE
-    model: ModelChoice = ModelChoice.LSTM
-    optimizer: OptimizerChoice = OptimizerChoice.ADAM
-    scheduler: SchedulerChoice = SchedulerChoice.COSINE
-    hp_sampler: HPSamplerChoice = HPSamplerChoice.RANDOM
-    hp_pruner: HPPrunerChoice = HPPrunerChoice.MEDIAN
-
-
-@dataclass(frozen=True)
 class MLFlowSetup:
     """Configuration for an MLflow tracking run.
 
