@@ -48,8 +48,7 @@ class Net(nnx.Module):
         """Forward pass through the Bayesian CNN.
 
         Args:
-            x: Input with shape ``(batch, 1, window_size)``.
-                Will be transposed to ``(batch, window_size, 1)``.
+            x: Input with shape ``(batch, window_size, 1)``.
                 Accepts variable-length windows.
             rngs: RNGs for weight sampling. The ``params`` stream is used
                 to draw a key for the Bayesian convolution layer.
@@ -62,7 +61,7 @@ class Net(nnx.Module):
         x = self.act_fn(x)
 
         # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=-2, keepdims=True)
+        x = jnp.mean(x, axis=-2)
 
         # GaussianBlock: (batch, n_filters) -> (batch, 2)
         return self.gauss(x)
