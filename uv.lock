@@ -2954,7 +2954,6 @@ name = "qmodem"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "click" },
     { name = "jax-ai-stack" },
     { name = "mlflow" },
     { name = "optuna" },
@@ -2974,7 +2973,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click", specifier = ">=8.0" },
     { name = "jax-ai-stack", specifier = ">=2025.10.28" },
     { name = "mlflow", specifier = ">=3.7.0" },
     { name = "optuna", specifier = ">=4.8.0" },
