@@ -183,9 +183,10 @@ def main() -> None:
     run_tags = {
         "case_study": "battery",
         "stage": "data_generation",
+        "publication": "phme26",
     }
     tracking_setup = MLFlowSetup(
-        experiment_name="battery_default",
+        experiment_name="phme26",
         run_name="generate_discharge_histories",
         tags=run_tags,
     )

@@ -12,7 +12,7 @@ import simbat as sb
 
 from qmodem.data import DataSource
 
-DATA_GEN_RUN_ID = "db5ed872d78448dba887040cf49a74d1"
+DATA_GEN_RUN_ID = "48ce4a61104840c58e892006c1bc7880"
 
 
 @dataclasses.dataclass

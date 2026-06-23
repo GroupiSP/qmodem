@@ -92,11 +92,11 @@ def main() -> None:
 
     mlflow_setup = MLFlowSetup(
         run_name="qavi",
-        experiment_name="battery_default",
+        experiment_name="phme26",
         tags={
             "model": "QAVI",
             "case_study": "battery",
-            "stage": "prototyping",
+            "stage": "publishing",
             "publication": "phme26",
         },
     )

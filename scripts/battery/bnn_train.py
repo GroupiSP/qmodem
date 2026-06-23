@@ -69,11 +69,11 @@ def main() -> None:
 
     mlflow_setup = MLFlowSetup(
         run_name="bnn",
-        experiment_name="battery_default",
+        experiment_name="phme26",
         tags={
             "model": "BNN",
             "case_study": "battery",
-            "stage": "prototyping",
+            "stage": "publishing",
             "publication": "phme26",
         },
     )
