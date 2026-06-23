@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
