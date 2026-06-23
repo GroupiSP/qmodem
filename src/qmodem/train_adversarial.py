@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import mlflow
 import orbax.checkpoint as ocp
+import tqdm
 
 from .module import eval_step_simple
 
@@ -229,7 +230,7 @@ def train_loop(
     try:
         discriminator.train()  # discriminator is always in training mode.
 
-        for epoch in range(n_epochs):
+        for epoch in tqdm.tqdm(range(n_epochs), desc="training"):
             phase = TrainingPhase.EPOCH_START
             context.epoch = epoch
             run_callbacks(phase, context)
