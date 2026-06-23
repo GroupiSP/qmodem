@@ -138,7 +138,7 @@ def main() -> None:
     @nnx.jit
     def train_step(
         model: nnx.Module,
-        batch: jax.Array,
+        batch: tuple[jax.Array, jax.Array],
         keys: jax.Array,
         optimizer: nnx.Optimizer,
     ) -> jax.Array:
@@ -152,7 +152,7 @@ def main() -> None:
     @nnx.jit
     def eval_step(
         model: nnx.Module,
-        batch: jax.Array,
+        batch: tuple[jax.Array, jax.Array],
         keys: jax.Array,
         optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
