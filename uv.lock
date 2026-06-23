@@ -2960,6 +2960,7 @@ dependencies = [
     { name = "pennylane" },
     { name = "scikit-learn" },
     { name = "simbat" },
+    { name = "tqdm" },
 ]
 
 [package.dev-dependencies]
@@ -2979,6 +2980,7 @@ requires-dist = [
     { name = "pennylane", specifier = ">=0.44.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "simbat", git = "https://github.com/GroupiSP/simbat.git" },
+    { name = "tqdm", specifier = ">=4.67.3" },
 ]
 
 [package.metadata.requires-dev]
