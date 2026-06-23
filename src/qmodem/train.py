@@ -140,6 +140,40 @@ def mlflow_track_losses(phase: TrainingPhase, context: TrainingContext) -> None:
         mlflow.log_metric("best_val_loss", context.best_val_loss, step=context.epoch)
 
 
+class PredictiveMeanVarianceTracker:
+    def __init__(
+        self, base_key: jax.Array, X_batch: jax.Array, n_samples: int = 100
+    ) -> None:
+        self.key = base_key
+        self.X_batch = X_batch
+        self.n_samples = n_samples
+
+    def _sample(self, model: nnx.Module, key: jax.Array) -> jax.Array:
+        # Sample predictions from the model using the provided key
+        return model(self.X_batch, rngs=nnx.Rngs(default=key))
+
+    def __call__(self, phase: TrainingPhase, context: TrainingContext) -> None:
+        if phase == TrainingPhase.EPOCH_END:
+            context.model.train()  # e.g. MCD
+
+            pred_means = []
+            for _ in range(self.n_samples):
+                self.key, subkey = jax.random.split(self.key, num=2)
+                pred_mean = self._sample(context.model, subkey).squeeze()[0]
+                pred_means.append(pred_mean)
+
+            pred_means = jnp.stack(pred_means, axis=1)
+            pred_mean_variance = jnp.var(pred_means, axis=1)
+            pred_mean_variance_batch_mean = jnp.mean(pred_mean_variance).item()
+
+            context.model.eval()
+            mlflow.log_metric(
+                "predictive_mean_variance",
+                pred_mean_variance_batch_mean,
+                step=context.epoch,
+            )
+
+
 # ==================================================
 # ================= Train Loop =====================
 # ==================================================

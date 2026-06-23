@@ -31,6 +31,7 @@ class TrainHyperparameters:
     early_stopping_patience: int = 10
     early_stopping_min_delta: float = 1e-4
     scheduler_alpha: float = 0.1
+    n_samples_predictive_mean_variance: int = 100
 
 
 @dataclasses.dataclass(frozen=True)
