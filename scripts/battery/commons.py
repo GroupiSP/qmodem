@@ -5,10 +5,10 @@ import pathlib
 from typing import Any, Iterable, Iterator
 
 import grain
-import lib_eod_simulation as les
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import simbat as sb
 
 from qmodem.data import DataSource
 
@@ -257,10 +257,10 @@ def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeD
 
 def run_discharges_from_intermediate_socs(
     soc_0s: np.ndarray, process_noise_std: float, dt: float
-) -> Iterator[les.SimulationResult]:
+) -> Iterator[sb.SimulationResult]:
     for soc_0 in soc_0s:
         # TODO: simulation config parameters should be loaded from mlflow.
-        config = les.SimulationConfig(
+        config = sb.SimulationConfig(
             process_noise_distribution=lambda: np.random.normal(
                 loc=0.0, scale=process_noise_std
             ),
@@ -268,7 +268,7 @@ def run_discharges_from_intermediate_socs(
             dt=dt,
             soc_0=soc_0,
         )
-        result = les.simulate_constant_capacity_simple(n_sim=100, config=config)
+        result = sb.simulate_constant_capacity_simple(n_sim=100, config=config)
         yield result
 
 
