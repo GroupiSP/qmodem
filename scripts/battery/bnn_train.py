@@ -39,7 +39,7 @@ from qmodem.train_base import (
     mlflow_track_model_best_state,
 )
 from qmodem.utils import count_parameters
-from scripts.battery.bnn_model import Net
+from scripts.battery.bnn_model import ConvLayerType, Net
 from scripts.battery.commons import (
     TrainHyperparameters,
     create_dataloaders,
@@ -49,7 +49,7 @@ from scripts.battery.commons import (
 
 @dataclasses.dataclass
 class Hyperparameters(TrainHyperparameters):
-    pass
+    conv_layer_type: str = ConvLayerType.FLIPOUT
 
 
 def main() -> None:
@@ -63,7 +63,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters()
+    hp = Hyperparameters(activation_function="leaky_relu")
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -73,9 +73,9 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn-5",
+        run_name="bnn-7",
         experiment_name="variance_tracking",
-        run_description="Remove the 0.1 scaling factor from the kernel initialization in FlipoutConv1D.",
+        run_description="Leaky ReLU activation function.",
         tags={
             "model": "BNN",
             "case_study": "battery",
@@ -84,7 +84,11 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(rngs=nnx.Rngs(hp.net_init_seed))
+    model = Net(
+        rngs=nnx.Rngs(hp.net_init_seed),
+        layer_type=hp.conv_layer_type,
+        act_fn=getattr(nnx, hp.activation_function),
+    )
 
     # Build the data sources, including windowing and normalization
     scaler = skpp.MinMaxScaler(feature_range=(0, 1))
