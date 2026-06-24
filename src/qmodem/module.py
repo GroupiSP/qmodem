@@ -81,17 +81,17 @@ class StandardBayesConv1D(nnx.Module):
         self.bias_mu = nnx.Param(jnp.zeros(out_features))
         self.bias_rho = nnx.Param(jnp.full(out_features, -3.0))
 
-    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """Forward pass: sample one set of weights and convolve the batch.
 
         Args:
             x: Input with shape ``(batch, length, in_features)``.
-            key: JAX PRNG key for weight sampling.
+            rngs: Flax RNGs for weight sampling.
 
         Returns:
             Convolved output with shape ``(batch, L_out, out_features)``.
         """
-        k1, k2 = jax.random.split(key)
+        k1, k2 = jax.random.split(rngs.params(), 2)
         k_sigma = jax.nn.softplus(self.kernel_rho.value)
         b_sigma = jax.nn.softplus(self.bias_rho.value)
 
