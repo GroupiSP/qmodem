@@ -91,7 +91,7 @@ def mlflow_track_model_best_state(
             mlflow.log_artifacts(str(ckpt_path), artifact_path="best_model_state")
 
 
-class PredictiveMeanVarianceTracker:
+class OutputVarianceTracker:
     def __init__(
         self, base_key: jax.Array, X_batch: jax.Array, n_samples: int = 100
     ) -> None:
@@ -109,19 +109,25 @@ class PredictiveMeanVarianceTracker:
         if phase == TrainingPhase.EPOCH_END:
             context.model.train()  # e.g. MCD
 
-            pred_means = []
+            preds = []
             for _ in range(self.n_samples):
                 self.key, subkey = jax.random.split(self.key, num=2)
-                pred_mean = self._sample(context.model, subkey).squeeze()[0]
-                pred_means.append(pred_mean)
+                preds.append(self._sample(context.model, subkey))
 
-            pred_means = jnp.stack(pred_means, axis=1)
-            pred_mean_variance = jnp.var(pred_means, axis=1)
-            pred_mean_variance_batch_mean = jnp.mean(pred_mean_variance).item()
+            preds = jnp.stack(preds, axis=0)  # Shape (n_samples, batch_size)
+            var_preds = jnp.var(preds, axis=0)  # Variance across samples for each input
+            mean_var_preds = jnp.mean(
+                var_preds, axis=0
+            )  # Mean variance across the batch
 
             context.model.eval()
             mlflow.log_metric(
                 "predictive_mean_variance",
-                pred_mean_variance_batch_mean,
+                mean_var_preds[0],
+                step=context.epoch,
+            )
+            mlflow.log_metric(
+                "predictive_std_variance",
+                mean_var_preds[1],
                 step=context.epoch,
             )
