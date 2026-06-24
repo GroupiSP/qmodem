@@ -34,7 +34,7 @@ from qmodem.train import (
 from qmodem.train_base import (
     BaseTrainingContext,
     EarlyStopper,
-    PredictiveMeanVarianceTracker,
+    OutputVarianceTracker,
     TrainingPhase,
     mlflow_track_model_best_state,
 )
@@ -73,9 +73,9 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn-3",
+        run_name="bnn-5",
         experiment_name="variance_tracking",
-        run_description="Track the variance of the convolutional layer weights during training.",
+        run_description="Remove the 0.1 scaling factor from the kernel initialization in FlipoutConv1D.",
         tags={
             "model": "BNN",
             "case_study": "battery",
@@ -222,7 +222,7 @@ def main() -> None:
                 LogReporter(log_every=10),
                 mlflow_track_model_best_state,
                 mlflow_track_losses,
-                PredictiveMeanVarianceTracker(
+                OutputVarianceTracker(
                     base_key=subkey,
                     X_batch=batch_variance_tracking[0],
                     n_samples=hp.n_samples_predictive_mean_variance,

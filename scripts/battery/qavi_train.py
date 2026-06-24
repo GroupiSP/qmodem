@@ -32,7 +32,7 @@ from qmodem.train_adversarial import (
 )
 from qmodem.train_base import (
     EarlyStopper,
-    PredictiveMeanVarianceTracker,
+    OutputVarianceTracker,
     mlflow_track_model_best_state,
 )
 from qmodem.utils import count_parameters
@@ -302,7 +302,7 @@ def main() -> None:
                 LogReporter(log_every=10),
                 mlflow_track_model_best_state,
                 mlflow_track_losses,
-                PredictiveMeanVarianceTracker(
+                OutputVarianceTracker(
                     base_key=subkey,
                     X_batch=batch_variance_tracking[0],
                     n_samples=hp.n_samples_predictive_mean_variance,
