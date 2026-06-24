@@ -74,6 +74,8 @@ class StandardBayesConv1D(nnx.Module):
         self.padding = padding
 
         k_shape = (kernel_size, in_features, out_features)
+
+        # Variational parameters
         self.kernel_mu = nnx.Param(jax.random.normal(rngs.params(), k_shape) * 0.1)
         self.kernel_rho = nnx.Param(jnp.full(k_shape, -3.0))
         self.bias_mu = nnx.Param(jnp.zeros(out_features))
@@ -119,6 +121,12 @@ class StandardBayesConv1D(nnx.Module):
             self.bias_mu.value, self.bias_rho.value
         )
 
+    def mean_posterior_variance(self) -> jax.Array:
+        """Mean of the posterior variance across all weights."""
+        k_var = jnp.square(jax.nn.softplus(self.kernel_rho.value))
+        b_var = jnp.square(jax.nn.softplus(self.bias_rho.value))
+        return jnp.mean(jnp.concatenate([k_var.flatten(), b_var.flatten()]))
+
 
 class FlipoutConv1D(nnx.Module):
     """Bayesian 1D convolution with Flipout (Wen et al., 2018).
@@ -155,6 +163,8 @@ class FlipoutConv1D(nnx.Module):
         self.padding = padding
 
         k_shape = (kernel_size, in_features, out_features)
+
+        # Variational parameters
         self.kernel_mu = nnx.Param(jax.random.normal(rngs.params(), k_shape) * 0.1)
         self.kernel_rho = nnx.Param(jnp.full(k_shape, -3.0))
         self.bias_mu = nnx.Param(jnp.zeros(out_features))
@@ -220,6 +230,12 @@ class FlipoutConv1D(nnx.Module):
         return _kl(self.kernel_mu.value, self.kernel_rho.value) + _kl(
             self.bias_mu.value, self.bias_rho.value
         )
+
+    def mean_posterior_variance(self) -> jax.Array:
+        """Mean of the posterior variance across all weights."""
+        k_var = jnp.square(jax.nn.softplus(self.kernel_rho.value))
+        b_var = jnp.square(jax.nn.softplus(self.bias_rho.value))
+        return jnp.mean(jnp.concatenate([k_var.flatten(), b_var.flatten()]))
 
 
 class PQCModule(nnx.Module):

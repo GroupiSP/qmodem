@@ -69,3 +69,6 @@ class Net(nnx.Module):
     def kl_divergence(self) -> jax.Array:
         """Total KL divergence across all Bayesian layers."""
         return self.conv.kl_divergence()
+
+    def conv_mean_posterior_variance(self) -> jax.Array:
+        return self.conv.mean_posterior_variance()

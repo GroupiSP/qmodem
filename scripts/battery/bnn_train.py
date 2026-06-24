@@ -32,8 +32,10 @@ from qmodem.train import (
     train_loop,
 )
 from qmodem.train_base import (
+    BaseTrainingContext,
     EarlyStopper,
     PredictiveMeanVarianceTracker,
+    TrainingPhase,
     mlflow_track_model_best_state,
 )
 from qmodem.utils import count_parameters
@@ -71,9 +73,9 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn-2",
+        run_name="bnn-3",
         experiment_name="variance_tracking",
-        run_description="Multiply KL divergence by a large number (1000). Aim: prevent collapse of the variance of the predictive mean.",
+        run_description="Track the variance of the convolutional layer weights during training.",
         tags={
             "model": "BNN",
             "case_study": "battery",
@@ -144,9 +146,7 @@ def main() -> None:
 
     def elbo_loss(model, batch, keys) -> jax.Array:
         # This is the ELBO loss for the batch.
-        return jnp.mean(per_sample_nll(model, batch, keys)) + 1_000 * per_sample_kl(
-            model
-        )
+        return jnp.mean(per_sample_nll(model, batch, keys)) + per_sample_kl(model)
 
     @nnx.jit
     def train_step(
@@ -183,6 +183,17 @@ def main() -> None:
         patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
     )
 
+    # Add a callback to track the variance of the convolutional layer weights
+    def track_conv_weights_variance(
+        phase: TrainingPhase, context: BaseTrainingContext
+    ) -> None:
+        if phase == TrainingPhase.EPOCH_END:
+            mlflow.log_metric(
+                "conv_weights_variance",
+                context.model.conv_mean_posterior_variance(),
+                step=context.epoch,
+            )
+
     with track_mlflow(setup=mlflow_setup):
         mlflow.sklearn.log_model(scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
@@ -216,6 +227,7 @@ def main() -> None:
                     X_batch=batch_variance_tracking[0],
                     n_samples=hp.n_samples_predictive_mean_variance,
                 ),
+                track_conv_weights_variance,
             ],
             early_stopper=early_stopper,
         )
