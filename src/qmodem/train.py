@@ -5,7 +5,7 @@ import pathlib
 import tempfile
 import time
 from dataclasses import dataclass
-from enum import Enum, StrEnum, auto
+from enum import StrEnum, auto
 from typing import Callable, Iterable
 
 import flax.nnx as nnx
@@ -16,6 +16,7 @@ import orbax.checkpoint as ocp
 import tqdm
 
 from .module import eval_step_simple, train_step_simple
+from .train_base import BaseTrainingContext, Callback, TrainingPhase
 
 logger = logging.getLogger(__name__)
 
@@ -24,26 +25,11 @@ type StepFn = Callable[
     [nnx.Module, tuple[jax.Array, jax.Array], jax.Array, nnx.Optimizer], jax.Array
 ]
 
-type Callback = Callable[[TrainingPhase, TrainingContext], None]
-
-
-class TrainingPhase(Enum):
-    INIT = auto()
-    EPOCH_START = auto()
-    EVAL_START = auto()
-    EPOCH_END = auto()
-    BEFORE_RETURN = auto()
-
 
 @dataclass
-class TrainingContext:
-    epoch: int
+class TrainingContext(BaseTrainingContext):
     train_loss: float
-    val_loss: float
-    best_val_loss: float
-    model: nnx.Module
     optimizer: nnx.Optimizer
-    model_best_state: nnx.State
 
 
 class EarlyStopState(StrEnum):

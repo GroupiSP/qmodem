@@ -5,8 +5,8 @@ import pathlib
 import tempfile
 import time
 from dataclasses import dataclass
-from enum import Enum, StrEnum, auto
-from typing import Callable, Iterable, Protocol
+from enum import StrEnum, auto
+from typing import Iterable, Protocol
 
 import flax.nnx as nnx
 import jax
@@ -16,6 +16,7 @@ import orbax.checkpoint as ocp
 import tqdm
 
 from .module import eval_step_simple
+from .train_base import BaseTrainingContext, Callback, TrainingPhase
 
 logger = logging.getLogger(__name__)
 
@@ -41,29 +42,13 @@ class EvalStepFn(Protocol):
     ) -> jax.Array: ...
 
 
-type Callback = Callable[[TrainingPhase, TrainingContext], None]
-
-
-class TrainingPhase(Enum):
-    INIT = auto()
-    EPOCH_START = auto()
-    EVAL_START = auto()
-    EPOCH_END = auto()
-    BEFORE_RETURN = auto()
-
-
 @dataclass
-class TrainingContext:
-    epoch: int
+class AdversarialTrainingContext(BaseTrainingContext):
     generator_loss: float
     discriminator_loss: float
-    val_loss: float
-    best_val_loss: float
-    model: nnx.Module
     discriminator: nnx.Module
     optimizer_generator: nnx.Optimizer
     optimizer_discriminator: nnx.Optimizer
-    model_best_state: nnx.State
 
 
 class EarlyStopState(StrEnum):
@@ -113,7 +98,9 @@ class PrintReporter:
     def __init__(self, print_every: int = 1) -> None:
         self.print_every = print_every
 
-    def __call__(self, phase: TrainingPhase, context: TrainingContext) -> None:
+    def __call__(
+        self, phase: TrainingPhase, context: AdversarialTrainingContext
+    ) -> None:
         if phase == TrainingPhase.EPOCH_END and context.epoch % self.print_every == 0:
             print(
                 f"Epoch {context.epoch:3d} | "
@@ -128,7 +115,9 @@ class LogReporter:
     def __init__(self, log_every: int = 1) -> None:
         self.log_every = log_every
 
-    def __call__(self, phase: TrainingPhase, context: TrainingContext) -> None:
+    def __call__(
+        self, phase: TrainingPhase, context: AdversarialTrainingContext
+    ) -> None:
         if phase == TrainingPhase.EPOCH_END and context.epoch % self.log_every == 0:
             logger.info(
                 f"Epoch {context.epoch:3d} | "
@@ -140,7 +129,7 @@ class LogReporter:
 
 
 def mlflow_track_model_best_state(
-    phase: TrainingPhase, context: TrainingContext
+    phase: TrainingPhase, context: AdversarialTrainingContext
 ) -> None:
     if phase == TrainingPhase.BEFORE_RETURN:
         run = mlflow.active_run()
@@ -155,7 +144,9 @@ def mlflow_track_model_best_state(
             mlflow.log_artifacts(str(ckpt_path), artifact_path="best_model_state")
 
 
-def mlflow_track_losses(phase: TrainingPhase, context: TrainingContext) -> None:
+def mlflow_track_losses(
+    phase: TrainingPhase, context: AdversarialTrainingContext
+) -> None:
     if phase == TrainingPhase.EPOCH_END:
         mlflow.log_metric("generator_loss", context.generator_loss, step=context.epoch)
         mlflow.log_metric(
@@ -204,12 +195,12 @@ def train_loop(
         early_stopper: Optional EarlyStopper instance to enable early stopping based on validation loss.
     """
 
-    def run_callbacks(phase: TrainingPhase, info: TrainingContext) -> None:
+    def run_callbacks(phase: TrainingPhase, info: AdversarialTrainingContext) -> None:
         for callback in callbacks:
             callback(phase, info)
 
     phase = TrainingPhase.INIT
-    context = TrainingContext(
+    context = AdversarialTrainingContext(
         epoch=0,
         generator_loss=float("inf"),
         discriminator_loss=float(
