@@ -55,6 +55,7 @@ class MLFlowSetup:
         experiment_name: Name of the MLflow experiment to log under.
         run_name: Optional human-readable name for the MLflow run. If None, MLflow will auto-generate a name.
         run_id: Optional existing run ID to resume. If None, a new run is created.
+        run_description: Optional description for the MLflow run.
         tags: Arbitrary key-value tags attached to the run.
         backend_store: SQLAlchemy URI for the MLflow backend store.
         artifact_store: Local path where artifacts are stored.
@@ -64,6 +65,7 @@ class MLFlowSetup:
     experiment_name: str
     run_name: str | None = None
     run_id: str | None = None
+    run_description: str | None = None
     tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
     artifact_store: str | Path = ROOT_DIR / "mlruns"
@@ -89,7 +91,11 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
     mlflow.set_experiment(experiment_id=exp_id)
 
     try:
-        active_run = mlflow.start_run(run_id=setup.run_id, run_name=setup.run_name)
+        active_run = mlflow.start_run(
+            run_id=setup.run_id,
+            run_name=setup.run_name,
+            description=setup.run_description,
+        )
         mlflow.set_tags(setup.tags)
 
         yield active_run
