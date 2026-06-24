@@ -29,6 +29,7 @@ from qmodem.tracking import (
 from qmodem.train import (
     EarlyStopper,
     LogReporter,
+    PredictiveMeanVarianceTracker,
     mlflow_track_losses,
     mlflow_track_model_best_state,
     train_loop,
@@ -44,7 +45,7 @@ from scripts.battery.mcd_model import Net
 
 @dataclasses.dataclass
 class Hyperparameters(TrainHyperparameters):
-    dropout_rate: float = 0.1
+    dropout_rate: float = 0.5
 
 
 def main() -> None:
@@ -68,13 +69,12 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="mcd",
-        experiment_name="phme26",
+        run_name="mcd_1",
+        experiment_name="variance_tracking",
         tags={
             "model": "MCD",
             "case_study": "battery",
-            "stage": "publishing",
-            "publication": "phme26",
+            "stage": "prototyping",
         },
     )
 
@@ -174,11 +174,21 @@ def main() -> None:
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
 
+        key = jax.random.key(hp.train_rng_seed)
+        key, subkey = jax.random.split(key)
+
+        batch_variance_tracking = ds_val[
+            jax.random.choice(
+                subkey, len(ds_val), shape=(hp.batch_size,), replace=False
+            )
+        ]
+        _, subkey = jax.random.split(subkey)
+
         train_loop(
             n_epochs=hp.n_epochs,
             dataloader_train=dataloader_train,
             dataloader_val=dataloader_val,
-            initial_key=jax.random.PRNGKey(hp.train_rng_seed),
+            initial_key=key,
             model=model,
             optimizer=optimizer,
             train_batch_fn=train_step,
@@ -187,6 +197,11 @@ def main() -> None:
                 LogReporter(log_every=10),
                 mlflow_track_model_best_state,
                 mlflow_track_losses,
+                PredictiveMeanVarianceTracker(
+                    base_key=subkey,
+                    X_batch=batch_variance_tracking[0],
+                    n_samples=hp.n_samples_predictive_mean_variance,
+                ),
             ],
             early_stopper=early_stopper,
         )

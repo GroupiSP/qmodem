@@ -29,6 +29,7 @@ from qmodem.tracking import (
 from qmodem.train import (
     EarlyStopper,
     LogReporter,
+    PredictiveMeanVarianceTracker,
     mlflow_track_losses,
     mlflow_track_model_best_state,
     train_loop,
@@ -68,13 +69,13 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn",
-        experiment_name="phme26",
+        run_name="bnn-2",
+        experiment_name="variance_tracking",
+        run_description="Multiply KL divergence by a large number (1000). Aim: prevent collapse of the variance of the predictive mean.",
         tags={
             "model": "BNN",
             "case_study": "battery",
-            "stage": "publishing",
-            "publication": "phme26",
+            "stage": "prototyping",
         },
     )
 
@@ -141,9 +142,9 @@ def main() -> None:
 
     def elbo_loss(model, batch, keys) -> jax.Array:
         # This is the ELBO loss for the batch.
-        return jnp.mean(per_sample_nll(model, batch, keys)) + batch[0].shape[
-            0
-        ] * per_sample_kl(model)
+        return jnp.mean(per_sample_nll(model, batch, keys)) + 1_000 * per_sample_kl(
+            model
+        )
 
     @nnx.jit
     def train_step(
@@ -185,6 +186,16 @@ def main() -> None:
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
 
+        key = jax.random.key(hp.train_rng_seed)
+        key, subkey = jax.random.split(key)
+
+        batch_variance_tracking = ds_val[
+            jax.random.choice(
+                subkey, len(ds_val), shape=(hp.batch_size,), replace=False
+            )
+        ]
+        _, subkey = jax.random.split(subkey)
+
         train_loop(
             n_epochs=hp.n_epochs,
             dataloader_train=dataloader_train,
@@ -198,6 +209,11 @@ def main() -> None:
                 LogReporter(log_every=10),
                 mlflow_track_model_best_state,
                 mlflow_track_losses,
+                PredictiveMeanVarianceTracker(
+                    base_key=subkey,
+                    X_batch=batch_variance_tracking[0],
+                    n_samples=hp.n_samples_predictive_mean_variance,
+                ),
             ],
             early_stopper=early_stopper,
         )
