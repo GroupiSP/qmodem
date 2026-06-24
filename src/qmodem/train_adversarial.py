@@ -5,7 +5,6 @@ import pathlib
 import tempfile
 import time
 from dataclasses import dataclass
-from enum import StrEnum, auto
 from typing import Iterable, Protocol
 
 import flax.nnx as nnx
@@ -16,7 +15,7 @@ import orbax.checkpoint as ocp
 import tqdm
 
 from .module import eval_step_simple
-from .train_base import BaseTrainingContext, Callback, TrainingPhase
+from .train_base import BaseTrainingContext, Callback, EarlyStopper, TrainingPhase
 
 logger = logging.getLogger(__name__)
 
@@ -49,44 +48,6 @@ class AdversarialTrainingContext(BaseTrainingContext):
     discriminator: nnx.Module
     optimizer_generator: nnx.Optimizer
     optimizer_discriminator: nnx.Optimizer
-
-
-class EarlyStopState(StrEnum):
-    WAITING_FOR_IMPROVEMENT = auto()
-    IMPROVEMENT_FOUND = auto()
-    STOPPED = auto()
-
-
-class EarlyStopper:
-    def __init__(self, patience: int, min_delta: float = 0.0) -> None:
-        self.patience = patience
-        self.min_delta = min_delta
-        self.best_loss = float("inf")
-        self.counter = 0
-        self.current_epoch = 0
-
-        self._state = EarlyStopState.WAITING_FOR_IMPROVEMENT
-
-    @property
-    def state(self) -> EarlyStopState:
-        return self._state
-
-    def __call__(self, current_loss: jax.Array) -> bool:
-        self.current_epoch += 1
-        if current_loss < self.best_loss - self.min_delta:
-            self.best_loss = current_loss
-            self.counter = 0
-            self._state = EarlyStopState.IMPROVEMENT_FOUND
-            return False
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self._state = EarlyStopState.STOPPED
-                print(
-                    f"Early stopping triggered at epoch {self.current_epoch}. Validation loss: {current_loss:.4f}"
-                )
-                return True
-            return False
 
 
 # ==================================================
