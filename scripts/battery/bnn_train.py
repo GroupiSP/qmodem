@@ -202,7 +202,7 @@ def main() -> None:
             n_epochs=hp.n_epochs,
             dataloader_train=dataloader_train,
             dataloader_val=dataloader_val,
-            initial_key=jax.random.PRNGKey(hp.train_rng_seed),
+            initial_key=jax.random.key(hp.train_rng_seed),
             model=model,
             optimizer=optimizer,
             train_batch_fn=train_step,
