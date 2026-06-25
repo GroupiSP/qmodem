@@ -21,7 +21,7 @@ from qmodem.data import (
     normalize_ruls,
     to_jax,
 )
-from qmodem.module import negative_log_likelihood
+from qmodem.module import nll_batched
 from qmodem.tracking import (
     MLFlowSetup,
     track_mlflow,
@@ -73,9 +73,9 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn-7",
-        experiment_name="variance_tracking",
-        run_description="Leaky ReLU activation function.",
+        run_name="bnn",
+        experiment_name="one_key_one_datapoint",
+        run_description="Baseline",
         tags={
             "model": "BNN",
             "case_study": "battery",
@@ -138,19 +138,14 @@ def main() -> None:
     )
 
     # Loss evaluation functions and steps for the training.
-    @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
-    def per_sample_nll(model, sample, sample_key) -> jax.Array:
-        # Build the RNG here to avoid crossing different trace levels.
-        rngs = nnx.Rngs(params=sample_key)
-        return negative_log_likelihood(model, sample, rngs, beta=hp.beta_nll)
 
-    def per_sample_kl(model) -> jax.Array:
+    def kl_divergence(model) -> jax.Array:
         # KL divergence is deterministic, so we don't need to vmap over samples or use RNGs.
         return model.kl_divergence() / len(ds_train)  # average KL per sample
 
     def elbo_loss(model, batch, keys) -> jax.Array:
         # This is the ELBO loss for the batch.
-        return jnp.mean(per_sample_nll(model, batch, keys)) + per_sample_kl(model)
+        return jnp.mean(nll_batched(model, batch, keys)) + kl_divergence(model)
 
     @nnx.jit
     def train_step(

@@ -21,6 +21,13 @@ class PQC(Protocol):
     def __call__(self, x: jax.Array, params: jax.Array) -> jax.Array: ...
 
 
+@nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
+def model_fwd(model: nnx.Module, x_i: jax.Array, key: jax.Array) -> jax.Array:
+    # NOTE: we need to add a batch dimension to x_i since the model expects a batch of inputs.
+    # NOTE: we need to remove the batch dimension from the output since we only want the output for the single input x_i.
+    return model(x_i[None], rngs=nnx.Rngs(default=key))[0]
+
+
 class GaussianBlock(nnx.Module):
     def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs) -> None:
         self.linear_1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
@@ -391,29 +398,28 @@ def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Arra
     return forward(model, x, keys)
 
 
-def negative_log_likelihood(
+def nll_batched(
     model: nnx.Module,
     batch: tuple[jax.Array, jax.Array],
-    rngs: nnx.Rngs,
+    keys: jax.Array,
     beta: float = 0.0,
 ) -> jax.Array:
     """Gaussian NLL loss for heteroscedastic regression.
 
     Args:
-       model (nnx.Module): Heteroscedastic regression model with Gaussian output.
+       model (nnx.Module): Regression model with Gaussian output.
        batch (tuple[jax.Array, jax.Array]): Batched input data (xs, labels).
-       rngs (nnx.Rngs): RNGs for stochastic forward pass (if applicable).
+       keys (jax.Array): Array of JAX PRNG keys for sampling.
        beta (float): Variance-weighting exponent. Implements the beta-NLL loss in arXiv:2203.09168.
            ``0.0`` gives standard NLL.
 
     Returns:
-        jax.Array: Per-sample NLL losses with shape (batch,).
+        jax.Array: NLL losses with shape (batch,).
     """
 
-    xs, labels = batch
+    xs, labels = batch[0], batch[1]
     # Add a batch dimension to xs for the model's forward pass
-    xs_b = jnp.expand_dims(xs, axis=0)
-    outputs = model(xs_b, rngs=rngs)
+    outputs = model_fwd(model, xs, keys)
     means, variances = outputs[:, 0], outputs[:, 1]
     variances = jnp.clip(variances, min=1e-6)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
@@ -428,15 +434,14 @@ def negative_log_likelihood(
     return losses
 
 
-def _per_sample_squared_error(
+def squared_error_batched(
     model: nnx.Module,
-    sample: tuple[jax.Array, jax.Array],
-    sample_key: jax.Array,
+    batch: tuple[jax.Array, jax.Array],
+    keys: jax.Array,
 ) -> jax.Array:
-    xs, labels = sample
-    # Add a batch dimension to xs for the model's forward pass
-    xs_b = jnp.expand_dims(xs, axis=0)
-    outputs = model(xs_b, rngs=nnx.Rngs(sample_key))
+    xs, labels = batch[0], batch[1]
+    outputs = model_fwd(model, xs, keys)
+    # Assumes that when the output layer has two elements, the first one is the mean prediction
     losses = jnp.square(outputs[:, 0] - labels)
 
     return losses
@@ -451,8 +456,7 @@ def train_step_simple(
     """Single training step with MSE loss."""
 
     def loss_fn(model):
-        err_fn = nnx.vmap(_per_sample_squared_error, in_axes=(None, 0, 0), out_axes=0)
-        return jnp.mean(err_fn(model, batch, keys))
+        return jnp.mean(squared_error_batched(model, batch, keys))
 
     loss, grads = nnx.value_and_grad(loss_fn)(model)
     optimizer.update(model, grads)
@@ -468,7 +472,6 @@ def eval_step_simple(
     """Single evaluation step with MSE loss."""
 
     def loss_fn(model):
-        err_fn = nnx.vmap(_per_sample_squared_error, in_axes=(None, 0, 0), out_axes=0)
-        return jnp.mean(err_fn(model, batch, keys))
+        return jnp.mean(squared_error_batched(model, batch, keys))
 
     return loss_fn(model)
