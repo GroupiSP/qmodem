@@ -10,10 +10,6 @@ from flax import nnx
 logger = logging.getLogger(__name__)
 
 
-class RandomCallModel(Protocol):
-    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array: ...
-
-
 class PQC(Protocol):
     n_qubits: int
     params_shape: tuple[int, ...]
@@ -26,6 +22,16 @@ def model_fwd(model: nnx.Module, x_i: jax.Array, key: jax.Array) -> jax.Array:
     # NOTE: we need to add a batch dimension to x_i since the model expects a batch of inputs.
     # NOTE: we need to remove the batch dimension from the output since we only want the output for the single input x_i.
     return model(x_i[None], rngs=nnx.Rngs(default=key))[0]
+
+
+@nnx.vmap(in_axes=(None, None, 0, 0), out_axes=0)
+def mc_sample(
+    model: nnx.Module, x: jax.Array, key_weights: jax.Array, key_noise: jax.Array
+) -> jax.Array:
+    """Apply the model to a single input x with as many keys as the number of Monte
+    Carlo samples."""
+    mu, var = model(x, rngs=nnx.Rngs(default=key_weights))[0]  # Shape (2,)
+    return mu + jnp.sqrt(var) * jax.random.normal(key_noise, shape=(1,))
 
 
 class GaussianBlock(nnx.Module):
@@ -377,25 +383,6 @@ class LSTM(nnx.Module):
         x = self.dropout_2(out_2, rngs=rngs)
         x = self.linear(x)
         return x[:, -1, :]  # Return the output of the last time step (predicted RUL)
-
-
-def mc_sample(model: RandomCallModel, x: jax.Array, keys: jax.Array) -> jax.Array:
-    """Generate MC samples from a model with stochastic forward pass.
-
-    Args:
-        model: A model that accepts RNGs in its forward pass (e.g. MC Dropout).
-        x: Input data for which to generate predictions, shape (n_x, ...).
-        keys: Array of JAX PRNG keys for sampling. Length determines the number
-            of MC samples.
-    Returns:
-        jax.Array: MC samples with shape (n_samples, n_x, n_outputs).
-    """
-
-    @nnx.vmap(in_axes=(None, None, 0), out_axes=0)
-    def forward(model, x, key):
-        return model(x, rngs=nnx.Rngs(key))
-
-    return forward(model, x, keys)
 
 
 def nll_batched(
