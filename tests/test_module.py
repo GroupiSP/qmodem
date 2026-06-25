@@ -4,6 +4,7 @@ import pytest
 from flax import nnx
 
 from qmodem.module import (
+    FlipoutConv1D,
     GaussianBlock,
     StandardBayesConv1D,
 )
@@ -17,6 +18,16 @@ def std_bayes_conv1d_layer():
     kernel_size = 5
     rngs = nnx.Rngs(0)
     return StandardBayesConv1D(in_features, out_features, kernel_size, rngs=rngs)
+
+
+@pytest.fixture
+def flipout_conv1d_layer():
+    """Fixture to create a FlipoutConv1D layer for testing."""
+    in_features = 1
+    out_features = 4
+    kernel_size = 5
+    rngs = nnx.Rngs(0)
+    return FlipoutConv1D(in_features, out_features, kernel_size, rngs=rngs)
 
 
 @pytest.fixture
@@ -116,6 +127,26 @@ def test_standard_bayes_conv1d_weight_correlation(
 
     # Shape: (n_samples, kernel_size, in_features, out_features)
     weight_samples = _sample_kernel(std_bayes_conv1d_layer, subkeys)
+
+    # Each row = one flattened kernel sample; rowvar=True gives (n_samples, n_samples)
+    W = weight_samples.reshape(n_samples, -1)
+    weight_correlation = jnp.corrcoef(W)
+
+    # If broken, all samples would be identical → correlation matrix all-ones
+    assert not jnp.allclose(weight_correlation, jnp.ones_like(weight_correlation))
+
+
+def test_flipout_conv1d_weight_correlation(
+    flipout_conv1d_layer, X_batch_time_series_1d
+):
+    """Test that the weights sampled from FlipoutConv1D are not perfectly correlated,
+    i.e. that different random keys produce different weight samples."""
+    n_samples = len(X_batch_time_series_1d)
+    key = jax.random.key(0)
+    subkeys = jax.random.split(key, num=n_samples)
+
+    # Shape: (n_samples, kernel_size, in_features, out_features)
+    weight_samples = _sample_kernel(flipout_conv1d_layer, subkeys)
 
     # Each row = one flattened kernel sample; rowvar=True gives (n_samples, n_samples)
     W = weight_samples.reshape(n_samples, -1)
