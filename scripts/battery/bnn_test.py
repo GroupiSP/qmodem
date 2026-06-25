@@ -61,11 +61,11 @@ def main() -> None:
         / "battery"
     )
 
-    TRAIN_RUN_ID = "ea00e35755524f08a4bd76c4ea5e28d9"
+    TRAIN_RUN_ID = "d8a6e2cd06724267b76140ced8c243f8"
 
     hp = TestHyperparameters()
 
-    mlflow_setup = MLFlowSetup(experiment_name="phme26", run_id=TRAIN_RUN_ID)
+    mlflow_setup = MLFlowSetup(experiment_name="variance_tracking", run_id=TRAIN_RUN_ID)
 
     with track_mlflow(setup=mlflow_setup) as run:
         # Load the mlflow run parameters
@@ -79,7 +79,9 @@ def main() -> None:
         # Load the model
         # TODO: [refac] Enclose model loading into a function and move it to commons.
         model = Net(
-            rngs=nnx.Rngs(0)
+            rngs=nnx.Rngs(0),
+            layer_type=run.data.params["conv_layer_type"],
+            act_fn=getattr(nnx, run.data.params["activation_function"]),
         )  # RNGs won't be used for inference, so the seed is arbitrary.
         abstract_state = nnx.state(model, nnx.Param)
 

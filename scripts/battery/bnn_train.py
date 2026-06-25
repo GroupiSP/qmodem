@@ -27,14 +27,19 @@ from qmodem.tracking import (
     track_mlflow,
 )
 from qmodem.train import (
-    EarlyStopper,
     LogReporter,
     mlflow_track_losses,
-    mlflow_track_model_best_state,
     train_loop,
 )
+from qmodem.train_base import (
+    BaseTrainingContext,
+    EarlyStopper,
+    OutputVarianceTracker,
+    TrainingPhase,
+    mlflow_track_model_best_state,
+)
 from qmodem.utils import count_parameters
-from scripts.battery.bnn_model import Net
+from scripts.battery.bnn_model import ConvLayerType, Net
 from scripts.battery.commons import (
     TrainHyperparameters,
     create_dataloaders,
@@ -44,7 +49,7 @@ from scripts.battery.commons import (
 
 @dataclasses.dataclass
 class Hyperparameters(TrainHyperparameters):
-    pass
+    conv_layer_type: str = ConvLayerType.FLIPOUT
 
 
 def main() -> None:
@@ -58,7 +63,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters()
+    hp = Hyperparameters(activation_function="leaky_relu")
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -68,18 +73,22 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn",
-        experiment_name="phme26",
+        run_name="bnn-7",
+        experiment_name="variance_tracking",
+        run_description="Leaky ReLU activation function.",
         tags={
             "model": "BNN",
             "case_study": "battery",
-            "stage": "publishing",
-            "publication": "phme26",
+            "stage": "prototyping",
         },
     )
 
     # Model, schedule, optimizer
-    model = Net(rngs=nnx.Rngs(hp.net_init_seed))
+    model = Net(
+        rngs=nnx.Rngs(hp.net_init_seed),
+        layer_type=hp.conv_layer_type,
+        act_fn=getattr(nnx, hp.activation_function),
+    )
 
     # Build the data sources, including windowing and normalization
     scaler = skpp.MinMaxScaler(feature_range=(0, 1))
@@ -141,9 +150,7 @@ def main() -> None:
 
     def elbo_loss(model, batch, keys) -> jax.Array:
         # This is the ELBO loss for the batch.
-        return jnp.mean(per_sample_nll(model, batch, keys)) + batch[0].shape[
-            0
-        ] * per_sample_kl(model)
+        return jnp.mean(per_sample_nll(model, batch, keys)) + per_sample_kl(model)
 
     @nnx.jit
     def train_step(
@@ -180,16 +187,37 @@ def main() -> None:
         patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
     )
 
+    # Add a callback to track the variance of the convolutional layer weights
+    def track_conv_weights_variance(
+        phase: TrainingPhase, context: BaseTrainingContext
+    ) -> None:
+        if phase == TrainingPhase.EPOCH_END:
+            mlflow.log_metric(
+                "conv_weights_variance",
+                context.model.conv_mean_posterior_variance(),
+                step=context.epoch,
+            )
+
     with track_mlflow(setup=mlflow_setup):
         mlflow.sklearn.log_model(scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
 
+        key = jax.random.key(hp.train_rng_seed)
+        key, subkey = jax.random.split(key)
+
+        batch_variance_tracking = ds_val[
+            jax.random.choice(
+                subkey, len(ds_val), shape=(hp.batch_size,), replace=False
+            )
+        ]
+        _, subkey = jax.random.split(subkey)
+
         train_loop(
             n_epochs=hp.n_epochs,
             dataloader_train=dataloader_train,
             dataloader_val=dataloader_val,
-            initial_key=jax.random.PRNGKey(hp.train_rng_seed),
+            initial_key=jax.random.key(hp.train_rng_seed),
             model=model,
             optimizer=optimizer,
             train_batch_fn=train_step,
@@ -198,6 +226,12 @@ def main() -> None:
                 LogReporter(log_every=10),
                 mlflow_track_model_best_state,
                 mlflow_track_losses,
+                OutputVarianceTracker(
+                    base_key=subkey,
+                    X_batch=batch_variance_tracking[0],
+                    n_samples=hp.n_samples_predictive_mean_variance,
+                ),
+                track_conv_weights_variance,
             ],
             early_stopper=early_stopper,
         )

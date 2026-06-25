@@ -61,11 +61,11 @@ def main() -> None:
         / "battery"
     )
 
-    TRAIN_RUN_ID = "9b8a57e154144deca51fad0129cb7f95"
+    TRAIN_RUN_ID = "c95ecc12b8b5468daa8523259ed1fe21"
 
     hp = TestHyperparameters()
 
-    mlflow_setup = MLFlowSetup(experiment_name="phme26", run_id=TRAIN_RUN_ID)
+    mlflow_setup = MLFlowSetup(experiment_name="variance_tracking", run_id=TRAIN_RUN_ID)
 
     with track_mlflow(setup=mlflow_setup) as run:
         # Load the mlflow run parameters

@@ -26,11 +26,14 @@ from qmodem.tracking import (
     track_mlflow,
 )
 from qmodem.train_adversarial import (
-    EarlyStopper,
     LogReporter,
     mlflow_track_losses,
-    mlflow_track_model_best_state,
     train_loop,
+)
+from qmodem.train_base import (
+    EarlyStopper,
+    OutputVarianceTracker,
+    mlflow_track_model_best_state,
 )
 from qmodem.utils import count_parameters
 from scripts.battery.commons import (
@@ -92,12 +95,11 @@ def main() -> None:
 
     mlflow_setup = MLFlowSetup(
         run_name="qavi",
-        experiment_name="phme26",
+        experiment_name="variance_tracking",
         tags={
             "model": "QAVI",
             "case_study": "battery",
-            "stage": "publishing",
-            "publication": "phme26",
+            "stage": "prototyping",
         },
     )
 
@@ -274,6 +276,16 @@ def main() -> None:
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
 
+        key = jax.random.key(hp.train_rng_seed)
+        key, subkey = jax.random.split(key)
+
+        batch_variance_tracking = ds_val[
+            jax.random.choice(
+                subkey, len(ds_val), shape=(hp.batch_size,), replace=False
+            )
+        ]
+        _, subkey = jax.random.split(subkey)
+
         train_loop(
             n_epochs=hp.n_epochs,
             dataloader_train=dataloader_train,
@@ -290,6 +302,11 @@ def main() -> None:
                 LogReporter(log_every=10),
                 mlflow_track_model_best_state,
                 mlflow_track_losses,
+                OutputVarianceTracker(
+                    base_key=subkey,
+                    X_batch=batch_variance_tracking[0],
+                    n_samples=hp.n_samples_predictive_mean_variance,
+                ),
             ],
             early_stopper=early_stopper,
         )

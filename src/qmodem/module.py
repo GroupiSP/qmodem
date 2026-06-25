@@ -74,22 +74,24 @@ class StandardBayesConv1D(nnx.Module):
         self.padding = padding
 
         k_shape = (kernel_size, in_features, out_features)
+
+        # Variational parameters
         self.kernel_mu = nnx.Param(jax.random.normal(rngs.params(), k_shape) * 0.1)
         self.kernel_rho = nnx.Param(jnp.full(k_shape, -3.0))
         self.bias_mu = nnx.Param(jnp.zeros(out_features))
         self.bias_rho = nnx.Param(jnp.full(out_features, -3.0))
 
-    def __call__(self, x: jax.Array, *, key: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """Forward pass: sample one set of weights and convolve the batch.
 
         Args:
             x: Input with shape ``(batch, length, in_features)``.
-            key: JAX PRNG key for weight sampling.
+            rngs: Flax RNGs for weight sampling.
 
         Returns:
             Convolved output with shape ``(batch, L_out, out_features)``.
         """
-        k1, k2 = jax.random.split(key)
+        k1, k2 = jax.random.split(rngs.params(), 2)
         k_sigma = jax.nn.softplus(self.kernel_rho.value)
         b_sigma = jax.nn.softplus(self.bias_rho.value)
 
@@ -118,6 +120,12 @@ class StandardBayesConv1D(nnx.Module):
         return _kl(self.kernel_mu.value, self.kernel_rho.value) + _kl(
             self.bias_mu.value, self.bias_rho.value
         )
+
+    def mean_posterior_variance(self) -> jax.Array:
+        """Mean of the posterior variance across all weights."""
+        k_var = jnp.square(jax.nn.softplus(self.kernel_rho.value))
+        b_var = jnp.square(jax.nn.softplus(self.bias_rho.value))
+        return jnp.mean(jnp.concatenate([k_var.flatten(), b_var.flatten()]))
 
 
 class FlipoutConv1D(nnx.Module):
@@ -155,6 +163,8 @@ class FlipoutConv1D(nnx.Module):
         self.padding = padding
 
         k_shape = (kernel_size, in_features, out_features)
+
+        # Variational parameters
         self.kernel_mu = nnx.Param(jax.random.normal(rngs.params(), k_shape) * 0.1)
         self.kernel_rho = nnx.Param(jnp.full(k_shape, -3.0))
         self.bias_mu = nnx.Param(jnp.zeros(out_features))
@@ -220,6 +230,12 @@ class FlipoutConv1D(nnx.Module):
         return _kl(self.kernel_mu.value, self.kernel_rho.value) + _kl(
             self.bias_mu.value, self.bias_rho.value
         )
+
+    def mean_posterior_variance(self) -> jax.Array:
+        """Mean of the posterior variance across all weights."""
+        k_var = jnp.square(jax.nn.softplus(self.kernel_rho.value))
+        b_var = jnp.square(jax.nn.softplus(self.bias_rho.value))
+        return jnp.mean(jnp.concatenate([k_var.flatten(), b_var.flatten()]))
 
 
 class PQCModule(nnx.Module):
