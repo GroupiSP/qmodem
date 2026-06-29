@@ -74,8 +74,8 @@ def mlflow_track_losses(phase: TrainingPhase, context: TrainingContext) -> None:
 
 def train_loop(
     n_epochs: int,
-    dataloader_train: Iterable,
-    dataloader_val: Iterable,
+    train_dataloader_builder: Callable[[int], Iterable],
+    val_dataloader_builder: Callable[[int], Iterable],
     initial_key: jax.Array,
     model: nnx.Module,
     optimizer: nnx.Optimizer,
@@ -111,11 +111,11 @@ def train_loop(
 
             model.train()
             train_losses = []
+            dataloader_train = train_dataloader_builder(epoch)
             for batch in dataloader_train:
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]
-                loss = train_batch_fn(model, batch, subkeys, optimizer)
-                train_losses.append(loss)
+                train_losses.append(train_batch_fn(model, batch, subkeys, optimizer))
 
             phase = TrainingPhase.EVAL_START
             context.train_loss = jnp.mean(jnp.array(train_losses)).item()
@@ -123,6 +123,7 @@ def train_loop(
 
             model.eval()
             val_losses = []
+            dataloader_val = val_dataloader_builder(epoch)
             for batch in dataloader_val:
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]

@@ -21,7 +21,7 @@ from qmodem.data import (
     normalize_ruls,
     to_jax,
 )
-from qmodem.module import negative_log_likelihood
+from qmodem.module import nll_batched
 from qmodem.tracking import (
     MLFlowSetup,
     track_mlflow,
@@ -42,8 +42,8 @@ from qmodem.utils import count_parameters
 from scripts.battery.bnn_model import ConvLayerType, Net
 from scripts.battery.commons import (
     TrainHyperparameters,
-    create_dataloaders,
     get_dataframes,
+    train_dataloader_builder,
 )
 
 
@@ -63,7 +63,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters(activation_function="leaky_relu")
+    hp = Hyperparameters(conv_layer_type=ConvLayerType.BBB)
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -73,9 +73,13 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn-7",
-        experiment_name="variance_tracking",
-        run_description="Leaky ReLU activation function.",
+        run_name="bnn-2",
+        experiment_name="one_key_one_datapoint",
+        run_description="""1. Reseed the data sampler at every epoch, to avoid overfitting to the same data order
+        \n2. Fix labels/predictions shape mismatch in nll_batched
+        \n3. Change Bayesian conv layer to BBB.
+        \n4. Restore activation function to gelu (was leaky ReLU)
+        """,
         tags={
             "model": "BNN",
             "case_study": "battery",
@@ -128,29 +132,15 @@ def main() -> None:
     ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline_train)
     ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline_val)
 
-    # Dataloaders
-    dataloader_train, dataloader_val = create_dataloaders(
-        ds_train=ds_train,
-        ds_val=ds_val,
-        batch_size=hp.batch_size,
-        sampler_seeds=hp.sampler_seeds,
-        drop_remainder=hp.drop_remainder,
-    )
-
     # Loss evaluation functions and steps for the training.
-    @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
-    def per_sample_nll(model, sample, sample_key) -> jax.Array:
-        # Build the RNG here to avoid crossing different trace levels.
-        rngs = nnx.Rngs(params=sample_key)
-        return negative_log_likelihood(model, sample, rngs, beta=hp.beta_nll)
 
-    def per_sample_kl(model) -> jax.Array:
+    def kl_divergence(model) -> jax.Array:
         # KL divergence is deterministic, so we don't need to vmap over samples or use RNGs.
         return model.kl_divergence() / len(ds_train)  # average KL per sample
 
     def elbo_loss(model, batch, keys) -> jax.Array:
         # This is the ELBO loss for the batch.
-        return jnp.mean(per_sample_nll(model, batch, keys)) + per_sample_kl(model)
+        return jnp.mean(nll_batched(model, batch, keys)) + kl_divergence(model)
 
     @nnx.jit
     def train_step(
@@ -215,9 +205,16 @@ def main() -> None:
 
         train_loop(
             n_epochs=hp.n_epochs,
-            dataloader_train=dataloader_train,
-            dataloader_val=dataloader_val,
-            initial_key=jax.random.key(hp.train_rng_seed),
+            train_dataloader_builder=functools.partial(
+                train_dataloader_builder,
+                ds_train=ds_train,
+                batch_size=hp.batch_size,
+                drop_remainder=hp.drop_remainder,
+            ),
+            val_dataloader_builder=lambda n: [
+                (ds_val.X, ds_val.y)
+            ],  # single "batch" = whole val set, because no SGD happens at eval time
+            initial_key=key,
             model=model,
             optimizer=optimizer,
             train_batch_fn=train_step,

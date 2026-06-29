@@ -5,7 +5,7 @@ import pathlib
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 import flax.nnx as nnx
 import jax
@@ -124,8 +124,8 @@ def mlflow_track_losses(
 
 def train_loop(
     n_epochs: int,
-    dataloader_train: Iterable,
-    dataloader_val: Iterable,
+    train_dataloader_builder: Callable[[int], Iterable],
+    val_dataloader_builder: Callable[[int], Iterable],
     initial_key: jax.Array,
     model: nnx.Module,
     discriminator: nnx.Module,
@@ -191,6 +191,7 @@ def train_loop(
             model.train()
             generator_losses = []
             discriminator_losses = []
+            dataloader_train = train_dataloader_builder(epoch)
             for batch in dataloader_train:
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]
@@ -217,6 +218,7 @@ def train_loop(
 
             model.eval()
             val_losses = []
+            dataloader_val = val_dataloader_builder(epoch)
             for batch in dataloader_val:
                 splits = jax.random.split(key, num=batch[0].shape[0] + 1)
                 key, subkeys = splits[0], splits[1:]

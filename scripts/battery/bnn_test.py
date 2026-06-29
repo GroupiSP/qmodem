@@ -15,6 +15,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 import sklearn.preprocessing as skpp
 
+from qmodem.module import mc_sample
 from qmodem.tracking import MLFlowSetup, track_mlflow
 from scripts.battery.bnn_model import Net
 from scripts.battery.commons import (
@@ -26,21 +27,6 @@ from scripts.battery.commons import (
     get_test_case_data,
     run_discharges_from_intermediate_socs,
 )
-
-
-def mc_sample_model(
-    model: Net, X: np.ndarray, n_samples: int, rng_key: jax.Array
-) -> tuple[jax.Array, jax.Array]:
-    samples = []
-    for _ in range(n_samples):
-        rng_key, _ = jax.random.split(rng_key)
-        # TODO: rng_key does not need to be associated to a specific stream.
-        # The same should be corrected for dropout.
-        mu, var = model(X, rngs=nnx.Rngs(params=rng_key)).squeeze()  # Shape (2,)
-        samples.append(mu + jnp.sqrt(var) * jax.random.normal(rng_key, shape=(1,)))
-    samples = jnp.array(samples).reshape(-1, 1)  # Shape (n_samples, 1)
-
-    return samples, rng_key
 
 
 def main() -> None:
@@ -61,11 +47,13 @@ def main() -> None:
         / "battery"
     )
 
-    TRAIN_RUN_ID = "d8a6e2cd06724267b76140ced8c243f8"
+    TRAIN_RUN_ID = "83c8b655d99b4729b14ecf4c2f844f6b"
 
     hp = TestHyperparameters()
 
-    mlflow_setup = MLFlowSetup(experiment_name="variance_tracking", run_id=TRAIN_RUN_ID)
+    mlflow_setup = MLFlowSetup(
+        experiment_name="one_key_one_datapoint", run_id=TRAIN_RUN_ID
+    )
 
     with track_mlflow(setup=mlflow_setup) as run:
         # Load the mlflow run parameters
@@ -145,9 +133,16 @@ def main() -> None:
 
                 X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
 
-                key, _ = jax.random.split(key)
-                samples_pred, key = mc_sample_model(
-                    model, X, n_samples=hp.test_n_mc_samples, rng_key=key
+                # Keys for sampling the model weights and the output Gaussian distribution.
+                splits = jax.random.split(key, num=2 * hp.test_n_mc_samples + 1)
+                key, keys_weights, keys_noise = (
+                    splits[0],
+                    splits[1 : hp.test_n_mc_samples + 1],
+                    splits[hp.test_n_mc_samples + 1 :],
+                )
+
+                samples_pred = mc_sample(
+                    model, X, key_weights=keys_weights, key_noise=keys_noise
                 )
 
                 eval_time_stamps.append(

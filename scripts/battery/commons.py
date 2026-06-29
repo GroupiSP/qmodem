@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-from typing import Any, Iterable, Iterator
+from typing import Iterable, Iterator
 
 import grain
 import matplotlib.pyplot as plt
@@ -200,17 +200,16 @@ def get_dataframes(
     return train_df, val_df, test_df
 
 
-def create_dataloaders(
+def train_dataloader_builder(
+    sampler_seed: int,
     ds_train: DataSource,
-    ds_val: DataSource,
     batch_size: int,
-    sampler_seeds: tuple[int, int],
     drop_remainder: bool = False,
-) -> tuple[Any, Any]:
-    """Create Grain DataLoaders for training and validation."""
+) -> grain.DataLoader:
+    """Create Grain DataLoader for training."""
 
     sampler_train = grain.samplers.IndexSampler(
-        num_records=len(ds_train), num_epochs=1, shuffle=True, seed=sampler_seeds[0]
+        num_records=len(ds_train), num_epochs=1, shuffle=True, seed=sampler_seed
     )
     dataloader_train = grain.DataLoader(
         data_source=ds_train,
@@ -221,19 +220,7 @@ def create_dataloaders(
         worker_count=0,
     )
 
-    sampler_val = grain.samplers.IndexSampler(
-        num_records=len(ds_val), num_epochs=1, shuffle=False, seed=sampler_seeds[1]
-    )
-    dataloader_val = grain.DataLoader(
-        data_source=ds_val,
-        sampler=sampler_val,
-        operations=[
-            grain.transforms.Batch(batch_size=batch_size, drop_remainder=drop_remainder)
-        ],
-        worker_count=0,
-    )
-
-    return dataloader_train, dataloader_val
+    return dataloader_train
 
 
 def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
