@@ -42,8 +42,8 @@ from qmodem.utils import count_parameters
 from scripts.battery.bnn_model import ConvLayerType, Net
 from scripts.battery.commons import (
     TrainHyperparameters,
-    create_dataloaders,
     get_dataframes,
+    train_dataloader_builder,
 )
 
 
@@ -63,7 +63,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters(activation_function="leaky_relu")
+    hp = Hyperparameters(conv_layer_type=ConvLayerType.BBB)
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -73,9 +73,13 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn",
+        run_name="bnn-2",
         experiment_name="one_key_one_datapoint",
-        run_description="Baseline",
+        run_description="""1. Reseed the data sampler at every epoch, to avoid overfitting to the same data order
+        \n2. Fix labels/predictions shape mismatch in nll_batched
+        \n3. Change Bayesian conv layer to BBB.
+        \n4. Restore activation function to gelu (was leaky ReLU)
+        """,
         tags={
             "model": "BNN",
             "case_study": "battery",
@@ -127,15 +131,6 @@ def main() -> None:
 
     ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline_train)
     ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline_val)
-
-    # Dataloaders
-    dataloader_train, dataloader_val = create_dataloaders(
-        ds_train=ds_train,
-        ds_val=ds_val,
-        batch_size=hp.batch_size,
-        sampler_seeds=hp.sampler_seeds,
-        drop_remainder=hp.drop_remainder,
-    )
 
     # Loss evaluation functions and steps for the training.
 
@@ -210,9 +205,16 @@ def main() -> None:
 
         train_loop(
             n_epochs=hp.n_epochs,
-            dataloader_train=dataloader_train,
-            dataloader_val=dataloader_val,
-            initial_key=jax.random.key(hp.train_rng_seed),
+            train_dataloader_builder=functools.partial(
+                train_dataloader_builder,
+                ds_train=ds_train,
+                batch_size=hp.batch_size,
+                drop_remainder=hp.drop_remainder,
+            ),
+            val_dataloader_builder=lambda n: [
+                (ds_val.X, ds_val.y)
+            ],  # single "batch" = whole val set, because no SGD happens at eval time
+            initial_key=key,
             model=model,
             optimizer=optimizer,
             train_batch_fn=train_step,
