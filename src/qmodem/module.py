@@ -404,7 +404,7 @@ def nll_batched(
         jax.Array: NLL losses with shape (batch,).
     """
 
-    xs, labels = batch[0], batch[1]
+    xs, labels = batch[0], batch[1].squeeze(-1)
     # Add a batch dimension to xs for the model's forward pass
     outputs = model_fwd(model, xs, keys)
     means, variances = outputs[:, 0], outputs[:, 1]
@@ -426,7 +426,7 @@ def squared_error_batched(
     batch: tuple[jax.Array, jax.Array],
     keys: jax.Array,
 ) -> jax.Array:
-    xs, labels = batch[0], batch[1]
+    xs, labels = batch[0], batch[1].squeeze(-1)
     outputs = model_fwd(model, xs, keys)
     # Assumes that when the output layer has two elements, the first one is the mean prediction
     losses = jnp.square(outputs[:, 0] - labels)
