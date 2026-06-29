@@ -21,6 +21,7 @@ from qmodem.data import (
     normalize_ruls,
     to_jax,
 )
+from qmodem.module import nll_batched
 from qmodem.tracking import (
     MLFlowSetup,
     track_mlflow,
@@ -38,8 +39,8 @@ from qmodem.train_base import (
 from qmodem.utils import count_parameters
 from scripts.battery.commons import (
     TrainHyperparameters,
-    create_dataloaders,
     get_dataframes,
+    train_dataloader_builder,
 )
 from scripts.battery.qavi_model import Net
 
@@ -66,11 +67,13 @@ class Hyperparameters(TrainHyperparameters):
     discriminator_hidden_size: int = 64
     discriminator_act_fn: str = "leaky_relu"
     discriminator_init_seed: int = 43
-    learning_rate: None = None  # override
+    learning_rate: None = None  # override (LRs are separate)
     learning_rate_generator: float = 1e-3
     learning_rate_discriminator: float = 1e-3
-    early_stopping_patience: int = 30  # override
-    scheduler_alpha: None = None  # override
+    early_stopping_patience: int = (
+        30  # override (Need more patience for adversarial training)
+    )
+    scheduler_alpha: None = None  # override (No scheduler)
 
 
 def main() -> None:
@@ -95,7 +98,7 @@ def main() -> None:
 
     mlflow_setup = MLFlowSetup(
         run_name="qavi",
-        experiment_name="variance_tracking",
+        experiment_name="one_key_one_datapoint",
         tags={
             "model": "QAVI",
             "case_study": "battery",
@@ -104,7 +107,9 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(rngs=nnx.Rngs(hp.net_init_seed))
+    model = Net(
+        rngs=nnx.Rngs(hp.net_init_seed), act_fn=getattr(nnx, hp.activation_function)
+    )
     discriminator = Discriminator(
         input_dim=hp.window_size
         + 1,  # +1 for the RUL value concatenated to the input window
@@ -149,15 +154,6 @@ def main() -> None:
 
     ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline_train)
     ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline_val)
-
-    # Dataloaders
-    dataloader_train, dataloader_val = create_dataloaders(
-        ds_train=ds_train,
-        ds_val=ds_val,
-        batch_size=hp.batch_size,
-        sampler_seeds=hp.sampler_seeds,
-        drop_remainder=hp.drop_remainder,
-    )
 
     @nnx.jit
     def discriminator_step(
@@ -242,23 +238,7 @@ def main() -> None:
         keys: jax.Array,
         optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
-        def loss_fn(model):
-            xs, y_true = batch  # xs: (batch, ...), y_true: (batch, 1)
-            rngs = nnx.Rngs(params=keys[0])
-
-            y_pred = model(xs, rngs)  # (batch, 2)
-            mu_pred_1d = y_pred[:, 0]  # (batch,)
-            variances_pred_1d = jnp.clip(y_pred[:, 1], min=1e-8)  # (batch,)
-            y_true_1d = y_true.squeeze(-1)  # (batch,)
-
-            nll = (
-                0.5 * jnp.log(variances_pred_1d)
-                + 0.5 * jnp.square(y_true_1d - mu_pred_1d) / variances_pred_1d
-            )  # (batch,)
-
-            return jnp.mean(nll)
-
-        return loss_fn(model)
+        return jnp.mean(nll_batched(model, batch, keys, beta=hp.beta_nll))
 
     optimizer_discriminator = nnx.Optimizer(
         discriminator, optax.adam(hp.learning_rate_discriminator), wrt=nnx.Param
@@ -288,9 +268,16 @@ def main() -> None:
 
         train_loop(
             n_epochs=hp.n_epochs,
-            dataloader_train=dataloader_train,
-            dataloader_val=dataloader_val,
-            initial_key=jax.random.key(hp.train_rng_seed),
+            train_dataloader_builder=functools.partial(
+                train_dataloader_builder,
+                ds_train=ds_train,
+                batch_size=hp.batch_size,
+                drop_remainder=hp.drop_remainder,
+            ),
+            val_dataloader_builder=lambda n: [
+                (ds_val.X, ds_val.y)
+            ],  # single "batch" = whole val set, because no SGD happens at eval time
+            initial_key=key,
             model=model,
             discriminator=discriminator,
             optimizer_generator=optimizer_generator,
