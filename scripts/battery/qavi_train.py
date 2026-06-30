@@ -97,14 +97,14 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="qavi",
+        run_name="qavi-1",
         experiment_name="pqc_extension",
         tags={
             "model": "QAVI",
             "case_study": "battery",
             "stage": "prototyping",
         },
-        run_description="Baseline (refactoring).",
+        run_description="""1. Predictions for the adversarial terms are sampled from the generator and the final Gaussian layer (before they were sampled from the generator only)""",
     )
 
     # Generator of weights for the convolutional layer
@@ -183,18 +183,24 @@ def main() -> None:
 
             # NOTE: squeezing the ys makes them of the same shape as the predicted labels.
             xs, ys_true = batch[0], batch[1].squeeze(-1)
-            key_1, key_2 = jax.random.split(key)
+            ns = len(xs)  # batch size
+            key_0, key_1, key_2 = jax.random.split(key, num=3)
 
-            model_keys = jax.random.split(key_1, num=len(xs))
-            y_pred = model_fwd(model, xs, model_keys)  # (1, 2) -> mu, var
-            mu_pred = y_pred[:, 0]  # (1,1)
+            model_keys = jax.random.split(key_0, num=ns)
+            model_out = model_fwd(model, xs, model_keys)  # (1, 2) -> mu, var
+            mu_pred, sigma_pred = model_out[:, 0], model_out[:, 1]  # (batch,), (batch,)
+
+            # Sample the output normal distribution
+            y_pred = (
+                jax.random.normal(key_1, shape=(ns,)) * sigma_pred + mu_pred
+            )  # (batch,)
 
             rngs = nnx.Rngs(params=key_2)
             proba_real = discriminator(
                 jnp.concatenate([xs, ys_true[:, None, None]], axis=1), rngs
             )
             proba_fake = discriminator(
-                jnp.concatenate([xs, mu_pred[:, None, None]], axis=1), rngs
+                jnp.concatenate([xs, y_pred[:, None, None]], axis=1), rngs
             )
             error = -jnp.log(proba_real + eps) - jnp.log(1 - proba_fake + eps)
 
@@ -218,31 +224,35 @@ def main() -> None:
             # NOTE: squeezing the ys makes them of the same shape as the predicted labels.
             xs, ys_true = batch[0], batch[1].squeeze(-1)
 
-            key_1, key_2 = jax.random.split(key)
+            ns = len(xs)  # batch size
+            key_0, key_1, key_2 = jax.random.split(key, num=3)
 
-            model_keys = jax.random.split(key_1, num=len(xs))
-            # PQC generates weights once, conv applied to whole batch
-            outputs = model_fwd(model, xs, model_keys)  # (batch, 2)
-            means, stds = outputs[:, 0], outputs[:, 1]  # (batch,), (batch,)
+            model_keys = jax.random.split(key_0, num=ns)
+            model_out = model_fwd(model, xs, model_keys)  # (1, 2) -> mu, var
+            mu_pred, sigma_pred = model_out[:, 0], model_out[:, 1]  # (batch,), (batch,)
+
+            # Sample the output normal distribution
+            y_pred = (
+                jax.random.normal(key_1, shape=(ns,)) * sigma_pred + mu_pred
+            )  # (batch,)
 
             rngs = nnx.Rngs(params=key_2)
             proba_fake = discriminator(
-                jnp.concatenate([xs, means[:, None, None]], axis=1), rngs
+                jnp.concatenate([xs, y_pred[:, None, None]], axis=1), rngs
             )  # (batch, 1)
             proba_fake_clipped = jnp.clip(proba_fake, eps, 1 - eps)
             logits = jnp.log(proba_fake_clipped / (1 - proba_fake_clipped))
             adv_error = -logits.squeeze(-1)  # (batch,)
 
             # NLL per sample from already-computed predictions, no second model call
-            variances = jnp.clip(jnp.square(stds), min=1e-8)
+            variances = jnp.clip(jnp.square(sigma_pred), min=1e-8)
             nll = (
-                0.5 * jnp.log(variances) + 0.5 * jnp.square(ys_true - means) / variances
+                0.5 * jnp.log(variances)
+                + 0.5 * jnp.square(ys_true - mu_pred) / variances
             )  # (batch,)
 
             return jnp.mean(adv_error + nll)
 
-        # Notice that vmapping does not work in this case, because of an
-        # incompatibility downstream with the PenyyLane qnode.
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
         return loss
