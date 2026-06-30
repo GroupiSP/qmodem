@@ -26,7 +26,7 @@ from scripts.battery.commons import (
     get_test_case_data,
     run_discharges_from_intermediate_socs,
 )
-from scripts.battery.qavi_model import Net
+from scripts.battery.qavi_model import Net, WeightGenerator
 
 
 def main() -> None:
@@ -47,13 +47,11 @@ def main() -> None:
         / "battery"
     )
 
-    TRAIN_RUN_ID = "5928a3d9b52342b9887d61ad3e8ae2f7"
+    TRAIN_RUN_ID = "317039e2c5df42e8a901baec57c6ef8e"
 
     hp = TestHyperparameters()
 
-    mlflow_setup = MLFlowSetup(
-        experiment_name="one_key_one_datapoint", run_id=TRAIN_RUN_ID
-    )
+    mlflow_setup = MLFlowSetup(experiment_name="pqc_extension", run_id=TRAIN_RUN_ID)
 
     with track_mlflow(setup=mlflow_setup) as run:
         # Load the mlflow run parameters
@@ -64,10 +62,22 @@ def main() -> None:
             f"runs:/{TRAIN_RUN_ID}/sklearn_scaler"
         )
 
+        w_gen = WeightGenerator(
+            n_qubits=int(run_params_training["pqc_n_qubits"]),
+            n_layers=int(run_params_training["pqc_n_layers"]),
+            kernel_size=int(run_params_training["conv_kernel_size"]),
+            in_features=1,
+            out_features=int(run_params_training["conv_n_filters"]),
+        )
+
         # Load the model
         # TODO: [refac] Enclose model loading into a function and move it to commons.
         model = Net(
-            rngs=nnx.Rngs(0)
+            n_filters=int(run_params_training["conv_n_filters"]),
+            kernel_size=int(run_params_training["conv_kernel_size"]),
+            generator=w_gen,
+            act_fn=getattr(nnx, run_params_training["activation_function"]),
+            rngs=nnx.Rngs(0),
         )  # RNGs won't be used for inference, so the seed is arbitrary.
         abstract_state = nnx.state(model, nnx.Param)
 

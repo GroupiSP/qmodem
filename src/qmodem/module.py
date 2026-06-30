@@ -251,50 +251,19 @@ class FlipoutConv1D(nnx.Module):
         return jnp.mean(jnp.concatenate([k_var.flatten(), b_var.flatten()]))
 
 
-class PQCModule(nnx.Module):
-    def __init__(self, quantum_circuit: PQC, rngs: nnx.Rngs):
-        self.quantum_circuit = quantum_circuit
-        # Variational parameters of the PQC (shape depends on the circuit design)
-        self.params = nnx.Param(
-            jax.random.uniform(
-                rngs.params(),
-                shape=quantum_circuit.params_shape,
-                minval=0.0,
-                maxval=2 * jnp.pi,
-            )
-        )
-
-    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        return jnp.array(self.quantum_circuit(x, self.params.value))
+class ConvWeightGenerator(Protocol):
+    def init_params(self, rngs: nnx.Rngs) -> None: ...
+    def __call__(self, rngs: nnx.Rngs) -> tuple[jax.Array, jax.Array]: ...
 
 
-class PQCLinearPPGenerator(nnx.Module):
-    def __init__(self, quantum_circuit: PQC, n_out_linear: int, rngs: nnx.Rngs):
-        self.pqc_module = PQCModule(quantum_circuit, rngs)
-        self.post_processor = nnx.Linear(
-            quantum_circuit.n_qubits, n_out_linear, rngs=rngs
-        )
-
-    def __call__(self, rngs: nnx.Rngs) -> jax.Array:
-        # Sample x from a uniform [0, 2\pi] distribution
-        x = jax.random.uniform(
-            rngs.params(),
-            shape=(),  # TODO: can the shape be more general?
-            minval=0,
-            maxval=2 * jnp.pi,
-        )
-        pqc_out = self.pqc_module(x, rngs)
-        return self.post_processor(pqc_out)
-
-
-class PQCConv1D(nnx.Module):
+class GeneratorConv1D(nnx.Module):
     def __init__(
         self,
         in_features: int,
         out_features: int,
         kernel_size: int,
         padding: str,
-        quantum_circuit: PQC,
+        generator: ConvWeightGenerator,
         *,
         rngs: nnx.Rngs,
     ):
@@ -309,17 +278,12 @@ class PQCConv1D(nnx.Module):
         self.out_features = out_features
         self.kernel_size = kernel_size
         self.padding = padding
-        self.generators = nnx.List(
-            [
-                PQCLinearPPGenerator(
-                    quantum_circuit, n_out_linear=quantum_circuit.n_qubits, rngs=rngs
-                )  # linear pp does not change the output dimension of the PQC.
-                for _ in range(out_features + 1)
-            ]
-        )  # +1 for bias
+        self.generator = generator
 
-        self._kernel_shape = (kernel_size, in_features, out_features)
-        self._bias_shape = (out_features,)
+        self.generator.init_params(rngs)
+
+        # Convolutional bias (deterministic)
+        self.b_conv = nnx.Param(jnp.zeros((self.out_features,)))
 
     def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """Forward pass: generate one set of weights and convolve the batch.
@@ -328,23 +292,16 @@ class PQCConv1D(nnx.Module):
             x: Input with shape (batch, length, in_features).
             rngs: RNGs for weight generation.
         """
-        # Generate kernels and bias from the PQC generators
-        key = rngs.params()
-        keys = jax.random.split(key, len(self.generators))
-        kernels_and_bias = [
-            gen(nnx.Rngs(params=keys[i])) for i, gen in enumerate(self.generators)
-        ]
-        kernel = jnp.stack(kernels_and_bias[:-1], axis=-1).reshape(self._kernel_shape)
-        bias = kernels_and_bias[-1][: self.out_features]  # EV of the first 4 qubits
+        w_conv = self.generator(rngs)
 
         out = jax.lax.conv_general_dilated(
             x,
-            kernel,
+            w_conv,
             window_strides=(1,),
             padding=self.padding,
             dimension_numbers=("NHC", "HIO", "NHC"),
         )
-        return out + bias
+        return out + self.b_conv
 
 
 class LSTM(nnx.Module):

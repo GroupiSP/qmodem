@@ -21,7 +21,7 @@ from qmodem.data import (
     normalize_ruls,
     to_jax,
 )
-from qmodem.module import nll_batched
+from qmodem.module import model_fwd, nll_batched
 from qmodem.tracking import (
     MLFlowSetup,
     track_mlflow,
@@ -42,7 +42,7 @@ from scripts.battery.commons import (
     get_dataframes,
     train_dataloader_builder,
 )
-from scripts.battery.qavi_model import Net
+from scripts.battery.qavi_model import Net, WeightGenerator
 
 
 class Discriminator(nnx.Module):
@@ -71,7 +71,7 @@ class Hyperparameters(TrainHyperparameters):
     learning_rate_generator: float = 1e-3
     learning_rate_discriminator: float = 1e-3
     early_stopping_patience: int = (
-        30  # override (Need more patience for adversarial training)
+        500  # override (Need more patience for adversarial training)
     )
     scheduler_alpha: None = None  # override (No scheduler)
 
@@ -98,17 +98,31 @@ def main() -> None:
 
     mlflow_setup = MLFlowSetup(
         run_name="qavi",
-        experiment_name="one_key_one_datapoint",
+        experiment_name="pqc_extension",
         tags={
             "model": "QAVI",
             "case_study": "battery",
             "stage": "prototyping",
         },
+        run_description="Baseline (refactoring).",
+    )
+
+    # Generator of weights for the convolutional layer
+    w_gen = WeightGenerator(
+        n_qubits=hp.pqc_n_qubits,
+        n_layers=hp.pqc_n_layers,
+        kernel_size=hp.conv_kernel_size,
+        in_features=1,
+        out_features=hp.conv_n_filters,
     )
 
     # Model, schedule, optimizer
     model = Net(
-        rngs=nnx.Rngs(hp.net_init_seed), act_fn=getattr(nnx, hp.activation_function)
+        n_filters=hp.conv_n_filters,
+        kernel_size=hp.conv_kernel_size,
+        generator=w_gen,
+        act_fn=getattr(nnx, hp.activation_function),
+        rngs=nnx.Rngs(hp.net_init_seed),
     )
     discriminator = Discriminator(
         input_dim=hp.window_size
@@ -160,30 +174,33 @@ def main() -> None:
         model: nnx.Module,
         discriminator: nnx.Module,
         batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
+        key: jax.Array,
         optimizer: nnx.Optimizer,
     ) -> jax.Array:
-        def loss_fn(discriminator):
+        def loss_fn(discriminator, model):
             # Build the RNG here to avoid crossing different trace levels.
             eps = 1e-8
 
-            x, y_true = batch
-            rngs = nnx.Rngs(params=keys[0])
+            # NOTE: squeezing the ys makes them of the same shape as the predicted labels.
+            xs, ys_true = batch[0], batch[1].squeeze(-1)
+            key_1, key_2 = jax.random.split(key)
 
-            y_pred = model(x, rngs)  # (1, 2) -> mu, var
-            mu_pred = y_pred[:, :1]  # (1,1)
+            model_keys = jax.random.split(key_1, num=len(xs))
+            y_pred = model_fwd(model, xs, model_keys)  # (1, 2) -> mu, var
+            mu_pred = y_pred[:, 0]  # (1,1)
 
+            rngs = nnx.Rngs(params=key_2)
             proba_real = discriminator(
-                jnp.concatenate([x, y_true[:, :, None]], axis=1), rngs
+                jnp.concatenate([xs, ys_true[:, None, None]], axis=1), rngs
             )
             proba_fake = discriminator(
-                jnp.concatenate([x, mu_pred[:, :, None]], axis=1), rngs
+                jnp.concatenate([xs, mu_pred[:, None, None]], axis=1), rngs
             )
             error = -jnp.log(proba_real + eps) - jnp.log(1 - proba_fake + eps)
 
             return jnp.mean(error.squeeze(-1))
 
-        loss, grads = nnx.value_and_grad(loss_fn)(discriminator)
+        loss, grads = nnx.value_and_grad(loss_fn)(discriminator, model)
         optimizer.update(discriminator, grads)
         return loss
 
@@ -192,35 +209,34 @@ def main() -> None:
         model: nnx.Module,
         discriminator: nnx.Module,
         batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
+        key: jax.Array,
         optimizer: nnx.Optimizer,
     ) -> jax.Array:
         def loss_fn(model):
             eps = 1e-8
 
-            xs, y_true = batch  # xs: (batch, ...), y_true: (batch, 1)
-            rngs = nnx.Rngs(
-                params=keys[0]
-            )  # one key suffices — weights are batch-shared
+            # NOTE: squeezing the ys makes them of the same shape as the predicted labels.
+            xs, ys_true = batch[0], batch[1].squeeze(-1)
 
+            key_1, key_2 = jax.random.split(key)
+
+            model_keys = jax.random.split(key_1, num=len(xs))
             # PQC generates weights once, conv applied to whole batch
-            y_pred = model(xs, rngs)  # (batch, 2)
-            mu_pred = y_pred[:, :1]  # (batch, 1)
+            outputs = model_fwd(model, xs, model_keys)  # (batch, 2)
+            means, stds = outputs[:, 0], outputs[:, 1]  # (batch,), (batch,)
 
+            rngs = nnx.Rngs(params=key_2)
             proba_fake = discriminator(
-                jnp.concatenate([xs, mu_pred[:, :, None]], axis=1), rngs
+                jnp.concatenate([xs, means[:, None, None]], axis=1), rngs
             )  # (batch, 1)
             proba_fake_clipped = jnp.clip(proba_fake, eps, 1 - eps)
             logits = jnp.log(proba_fake_clipped / (1 - proba_fake_clipped))
             adv_error = -logits.squeeze(-1)  # (batch,)
 
             # NLL per sample from already-computed predictions, no second model call
-            mu_pred_1d = y_pred[:, 0]
-            variances_pred_1d = jnp.clip(y_pred[:, 1], min=1e-8)
-            y_true_1d = y_true.squeeze(-1)
+            variances = jnp.clip(jnp.square(stds), min=1e-8)
             nll = (
-                0.5 * jnp.log(variances_pred_1d)
-                + 0.5 * jnp.square(y_true_1d - mu_pred_1d) / variances_pred_1d
+                0.5 * jnp.log(variances) + 0.5 * jnp.square(ys_true - means) / variances
             )  # (batch,)
 
             return jnp.mean(adv_error + nll)
@@ -235,9 +251,10 @@ def main() -> None:
     def eval_step(
         model: nnx.Module,
         batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
+        key: jax.Array,
         optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
+        keys = jax.random.split(key, num=batch[0].shape[0])
         return jnp.mean(nll_batched(model, batch, keys, beta=hp.beta_nll))
 
     optimizer_discriminator = nnx.Optimizer(
