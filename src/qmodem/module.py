@@ -365,7 +365,7 @@ def nll_batched(
     # Add a batch dimension to xs for the model's forward pass
     outputs = model_fwd(model, xs, keys)
     means, variances = outputs[:, 0], outputs[:, 1]
-    variances = jnp.clip(variances, min=1e-6)
+    variances = jnp.clip(variances, min=1e-8)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
 
     if beta > 0:
