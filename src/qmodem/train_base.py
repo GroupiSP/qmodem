@@ -13,6 +13,8 @@ import jax.numpy as jnp
 import mlflow
 import orbax.checkpoint as ocp
 
+from qmodem.module import model_fwd
+
 
 class TrainingPhase(Enum):
     INIT = auto()
@@ -101,20 +103,16 @@ class OutputVarianceTracker:
         self.X_batch = X_batch
         self.n_samples = n_samples
 
-    def _sample(self, model: nnx.Module, key: jax.Array) -> jax.Array:
-        # Sample predictions from the model using the provided key
-        return model(self.X_batch, rngs=nnx.Rngs(default=key))
-
     def __call__(self, phase: TrainingPhase, context: BaseTrainingContext) -> None:
         if phase == TrainingPhase.EPOCH_END:
             context.model.train()  # e.g. MCD
 
             preds = []
             for _ in range(self.n_samples):
-                self.key, subkey = jax.random.split(self.key, num=2)
-                preds.append(self._sample(context.model, subkey))
+                subkeys = jax.random.split(self.key, num=self.X_batch.shape[0])
+                preds.append(model_fwd(context.model, self.X_batch, subkeys))
 
-            preds = jnp.stack(preds, axis=0)  # Shape (n_samples, batch_size)
+            preds = jnp.stack(preds, axis=0)  # Shape (n_samples, batch_size, 2)
             var_preds = jnp.var(preds, axis=0)  # Variance across samples for each input
             mean_var_preds = jnp.mean(
                 var_preds, axis=0
@@ -127,7 +125,7 @@ class OutputVarianceTracker:
                 step=context.epoch,
             )
             mlflow.log_metric(
-                "predictive_std_variance",
+                "predictive_variance_variance",
                 mean_var_preds[1],
                 step=context.epoch,
             )
