@@ -87,7 +87,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters()
+    hp = Hyperparameters(pqc_n_layers=2)
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -97,14 +97,15 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="qavi-1",
+        run_name="qavi-4",
         experiment_name="pqc_extension",
         tags={
             "model": "QAVI",
             "case_study": "battery",
             "stage": "prototyping",
         },
-        run_description="""1. Predictions for the adversarial terms are sampled from the generator and the final Gaussian layer (before they were sampled from the generator only)""",
+        run_description="""1. Predictions for the adversarial terms are sampled from the generator and the final Gaussian layer (before they were sampled from the generator only)
+        \n2. The adversarial loss is now -log(p(D_fake)) and it is weighted by a factor of 0.1, to avoid it dominating the NLL loss.""",
     )
 
     # Generator of weights for the convolutional layer
@@ -222,10 +223,10 @@ def main() -> None:
             eps = 1e-8
 
             # NOTE: squeezing the ys makes them of the same shape as the predicted labels.
-            xs, ys_true = batch[0], batch[1].squeeze(-1)
+            xs = batch[0]
 
             ns = len(xs)  # batch size
-            key_0, key_1, key_2 = jax.random.split(key, num=3)
+            key_0, key_1, key_2, key_3 = jax.random.split(key, num=4)
 
             model_keys = jax.random.split(key_0, num=ns)
             model_out = model_fwd(model, xs, model_keys)  # (1, 2) -> mu, var
@@ -241,17 +242,16 @@ def main() -> None:
                 jnp.concatenate([xs, y_pred[:, None, None]], axis=1), rngs
             )  # (batch, 1)
             proba_fake_clipped = jnp.clip(proba_fake, eps, 1 - eps)
-            logits = jnp.log(proba_fake_clipped / (1 - proba_fake_clipped))
-            adv_error = -logits.squeeze(-1)  # (batch,)
+            neg_log_proba_fake = -jnp.log(proba_fake_clipped)
+            adv_error = neg_log_proba_fake.squeeze(-1)  # (batch,)
 
             # NLL per sample from already-computed predictions, no second model call
-            variances = jnp.clip(jnp.square(sigma_pred), min=1e-8)
-            nll = (
-                0.5 * jnp.log(variances)
-                + 0.5 * jnp.square(ys_true - mu_pred) / variances
-            )  # (batch,)
+            nll = nll_batched(
+                model, batch, jax.random.split(key_3, num=ns), beta=hp.beta_nll
+            )
 
-            return jnp.mean(adv_error + nll)
+            lam = 0.1
+            return jnp.mean(lam * adv_error + nll)
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
