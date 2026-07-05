@@ -248,7 +248,6 @@ def main() -> None:
             neg_log_proba_fake = -jnp.log(proba_fake_clipped)
             adv_error = neg_log_proba_fake.squeeze(-1)  # (batch,)
 
-            # NLL per sample from already-computed predictions, no second model call
             nll = nll_batched(
                 model, batch, jax.random.split(key_3, num=ns), beta=hp.beta_nll
             )
