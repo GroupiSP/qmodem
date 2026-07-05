@@ -17,6 +17,8 @@ DATA_GEN_RUN_ID = "48ce4a61104840c58e892006c1bc7880"
 
 @dataclasses.dataclass
 class TrainHyperparameters:
+    conv_kernel_size: int = 5
+    conv_n_filters: int = 4
     batch_size: int = 32
     window_size: int = 20
     stride: int = 1

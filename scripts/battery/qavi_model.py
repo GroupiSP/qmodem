@@ -3,42 +3,110 @@ from __future__ import annotations
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
-import jaxtyping
 import pennylane as qp
 
-from qmodem.module import PQC, GaussianBlock, PQCConv1D
+from qmodem.module import ConvWeightGenerator, GaussianBlock, GeneratorConv1D
 
 
-class LayeredPQC:
-    def __init__(self, n_qubits: int, n_layers: int):
+class WeightGenerator(nnx.Module):
+    def __init__(
+        self,
+        n_qubits: int,
+        n_layers: int,
+        kernel_size: int,
+        in_features: int,
+        out_features: int,
+    ) -> None:
+        """Generates weights for a 1D convolutional layer using a parameterized quantum
+        circuit (PQC) and a linear layer. The generated weights are those of the kernel,
+        while the bias is assumed to be generated separately or deterministic. The
+        linear layer expands the output of the PQC to match the kernel size.
+
+        Args:
+            n_qubits: Number of qubits in the PQC.
+            n_layers: Number of layers in the PQC.
+            kernel_size: Size of the convolutional kernel.
+            in_features: Number of input features (channels).
+            out_features: Number of output features (filters).
+        """
         self.n_qubits = n_qubits
         self.n_layers = n_layers
-        self.params_shape = (n_layers, n_qubits, 2)  # 2 for RY and RZ angles
-        self.device = qp.device("default.qubit", wires=n_qubits)
-        self.circuit = qp.qnode(self.device, interface="jax")(self._circuit)
+        self.kernel_size = kernel_size
+        self.in_features = in_features
+        self.out_features = out_features
 
-    def _circuit(self, x: float, params: jaxtyping.ArrayLike) -> list[float]:
-        for i in range(self.n_qubits):
-            qp.RY(x, wires=i)
-        for layer in range(self.n_layers):
-            for q in range(self.n_qubits):
-                qp.RY(params[layer, q, 0], wires=q)
-                qp.RZ(params[layer, q, 1], wires=q)
-            for q in range(self.n_qubits):
-                qp.CNOT(wires=[q, (q + 1) % self.n_qubits])
-        return [qp.expval(qp.PauliZ(i)) for i in range(self.n_qubits)]
+        @qp.qnode(device=qp.device("default.qubit", wires=n_qubits), interface="jax")
+        def circuit(x: jax.Array, params: jax.Array) -> list[float]:
+            for i in range(n_qubits):
+                qp.RY(x, wires=i)
+            for layer in range(n_layers):
+                for q in range(n_qubits):
+                    qp.RY(params[layer, q, 0], wires=q)
+                    qp.RZ(params[layer, q, 1], wires=q)
+                for q in range(n_qubits):
+                    qp.CNOT(wires=[q, (q + 1) % n_qubits])
+            return [qp.expval(qp.PauliZ(i)) for i in range(n_qubits)]
 
-    def __call__(self, x: jax.Array, params: jax.Array) -> jax.Array:
-        return jnp.array(self.circuit(x, params))
+        self.circuit = circuit
+
+    @property
+    def w_conv_shape(self) -> tuple[int, int, int]:
+        return (self.kernel_size, self.in_features, self.out_features)
+
+    @property
+    def w_conv_size(self) -> int:
+        return self.kernel_size * self.in_features * self.out_features
+
+    def init_params(self, rngs: nnx.Rngs) -> None:
+        # Parameters of the PQC
+        self.params_circuit = nnx.Param(
+            rngs.params.uniform(
+                shape=(self.n_layers, self.n_qubits, 2),
+                minval=0.0,
+                maxval=2 * jnp.pi,
+            )
+        )
+
+        # Paramers for the linear layer that maps PQC outputs to convolutional weights
+        init_func_linear_w = jax.nn.initializers.he_normal()
+        self.params_linear_w = nnx.Param(
+            init_func_linear_w(rngs.params(), (self.n_qubits, self.w_conv_size))
+        )
+        self.params_linear_b = nnx.Param(jnp.zeros((self.w_conv_size,)))
+
+        return
+
+    def __call__(self, rngs: nnx.Rngs) -> tuple[jax.Array, jax.Array]:
+        """Generate the weights and bias for a 1D convolutional layer.
+
+        Args:
+            in_features: Number of input features (channels).
+            out_features: Number of output features (filters).
+            kernel_size: Size of the convolutional kernel.
+            keys: Random number generator keys.
+        """
+
+        # Generate random input for the PQC
+        x = rngs.uniform(shape=(), minval=0.0, maxval=2 * jnp.pi)
+
+        # Evaluate the PQC
+        pqc_out = jnp.array(self.circuit(x, self.params_circuit))  # (n_qubits,)
+
+        # Linear transformation to map PQC outputs to convolutional weights
+        w_conv = pqc_out @ self.params_linear_w + self.params_linear_b[None]
+
+        return w_conv.reshape(
+            self.w_conv_shape
+        )  # (kernel_size, in_features, out_features)
 
 
 class Net(nnx.Module):
     def __init__(
         self,
-        n_filters: int = 4,
-        kernel_size: int = 5,
+        n_filters: int,
+        kernel_size: int,
+        generator: ConvWeightGenerator,
         act_fn: nnx.Module = nnx.gelu,
-        quantum_circuit: PQC = LayeredPQC(n_qubits=5, n_layers=1),
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -61,12 +129,12 @@ class Net(nnx.Module):
         self.kernel_size = kernel_size
         self.act_fn = act_fn
 
-        self.conv = PQCConv1D(
+        self.conv = GeneratorConv1D(
             in_features=1,
             out_features=n_filters,
             kernel_size=kernel_size,
             padding="VALID",
-            quantum_circuit=quantum_circuit,
+            generator=generator,
             rngs=rngs,
         )
         # GaussianBlock to output mean and variance

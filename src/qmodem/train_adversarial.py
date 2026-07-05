@@ -26,7 +26,7 @@ class TrainStepFn(Protocol):
         model: nnx.Module,
         discriminator: nnx.Module,
         batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
+        key: jax.Array,
         optimizer: nnx.Optimizer,  # can be either the generator or discriminator optimizer, depending on the step function
     ) -> jax.Array: ...
 
@@ -36,7 +36,7 @@ class EvalStepFn(Protocol):
         self,
         model: nnx.Module,
         batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
+        key: jax.Array,
         optimizer: nnx.Optimizer,  # generally unused at eval time. Included for symmetry.
     ) -> jax.Array: ...
 
@@ -193,16 +193,14 @@ def train_loop(
             discriminator_losses = []
             dataloader_train = train_dataloader_builder(epoch)
             for batch in dataloader_train:
-                splits = jax.random.split(key, num=batch[0].shape[0] + 1)
-                key, subkeys = splits[0], splits[1:]
+                key, subkey = jax.random.split(key)
                 generator_loss = generator_batch_fn(
-                    model, discriminator, batch, subkeys, optimizer_generator
+                    model, discriminator, batch, subkey, optimizer_generator
                 )
 
-                splits = jax.random.split(key, num=batch[0].shape[0] + 1)
-                key, subkeys = splits[0], splits[1:]
+                key, subkey = jax.random.split(key)
                 discriminator_loss = discriminator_batch_fn(
-                    model, discriminator, batch, subkeys, optimizer_discriminator
+                    model, discriminator, batch, subkey, optimizer_discriminator
                 )
 
                 generator_losses.append(generator_loss)
@@ -220,10 +218,9 @@ def train_loop(
             val_losses = []
             dataloader_val = val_dataloader_builder(epoch)
             for batch in dataloader_val:
-                splits = jax.random.split(key, num=batch[0].shape[0] + 1)
-                key, subkeys = splits[0], splits[1:]
+                key, subkey = jax.random.split(key)
                 val_losses.append(
-                    eval_batch_fn(model, batch, subkeys, optimizer_generator)
+                    eval_batch_fn(model, batch, subkey, optimizer_generator)
                 )
 
             val_loss = jnp.mean(jnp.array(val_losses)).item()
