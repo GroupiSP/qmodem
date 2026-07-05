@@ -47,7 +47,7 @@ def main() -> None:
         / "battery"
     )
 
-    TRAIN_RUN_ID = "b4ca1f8e9fe949a3921d5d3eb3f41492"
+    TRAIN_RUN_ID = "c95406e133514c2c8d249d35256447bd"
 
     hp = TestHyperparameters()
 

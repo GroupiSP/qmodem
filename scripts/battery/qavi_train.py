@@ -97,7 +97,7 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="qavi-4",
+        run_name="qavi-5",
         experiment_name="pqc_extension",
         tags={
             "model": "QAVI",
@@ -105,7 +105,8 @@ def main() -> None:
             "stage": "prototyping",
         },
         run_description="""1. Predictions for the adversarial terms are sampled from the generator and the final Gaussian layer (before they were sampled from the generator only)
-        \n2. The adversarial loss is now -log(p(D_fake)) and it is weighted by a factor of 0.1, to avoid it dominating the NLL loss.""",
+        \n2. The adversarial loss is now -log(p(D_fake)) and it is weighted by a factor of 0.1, to avoid it dominating the NLL loss.
+        \n3. Corrected generator step, using NLL loss in `module.py` with the correct variances.""",
     )
 
     # Generator of weights for the convolutional layer
