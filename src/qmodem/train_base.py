@@ -109,7 +109,8 @@ class OutputVarianceTracker:
 
             preds = []
             for _ in range(self.n_samples):
-                subkeys = jax.random.split(self.key, num=self.X_batch.shape[0])
+                self.key, key_sample = jax.random.split(self.key)
+                subkeys = jax.random.split(key_sample, num=self.X_batch.shape[0])
                 preds.append(model_fwd(context.model, self.X_batch, subkeys))
 
             preds = jnp.stack(preds, axis=0)  # Shape (n_samples, batch_size, 2)
