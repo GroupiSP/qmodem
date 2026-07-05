@@ -190,11 +190,12 @@ def main() -> None:
 
             model_keys = jax.random.split(key_0, num=ns)
             model_out = model_fwd(model, xs, model_keys)  # (1, 2) -> mu, var
-            mu_pred, sigma_pred = model_out[:, 0], model_out[:, 1]  # (batch,), (batch,)
+            mu_pred, var_pred = model_out[:, 0], model_out[:, 1]  # (batch,), (batch,)
 
             # Sample the output normal distribution
+            std_pred = jnp.sqrt(jnp.clip(var_pred, min=1e-8))  # Ensure std is positive
             y_pred = (
-                jax.random.normal(key_1, shape=(ns,)) * sigma_pred + mu_pred
+                jax.random.normal(key_1, shape=(ns,)) * std_pred + mu_pred
             )  # (batch,)
 
             rngs = nnx.Rngs(params=key_2)
