@@ -76,8 +76,8 @@ class WeightGenerator(nnx.Module):
 
         return
 
-    def __call__(self, rngs: nnx.Rngs) -> tuple[jax.Array, jax.Array]:
-        """Generate the weights and bias for a 1D convolutional layer.
+    def __call__(self, rngs: nnx.Rngs) -> jax.Array:
+        """Generate the weights for a 1D convolutional layer.
 
         Args:
             in_features: Number of input features (channels).
