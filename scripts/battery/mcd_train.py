@@ -61,7 +61,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters()
+    hp = Hyperparameters(early_stopping_patience=20)
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -71,14 +71,13 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="mcd-3",
-        experiment_name="one_key_one_datapoint",
-        run_description="""1. Reseed the data sampler at every epoch, to avoid overfitting to the same data order
-        \n2. Fix labels/predictions shape mismatch in nll_batched""",
+        run_name="mcd",
+        experiment_name="checkpoint_phme_2026",
+        run_description="""Baseline.""",
         tags={
             "model": "MCD",
             "case_study": "battery",
-            "stage": "prototyping",
+            "stage": "publication",
         },
     )
 

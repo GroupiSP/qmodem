@@ -66,16 +66,13 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="hnn-8",
-        experiment_name="one_key_one_datapoint",
-        run_description="""1. Reseed the data sampler at every epoch, to avoid overfitting to the same data order
-        \n2. Increase patience for early stopping,
-        \n3. Fix labels/predictions shape mismatch in nll_batched,
-        \n4. Add output variance callback (should be constant).""",
+        run_name="hnn",
+        experiment_name="checkpoint_phme_2026",
+        run_description="""Baseline.""",
         tags={
             "model": "HNN",
             "case_study": "battery",
-            "stage": "prototyping",
+            "stage": "publication",
         },
     )
 

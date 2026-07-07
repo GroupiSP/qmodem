@@ -63,7 +63,7 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters(conv_layer_type=ConvLayerType.BBB)
+    hp = Hyperparameters(early_stopping_patience=20)
 
     RAW_DATA_DIR = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -73,17 +73,13 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn-2",
-        experiment_name="one_key_one_datapoint",
-        run_description="""1. Reseed the data sampler at every epoch, to avoid overfitting to the same data order
-        \n2. Fix labels/predictions shape mismatch in nll_batched
-        \n3. Change Bayesian conv layer to BBB.
-        \n4. Restore activation function to gelu (was leaky ReLU)
-        """,
+        run_name="bnn",
+        experiment_name="checkpoint_phme_2026",
+        run_description="""Baseline.""",
         tags={
             "model": "BNN",
             "case_study": "battery",
-            "stage": "prototyping",
+            "stage": "publication",
         },
     )
 

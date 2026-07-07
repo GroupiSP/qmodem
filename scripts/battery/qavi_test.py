@@ -47,11 +47,13 @@ def main() -> None:
         / "battery"
     )
 
-    TRAIN_RUN_ID = "c95406e133514c2c8d249d35256447bd"
+    TRAIN_RUN_ID = "d7d63c2dccb54494bacbf2c0dbb078aa"
 
     hp = TestHyperparameters()
 
-    mlflow_setup = MLFlowSetup(experiment_name="pqc_extension", run_id=TRAIN_RUN_ID)
+    mlflow_setup = MLFlowSetup(
+        experiment_name="checkpoint_phme_2026", run_id=TRAIN_RUN_ID
+    )
 
     with track_mlflow(setup=mlflow_setup) as run:
         # Load the mlflow run parameters
