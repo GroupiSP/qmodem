@@ -125,7 +125,8 @@ def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFram
 
     for i, soc_0 in enumerate(soc_0s):
         config = sb.SimulationConfig(
-            current_policy=name_to_policy[hp.current_policy],
+            current_policies=[name_to_policy[hp.current_policy]],
+            policy_choice_distribution=lambda: 0,  # Always choose the first policy
             process_noise_distribution=lambda: rng.normal(
                 loc=hp.process_noise_loc, scale=hp.process_noise_std
             ),
@@ -149,7 +150,10 @@ def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame
 
     for i in range(hp.n_histories_test):
         config = sb.SimulationConfig(
-            current_policy=name_to_policy[hp.current_policy],
+            current_policies=[name_to_policy[hp.current_policy]],
+            policy_choice_distribution=lambda: (
+                0
+            ),  # Always choose the first policy (only one policy in this case)
             process_noise_distribution=lambda: rng.normal(
                 loc=hp.process_noise_loc, scale=hp.process_noise_std
             ),
@@ -180,7 +184,8 @@ def run_sims_from_tzero(
     rng: np.random.Generator, hp: Hyperparameters
 ) -> sb.SimulationResult:
     config = sb.SimulationConfig(
-        current_policy=name_to_policy[hp.current_policy],
+        current_policies=[name_to_policy[hp.current_policy]],
+        policy_choice_distribution=lambda: 0,  # Always choose the first policy
         process_noise_distribution=lambda: rng.normal(
             loc=hp.process_noise_loc, scale=hp.process_noise_std
         ),
