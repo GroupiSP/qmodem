@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum, auto
 from typing import Any
 
+import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
 import pandas as pd
@@ -12,7 +13,20 @@ import simbat as sb
 
 from qmodem.tracking import MLFlowSetup, track_mlflow
 
-# TODO: track the data generator parameters (and the data itself?) with MLFlow.
+
+class VariableDischargeCurrentPolicy:
+    def __init__(self, current_values: list[float], time_values: list[float]) -> None:
+        self.current_values = current_values
+        self.time_values = time_values
+
+    def __call__(self, soc: float, t: float) -> float:
+        """Returns the current values at time `t` for the given SoC values."""
+        for i in range(len(self.time_values) - 1):
+            if self.time_values[i] <= t < self.time_values[i + 1]:
+                return self.current_values[i]
+        return self.current_values[
+            -1
+        ]  # Return the last current value if t exceeds the last time value
 
 
 class ProcessNoiseDistribution(StrEnum):
@@ -23,6 +37,7 @@ class ProcessNoiseDistribution(StrEnum):
 
 class CurrentPolicy(StrEnum):
     CONSTANT = auto()
+    VARIABLE = auto()
 
 
 class VOCModel(StrEnum):
@@ -39,8 +54,15 @@ dist_name_to_params = {
     ProcessNoiseDistribution.ZERO: lambda: {},
 }
 
-policy_name_to_params = {
-    CurrentPolicy.CONSTANT: lambda amplitude: {"amplitude": amplitude},
+name_to_policy = {
+    # Current values in Amperes
+    CurrentPolicy.CONSTANT: sb.simulate.ConstantCurrentDischarge(
+        current_value=-2.8 * 0.75
+    ),
+    CurrentPolicy.VARIABLE: VariableDischargeCurrentPolicy(
+        current_values=[-2.0, -1.0, -4.0, -2.0, -3.0],
+        time_values=[0.0, 600.0, 900.0, 1800.0, 3000.0],
+    ),
 }
 
 ecm_model_name_to_params = {
@@ -51,11 +73,6 @@ ecm_model_name_to_params = {
 @dataclass(frozen=True)
 class Hyperparameters:
     current_policy: CurrentPolicy = CurrentPolicy.CONSTANT
-    current_policy_params: dict[str, float] = field(
-        default_factory=lambda: policy_name_to_params[CurrentPolicy.CONSTANT](
-            amplitude=-2.8 * 0.75
-        )
-    )  # in Amperes, negative for discharge
     voc_model: VOCModel = VOCModel.BUSTOS_BAEZA
     ecm_model: ECMModel = ECMModel.THEVENIN_ZERO_ORDER
     ecm_model_params: dict[str, float] = field(
@@ -108,6 +125,7 @@ def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFram
 
     for i, soc_0 in enumerate(soc_0s):
         config = sb.SimulationConfig(
+            current_policy=name_to_policy[hp.current_policy],
             process_noise_distribution=lambda: rng.normal(
                 loc=hp.process_noise_loc, scale=hp.process_noise_std
             ),
@@ -131,6 +149,7 @@ def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame
 
     for i in range(hp.n_histories_test):
         config = sb.SimulationConfig(
+            current_policy=name_to_policy[hp.current_policy],
             process_noise_distribution=lambda: rng.normal(
                 loc=hp.process_noise_loc, scale=hp.process_noise_std
             ),
@@ -146,6 +165,30 @@ def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame
         out_df = pd.concat([out_df, df], ignore_index=True)
 
     return out_df
+
+
+def plot_current_policy(ax: plt.Axes, hp: Hyperparameters) -> None:
+    t_grid = np.linspace(0, 5000, 100)
+    current_values = [name_to_policy[hp.current_policy](soc=None, t=t) for t in t_grid]
+    ax.plot(t_grid, current_values)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Current")
+    ax.grid()
+
+
+def run_sims_from_tzero(
+    rng: np.random.Generator, hp: Hyperparameters
+) -> sb.SimulationResult:
+    config = sb.SimulationConfig(
+        current_policy=name_to_policy[hp.current_policy],
+        process_noise_distribution=lambda: rng.normal(
+            loc=hp.process_noise_loc, scale=hp.process_noise_std
+        ),
+        measurement_noise_distribution=lambda: 0.0,
+        dt=hp.dt,
+        soc_0=1.0,
+    )
+    return sb.simulate_constant_capacity_simple(n_sim=1_000, config=config)
 
 
 def save_dataframe_to_file(df: pd.DataFrame, path: pathlib.Path) -> None:
@@ -177,16 +220,17 @@ def main() -> None:
         / "battery"
     )
 
-    hp = Hyperparameters()
+    hp = Hyperparameters(
+        current_policy=CurrentPolicy.VARIABLE,
+    )
 
     # MLFlow setup
     run_tags = {
         "case_study": "battery",
         "stage": "data_generation",
-        "publication": "phme26",
     }
     tracking_setup = MLFlowSetup(
-        experiment_name="phme26",
+        experiment_name="reliability_study",
         run_name="generate_discharge_histories",
         tags=run_tags,
     )
@@ -204,6 +248,20 @@ def main() -> None:
 
         track_dataframe(train_df, name="battery_train", context="train")
         track_dataframe(test_df, name="battery_test", context="test")
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plot_current_policy(ax=ax, hp=hp)
+        mlflow.log_figure(fig, artifact_file="current_profile.png")
+
+        res_for_plots = run_sims_from_tzero(rng=train_rng, hp=hp)
+
+        fig, axs = plt.subplots(nrows=1, ncols=4, figsize=(20, 5))
+        sb.plot_rul_results(ax=axs[0], results=[res_for_plots])
+        sb.plot_rul_bars(ax=axs[1], results=[res_for_plots])
+        sb.plot_voltage_results(ax=axs[2], results=[res_for_plots])
+        sb.plot_soc_results(ax=axs[3], results=[res_for_plots])
+
+        mlflow.log_figure(fig, artifact_file="discharge_results.png")
 
 
 if __name__ == "__main__":
