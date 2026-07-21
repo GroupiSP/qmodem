@@ -12,7 +12,7 @@ import simbat as sb
 
 from qmodem.data import DataSource
 
-DATA_GEN_RUN_ID = "4ed02c344321452d9dfbbbab28bf1ba7"
+DATA_GEN_RUN_ID = "c83bbf3fa3d54d4eb4202eded159124e"
 
 RAW_DATA_DIR = (
     pathlib.Path(__file__).resolve().parent.parent.parent
@@ -37,7 +37,7 @@ class VariableDischargeCurrentPolicy:
         ]  # Return the last current value if t exceeds the last time value
 
     def plot(self, ax: plt.Axes) -> None:
-        t_grid = np.linspace(0, 5000, 100)
+        t_grid = np.linspace(0, 10_000, 100)
         current_values = [self(soc=None, t=t) for t in t_grid]
         ax.plot(t_grid, current_values)
         ax.set_xlabel("Time")
@@ -51,7 +51,7 @@ constant_cruise_policy = VariableDischargeCurrentPolicy(
 )
 variable_cruise_policy = VariableDischargeCurrentPolicy(
     current_values=[-4.0, -1.0, -2.0, -1.0],
-    time_values=[0.0, 600.0, 1800.0, 3000.0],
+    time_values=[0.0, 600.0, 1800.0, 4000.0],
 )
 
 

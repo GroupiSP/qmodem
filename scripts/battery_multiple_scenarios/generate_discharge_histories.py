@@ -68,7 +68,7 @@ class Hyperparameters:
     # TODO: noise parameter tracking can be improved by using `dist_name_to_params`. But it
     # is not a prio right now.
     process_noise_loc: float = 0.0
-    process_noise_std: float = 1e-3
+    process_noise_std: float = 5e-3
     measurement_noise_param: Any = None
     soc_range_train_val: tuple[float, float] = (0.05, 1.0)
     train_seed: int = 42
