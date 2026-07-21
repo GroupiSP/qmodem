@@ -97,7 +97,7 @@ def main() -> None:
                 RAW_DATA_DIR / "test.csv", test_case_id=test_case_id
             )
 
-            idxs = np.arange(
+            soc0_idxs = np.arange(
                 stop=len(test_data.time), step=int(run_params_training["window_size"])
             )
 
@@ -107,8 +107,8 @@ def main() -> None:
             # Load process noise parameters from the data generation run.
             data_gen_run = mlflow.get_run(DATA_GEN_RUN_ID)
             sims_iterator = run_discharges_from_intermediate_socs(
-                t0s=test_data.time[idxs],
-                soc_0s=test_data.soc[idxs],
+                t0s=test_data.time[soc0_idxs],
+                soc_0s=test_data.soc[soc0_idxs],
                 process_noise_std=float(data_gen_run.data.params["process_noise_std"]),
                 dt=hp.test_simulation_dt,
             )
@@ -117,8 +117,8 @@ def main() -> None:
             sr_0 = next(sims_iterator)
             eval_time_stamps.append(
                 EvalTimeStamp(
-                    time=test_data.time[idxs[0]],
-                    target=test_data.rul[idxs[0]],
+                    time=test_data.time[soc0_idxs[0]],
+                    target=test_data.rul[soc0_idxs[0]],
                     samples_true=sr_0.times_eod - sr_0.times[0],
                     samples_pred=np.array([]),  # No prediction for the first timestamp
                 )
@@ -127,7 +127,7 @@ def main() -> None:
             i = 1
             for sr in sims_iterator:
                 previous_voltage_window = test_data.voltage[
-                    idxs[i] - int(run_params_training["window_size"]) : idxs[
+                    soc0_idxs[i] - int(run_params_training["window_size"]) : soc0_idxs[
                         i
                     ]  # time-window ends one step before the RUL timestamp
                 ]
@@ -141,8 +141,8 @@ def main() -> None:
 
                 eval_time_stamps.append(
                     EvalTimeStamp(
-                        time=test_data.time[idxs[i]],
-                        target=test_data.rul[idxs[i]],
+                        time=test_data.time[soc0_idxs[i]],
+                        target=test_data.rul[soc0_idxs[i]],
                         samples_true=sr.times_eod - sr.times[0],
                         samples_pred=scaler.inverse_transform(samples_pred),
                     )
