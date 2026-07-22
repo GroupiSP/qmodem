@@ -57,7 +57,7 @@ def main() -> None:
         ],
     )
 
-    hp = TrainHyperparameters(early_stopping_patience=20)
+    hp = TrainHyperparameters()
 
     mlflow_setup = MLFlowSetup(
         run_name="hnn",
