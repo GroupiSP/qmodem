@@ -373,7 +373,7 @@ def nll_batched(
         logger.warning(
             "The beta-NLL loss implementation is untested and might be incorrect for beta > 0. Please use beta=0."
         )
-        losses = losses * jax.lax.stop_gradient(variances) ** beta
+        losses = losses * jax.lax.stop_gradient(variances**beta)
 
     return losses
 
