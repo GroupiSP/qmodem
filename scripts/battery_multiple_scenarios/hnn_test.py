@@ -50,7 +50,7 @@ def main() -> None:
         ],
     )
 
-    TRAIN_RUN_ID = "ad0db44aa0184bbd8cb6377dd92aaf18"
+    TRAIN_RUN_ID = "090e24a3092a4384a4ac19c902d48014"
 
     hp = TestHyperparameters()
 
@@ -97,8 +97,8 @@ def main() -> None:
                 RAW_DATA_DIR / "test.csv", test_case_id=test_case_id
             )
 
-            soc0_idxs = np.arange(
-                stop=len(test_data.time), step=int(run_params_training["window_size"])
+            soc0_idxs = np.linspace(
+                0, len(test_data.time) - 1, hp.test_n_soc0s, dtype=np.int32
             )
 
             # True RUL, distribution and bounds.
@@ -126,8 +126,14 @@ def main() -> None:
 
             i = 1
             for sr in sims_iterator:
+                if soc0_idxs[i] < int(run_params_training["window_size"]):
+                    time_window_start_idx = 0
+                else:
+                    time_window_start_idx = soc0_idxs[i] - int(
+                        run_params_training["window_size"]
+                    )
                 previous_voltage_window = test_data.voltage[
-                    soc0_idxs[i] - int(run_params_training["window_size"]) : soc0_idxs[
+                    time_window_start_idx : soc0_idxs[
                         i
                     ]  # time-window ends one step before the RUL timestamp
                 ]
