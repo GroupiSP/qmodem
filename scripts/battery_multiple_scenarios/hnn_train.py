@@ -71,7 +71,9 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(rngs=nnx.Rngs(hp.net_init_seed))
+    model = Net(
+        rngs=nnx.Rngs(hp.net_init_seed), act_fn=getattr(nnx, hp.activation_function)
+    )
 
     # Build the data sources, including windowing and normalization
     scaler = skpp.MinMaxScaler(feature_range=(0, 1))
