@@ -26,16 +26,19 @@ from scripts.battery_multiple_scenarios.commons import (
     get_test_case_data,
     run_discharges_from_intermediate_socs,
 )
-from scripts.battery_multiple_scenarios.hnn_model import Net
+from scripts.battery_multiple_scenarios.mcd_model import Net
 
 
 def mc_sample_model(
     model: Net, X: np.ndarray, n_samples: int, rng_key: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
-    mu, var = model(X, rngs=nnx.Rngs(dropout=rng_key)).squeeze()  # Shape (2,)
+    samples = []
+    for _ in range(n_samples):
+        rng_key, _ = jax.random.split(rng_key)
+        mu, var = model(X, rngs=nnx.Rngs(dropout=rng_key)).squeeze()  # Shape (2,)
+        samples.append(mu + jnp.sqrt(var) * jax.random.normal(rng_key, shape=(1,)))
+    samples = jnp.array(samples).reshape(-1, 1)  # Shape (n_samples, 1)
 
-    rng_key, _ = jax.random.split(rng_key)
-    samples = mu + jnp.sqrt(var) * jax.random.normal(rng_key, shape=(n_samples, 1))
     return samples, rng_key
 
 
@@ -50,7 +53,7 @@ def main() -> None:
         ],
     )
 
-    TRAIN_RUN_ID = "b82e4aea4e7f43f3b3581b5941374142"
+    TRAIN_RUN_ID = "e2a1bf91637d4ea9a4935cc90f065bac"
 
     hp = TestHyperparameters()
 
@@ -90,7 +93,7 @@ def main() -> None:
         # Random PRNG key for sampling the model.
         key = jax.random.key(hp.test_rng_seed)
 
-        model.eval()
+        model.train()  # Enables MC Dropout.
         test_case_results = []
         for test_case_id in range(10):
             test_data = get_test_case_data(
@@ -150,7 +153,9 @@ def main() -> None:
                         time=test_data.time[soc0_idxs[i]],
                         target=test_data.rul[soc0_idxs[i]],
                         samples_true=sr.times_eod - sr.times[0],
-                        samples_pred=scaler.inverse_transform(samples_pred),
+                        samples_pred=scaler.inverse_transform(
+                            samples_pred
+                        ),  # Placeholder, will be filled later
                     )
                 )
                 i += 1
@@ -207,10 +212,10 @@ def main() -> None:
         )
 
         # Metric 6: bar plot of all metrics per test case.
-        fig, axs = plt.subplots(2, 2, figsize=(10, 6))
-        axs = axs.flatten()
+        fig, axes = plt.subplots(2, 2, figsize=(10, 6))
+        axes = axes.flatten()
         bar_plot_metrics_per_test_case(
-            axes=axs, test_case_results=test_case_results, rul_grid_crps=rul_grid_crps
+            axes=axes, test_case_results=test_case_results, rul_grid_crps=rul_grid_crps
         )
         fig.tight_layout()
         mlflow.log_figure(fig, artifact_file="metrics_per_test_case.png")
