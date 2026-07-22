@@ -193,7 +193,7 @@ class TestCaseResults:
     def average_crps(self, x_grid: np.ndarray) -> float:
         return np.mean([ets.crps(x_grid=x_grid) for ets in self.eval_time_stamps])
 
-    def plot_rul_over_time(self, ax: plt.Axes) -> None:
+    def plot_rul_over_time(self, ax: plt.Axes, legend: bool = True) -> None:
         ax.plot(
             self._times,
             [rt for rt in [ets.target for ets in self.eval_time_stamps]],
@@ -224,8 +224,9 @@ class TestCaseResults:
         ax.set_ylabel("RUL (s)")
         ax.set_ylim(bottom=0)
         ax.grid()
-        ax.legend()
 
+        if legend:
+            ax.legend()
         return
 
 
