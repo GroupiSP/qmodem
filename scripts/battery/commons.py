@@ -14,6 +14,10 @@ from qmodem.data import DataSource
 
 DATA_GEN_RUN_ID = "48ce4a61104840c58e892006c1bc7880"
 
+BATTERY_DATA_DIR = (
+    pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "battery"
+)
+
 
 @dataclasses.dataclass
 class TrainHyperparameters:
