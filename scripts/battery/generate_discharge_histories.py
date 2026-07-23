@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import pathlib
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum, auto
@@ -11,22 +12,12 @@ import numpy as np
 import pandas as pd
 import simbat as sb
 
+from qmodem.battery.policies import (
+    ConstantDischargeCurrentPolicy,
+    plot_current_profile,
+)
 from qmodem.tracking import MLFlowSetup, track_mlflow
-
-
-class VariableDischargeCurrentPolicy:
-    def __init__(self, current_values: list[float], time_values: list[float]) -> None:
-        self.current_values = current_values
-        self.time_values = time_values
-
-    def __call__(self, soc: float, t: float) -> float:
-        """Returns the current values at time `t` for the given SoC values."""
-        for i in range(len(self.time_values) - 1):
-            if self.time_values[i] <= t < self.time_values[i + 1]:
-                return self.current_values[i]
-        return self.current_values[
-            -1
-        ]  # Return the last current value if t exceeds the last time value
+from scripts.battery.commons import BATTERY_DATA_DIR
 
 
 class ProcessNoiseDistribution(StrEnum):
@@ -54,25 +45,16 @@ dist_name_to_params = {
     ProcessNoiseDistribution.ZERO: lambda: {},
 }
 
-name_to_policy = {
-    # Current values in Amperes
-    CurrentPolicy.CONSTANT: sb.simulate.ConstantCurrentDischarge(
-        current_value=-2.8 * 0.75
-    ),
-    CurrentPolicy.VARIABLE: VariableDischargeCurrentPolicy(
-        current_values=[-2.0, -1.0, -4.0, -2.0, -3.0],
-        time_values=[0.0, 600.0, 900.0, 1800.0, 3000.0],
-    ),
-}
 
 ecm_model_name_to_params = {
     ECMModel.THEVENIN_ZERO_ORDER: lambda r0: {"r0": r0},
 }
 
+constant_discharge_policy = ConstantDischargeCurrentPolicy(current_value=-2.8 * 0.75)
+
 
 @dataclass(frozen=True)
 class Hyperparameters:
-    current_policy: CurrentPolicy = CurrentPolicy.CONSTANT
     voc_model: VOCModel = VOCModel.BUSTOS_BAEZA
     ecm_model: ECMModel = ECMModel.THEVENIN_ZERO_ORDER
     ecm_model_params: dict[str, float] = field(
@@ -92,9 +74,6 @@ class Hyperparameters:
     measurement_noise_distribution: ProcessNoiseDistribution = (
         ProcessNoiseDistribution.ZERO
     )
-    # TODO: noise parameter tracking can be improved by using `dist_name_to_params`. But it
-    # is not a prio right now.
-    process_noise_loc: float = 0.0
     process_noise_std: float = 3e-3
     measurement_noise_param: Any = None
     soc_range_train_val: tuple[float, float] = (0.05, 1.0)
@@ -114,26 +93,48 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
     return None
 
 
-def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame:
-    soc_0s = rng.uniform(
-        low=hp.soc_range_train_val[0],
-        high=hp.soc_range_train_val[1],
-        size=hp.n_histories_train + hp.n_histories_val,
+def process_noise_distribution(
+    *,
+    rng: np.random.Generator,
+    process_noise_std: float,
+    process_noise_loc: float = 0.0,
+) -> float:
+    return rng.normal(loc=process_noise_loc, scale=process_noise_std)
+
+
+def measurement_noise_distribution() -> float:
+    return 0.0
+
+
+def make_simulator_config(
+    rng: np.random.Generator, hp: Hyperparameters
+) -> sb.SimulationConfig:
+    """Creates a simulation configuration for the battery discharge simulation.
+
+    Args:
+        rng: A NumPy random number generator for reproducibility.
+        hp: Hyperparameters for the simulation.
+    """
+    return sb.SimulationConfig(
+        current_policies=[constant_discharge_policy],
+        process_noise_distribution=functools.partial(
+            process_noise_distribution,
+            rng=rng,
+            process_noise_std=hp.process_noise_std,
+        ),
+        measurement_noise_distribution=measurement_noise_distribution,
+        dt=hp.dt,
+        soc_0=1.0,
     )
 
+
+def write_histories(
+    rng: np.random.Generator, hp: Hyperparameters, n_histories: int
+) -> pd.DataFrame:
     out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
 
-    for i, soc_0 in enumerate(soc_0s):
-        config = sb.SimulationConfig(
-            current_policies=[name_to_policy[hp.current_policy]],
-            policy_choice_distribution=lambda: 0,  # Always choose the first policy
-            process_noise_distribution=lambda: rng.normal(
-                loc=hp.process_noise_loc, scale=hp.process_noise_std
-            ),
-            measurement_noise_distribution=lambda: 0.0,
-            dt=hp.dt,
-            soc_0=soc_0,
-        )
+    for i in range(n_histories):
+        config = make_simulator_config(rng=rng, hp=hp)
         result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
         df = result.to_dataframe()
 
@@ -143,57 +144,6 @@ def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFram
         out_df = pd.concat([out_df, df], ignore_index=True)
 
     return out_df
-
-
-def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame:
-    out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
-
-    for i in range(hp.n_histories_test):
-        config = sb.SimulationConfig(
-            current_policies=[name_to_policy[hp.current_policy]],
-            policy_choice_distribution=lambda: (
-                0
-            ),  # Always choose the first policy (only one policy in this case)
-            process_noise_distribution=lambda: rng.normal(
-                loc=hp.process_noise_loc, scale=hp.process_noise_std
-            ),
-            measurement_noise_distribution=lambda: 0.0,
-            dt=hp.dt,
-            soc_0=1.0,
-        )
-        result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
-        df = result.to_dataframe()
-
-        _modify_dataframe(df, i)
-
-        out_df = pd.concat([out_df, df], ignore_index=True)
-
-    return out_df
-
-
-def plot_current_policy(ax: plt.Axes, hp: Hyperparameters) -> None:
-    t_grid = np.linspace(0, 5000, 100)
-    current_values = [name_to_policy[hp.current_policy](soc=None, t=t) for t in t_grid]
-    ax.plot(t_grid, current_values)
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Current")
-    ax.grid()
-
-
-def run_sims_from_tzero(
-    rng: np.random.Generator, hp: Hyperparameters
-) -> sb.SimulationResult:
-    config = sb.SimulationConfig(
-        current_policies=[name_to_policy[hp.current_policy]],
-        policy_choice_distribution=lambda: 0,  # Always choose the first policy
-        process_noise_distribution=lambda: rng.normal(
-            loc=hp.process_noise_loc, scale=hp.process_noise_std
-        ),
-        measurement_noise_distribution=lambda: 0.0,
-        dt=hp.dt,
-        soc_0=1.0,
-    )
-    return sb.simulate_constant_capacity_simple(n_sim=1_000, config=config)
 
 
 def save_dataframe_to_file(df: pd.DataFrame, path: pathlib.Path) -> None:
@@ -206,28 +156,7 @@ def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
 
 
 def main() -> None:
-    """Single access point to generate the training, validation and test discharge
-    histories and save them to disk.
-
-    Train/validation data generation:
-    - 100 discharge histories for training, 20 for validation.
-    - Initial SoC sampled uniformly from [0.05, 1.0].
-    - Same RNG for reproducibility.
-
-    Test data generation:
-    - 10 test cases.
-    - Different RNG to ensure independent test data.
-    """
-    BATTERY_DATA_DIR = (
-        pathlib.Path(__file__).resolve().parent.parent.parent
-        / "data"
-        / "raw"
-        / "battery"
-    )
-
-    hp = Hyperparameters(
-        current_policy=CurrentPolicy.VARIABLE,
-    )
+    hp = Hyperparameters()
 
     # MLFlow setup
     run_tags = {
@@ -235,8 +164,8 @@ def main() -> None:
         "stage": "data_generation",
     }
     tracking_setup = MLFlowSetup(
-        experiment_name="reliability_study",
-        run_name="generate_discharge_histories",
+        experiment_name="refactoring_jul_2026",
+        run_name="gen",
         tags=run_tags,
     )
     with track_mlflow(tracking_setup):
@@ -245,20 +174,32 @@ def main() -> None:
 
         mlflow.log_params(asdict(hp))
 
-        train_df = generate_train(train_rng, hp)
-        test_df = generate_test(test_rng, hp)
+        # Data generation
+        train_df = write_histories(
+            train_rng, hp, n_histories=hp.n_histories_train + hp.n_histories_val
+        )
+        test_df = write_histories(test_rng, hp, n_histories=hp.n_histories_test)
 
+        # Saving/tracking
         save_dataframe_to_file(train_df, path=BATTERY_DATA_DIR / "train.csv")
         save_dataframe_to_file(test_df, path=BATTERY_DATA_DIR / "test.csv")
 
         track_dataframe(train_df, name="battery_train", context="train")
         track_dataframe(test_df, name="battery_test", context="test")
 
+        # Plotting
         fig, ax = plt.subplots(figsize=(8, 6))
-        plot_current_policy(ax=ax, hp=hp)
+        plot_current_profile(
+            ax=ax, policy=constant_discharge_policy, t_grid=np.linspace(0, 6_000, 100)
+        )
         mlflow.log_figure(fig, artifact_file="current_profile.png")
 
-        res_for_plots = run_sims_from_tzero(rng=train_rng, hp=hp)
+        res_for_plots = sb.simulate_constant_capacity_simple(
+            n_sim=1_000,
+            config=make_simulator_config(
+                rng=np.random.default_rng(seed=hp.train_seed + 1), hp=hp
+            ),
+        )
 
         fig, axs = plt.subplots(nrows=1, ncols=4, figsize=(20, 5))
         sb.plot_rul_results(ax=axs[0], results=[res_for_plots])
@@ -267,6 +208,19 @@ def main() -> None:
         sb.plot_soc_results(ax=axs[3], results=[res_for_plots])
 
         mlflow.log_figure(fig, artifact_file="discharge_results.png")
+
+        # Make another plot for the voltage discharge of the first 10 test cases
+        fig, axs = plt.subplots(nrows=2, ncols=5, figsize=(20, 10))
+        for i in range(10):
+            ax = axs[i // 5, i % 5]
+            test_case_df = test_df[test_df["run_id"] == i]
+            ax.plot(test_case_df["time"], test_case_df["voltage"])
+            ax.set_title(f"Test Case {i}")
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Voltage (V)")
+            ax.grid()
+        fig.tight_layout()
+        mlflow.log_figure(fig, artifact_file="test_case_voltage_discharge.png")
 
 
 if __name__ == "__main__":

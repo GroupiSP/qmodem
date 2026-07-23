@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import simbat as sb
 
+from qmodem.battery.policies import VariableDischargeCurrentPolicy
 from qmodem.data import DataSource
 
 DATA_GEN_RUN_ID = "c83bbf3fa3d54d4eb4202eded159124e"
@@ -20,31 +21,6 @@ RAW_DATA_DIR = (
     / "raw"
     / "battery_multiple_scenarios"
 )
-
-
-class VariableDischargeCurrentPolicy:
-    def __init__(self, current_values: list[float], time_values: list[float]) -> None:
-        self.current_values = current_values
-        self.time_values = time_values
-
-    def __call__(self, soc: float, t: float) -> float:
-        """Returns the current values at time `t` for the given SoC values."""
-        for i in range(len(self.time_values) - 1):
-            if self.time_values[i] <= t < self.time_values[i + 1]:
-                return self.current_values[i]
-        return self.current_values[
-            -1
-        ]  # Return the last current value if t exceeds the last time value
-
-    def plot(self, ax: plt.Axes) -> None:
-        t_grid = np.linspace(0, 10_000, 100)
-        current_values = [self(soc=None, t=t) for t in t_grid]
-        ax.plot(t_grid, current_values)
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Current")
-        ax.grid()
-
-
 constant_cruise_policy = VariableDischargeCurrentPolicy(
     current_values=[-4.0, -1.0],
     time_values=[0.0, 600.0],
