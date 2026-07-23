@@ -368,12 +368,11 @@ def nll_batched(
     variances = jnp.clip(variances, min=1e-8)
     losses = 0.5 * jnp.log(variances) + 0.5 * jnp.square(labels - means) / variances
 
-    if beta > 0:
-        # TODO: This implementation of the beta-NLL loss might be wrong. Revisit.
-        logger.warning(
-            "The beta-NLL loss implementation is untested and might be incorrect for beta > 0. Please use beta=0."
-        )
-        losses = losses * jax.lax.stop_gradient(variances**beta)
+    # beta-NLL loss (https://arxiv.org/abs/2203.09168)
+    w = jax.lax.stop_gradient(variances) ** beta
+    losses = (
+        losses * w / jnp.mean(w)
+    )  # Normalize by the mean of the weights to keep the loss scale consistent across different beta values.
 
     return losses
 
