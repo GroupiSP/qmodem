@@ -57,12 +57,12 @@ def main() -> None:
         ],
     )
 
-    hp = TrainHyperparameters()
+    hp = TrainHyperparameters(beta_nll=0.5, early_stopping_patience=50)
 
     mlflow_setup = MLFlowSetup(
-        run_name="hnn",
+        run_name="hnn-3",
         experiment_name="variable_loading_conditions",
-        run_description="""Baseline.""",
+        run_description="""Beta=0.5 NLL.""",
         tags={
             "model": "HNN",
             "case_study": "battery",
@@ -136,7 +136,7 @@ def main() -> None:
         keys: jax.Array,
         optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
-        return jnp.mean(nll_batched(model, batch, keys, beta=hp.beta_nll))
+        return jnp.mean(nll_batched(model, batch, keys, beta=0.0))
 
     schedule = optax.cosine_decay_schedule(
         init_value=hp.learning_rate,

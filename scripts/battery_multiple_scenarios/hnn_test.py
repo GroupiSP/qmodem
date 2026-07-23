@@ -50,7 +50,7 @@ def main() -> None:
         ],
     )
 
-    TRAIN_RUN_ID = "b82e4aea4e7f43f3b3581b5941374142"
+    TRAIN_RUN_ID = "d6d142895f27463292ebe8023dbc8e06"
 
     hp = TestHyperparameters()
 
