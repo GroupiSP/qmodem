@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Generator
 
 import mlflow
+import pandas as pd
 
 from .utils import ROOT_DIR
 
@@ -107,3 +108,8 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
 # TODO: implement
 def get_tags_from_mlflow_run(run_id: str) -> dict[str, str]:
     pass
+
+
+def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
+    dataset = mlflow.data.from_pandas(df, name=name)
+    mlflow.log_input(dataset=dataset, context=context)
