@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-from typing import Iterator
 
 import grain
-import numpy as np
 import pandas as pd
-import simbat as sb
 
 from qmodem.data import DataSource
 
-DATA_GEN_RUN_ID = "48ce4a61104840c58e892006c1bc7880"
-
+# TODO: remove and load from env
 BATTERY_DATA_DIR = (
     pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "battery"
 )
@@ -74,20 +70,3 @@ def train_dataloader_builder(
     )
 
     return dataloader_train
-
-
-def run_discharges_from_intermediate_socs(
-    soc_0s: np.ndarray, process_noise_std: float, dt: float
-) -> Iterator[sb.SimulationResult]:
-    for soc_0 in soc_0s:
-        # TODO: simulation config parameters should be loaded from mlflow.
-        config = sb.SimulationConfig(
-            process_noise_distribution=lambda: np.random.normal(
-                loc=0.0, scale=process_noise_std
-            ),
-            measurement_noise_distribution=lambda: 0.0,
-            dt=dt,
-            soc_0=soc_0,
-        )
-        result = sb.simulate_constant_capacity_simple(n_sim=100, config=config)
-        yield result
