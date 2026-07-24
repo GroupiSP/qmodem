@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-import io
-import logging
 import os
 import pathlib
 
@@ -39,7 +37,7 @@ from qmodem.train_base import (
     OutputVarianceTracker,
     mlflow_track_model_best_state,
 )
-from qmodem.utils import count_parameters
+from qmodem.utils import count_parameters, setup_script_logging
 from scripts.battery.commons import (
     TrainHyperparameters,
     get_dataframes,
@@ -81,15 +79,7 @@ class Hyperparameters(TrainHyperparameters):
 def main() -> None:
     load_dotenv()
 
-    log_stream = io.StringIO()
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        handlers=[
-            logging.StreamHandler(),  # console (stderr)
-            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
-        ],
-    )
+    log_stream = setup_script_logging()
 
     hp = Hyperparameters(pqc_n_layers=2)
 

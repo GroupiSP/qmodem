@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import io
 import logging
 import os
 import pathlib
@@ -40,6 +39,7 @@ from qmodem.battery.models import (
 from qmodem.battery.scoring import EvalTimeStamp
 from qmodem.module import mc_sample
 from qmodem.tracking import MLFlowSetup, track_mlflow
+from qmodem.utils import setup_script_logging
 
 
 @dataclasses.dataclass
@@ -55,15 +55,7 @@ class Hyperparameters:
 def main() -> None:
     load_dotenv()
 
-    log_stream = io.StringIO()
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        handlers=[
-            logging.StreamHandler(),  # console (stderr)
-            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
-        ],
-    )
+    log_stream = setup_script_logging()
 
     RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 

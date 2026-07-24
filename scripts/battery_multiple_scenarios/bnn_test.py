@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import logging
 import os
 import pathlib
 
@@ -12,20 +10,13 @@ from dotenv import load_dotenv
 from qmodem.battery.evaluate import Hyperparameters, run_evaluation
 from qmodem.battery.models import BayesianCNN
 from qmodem.tracking import MLFlowSetup
+from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
     load_dotenv()
 
-    log_stream = io.StringIO()
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        handlers=[
-            logging.StreamHandler(),  # console (stderr)
-            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
-        ],
-    )
+    log_stream = setup_script_logging()
 
     TRAIN_RUN_ID = "a7145df57fed4061a8eaf82f38c6b049"
 

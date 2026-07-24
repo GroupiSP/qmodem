@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import logging
 import os
 import pathlib
 
@@ -11,20 +9,13 @@ from dotenv import load_dotenv
 from qmodem.battery.evaluate import Hyperparameters, run_evaluation
 from qmodem.battery.models import MCDropoutCNN
 from qmodem.tracking import MLFlowSetup
+from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
     load_dotenv()
 
-    log_stream = io.StringIO()
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        handlers=[
-            logging.StreamHandler(),  # console (stderr)
-            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
-        ],
-    )
+    log_stream = setup_script_logging()
 
     TRAIN_RUN_ID = "29b4a225a607499eb7557f19b3c70b30"
 
