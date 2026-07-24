@@ -41,13 +41,13 @@ class TrainHyperparameters:
 
 
 def get_dataframes(
-    train_path: pathlib.Path, test_path: pathlib.Path
+    train_path: pathlib.Path, test_path: pathlib.Path, n_histories_train: int
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     train_df = pd.read_csv(train_path)
     # Split the train dataframe: if the run ID is < 100, then it goes in the training set, otherwise in the validation set. This way we ensure that the same RNG seed will always produce the same split.
     train_df, val_df = (
-        train_df[train_df["run_id"] < 100],
-        train_df[train_df["run_id"] >= 100],
+        train_df[train_df["run_id"] < n_histories_train],
+        train_df[train_df["run_id"] >= n_histories_train],
     )
     test_df = pd.read_csv(test_path)
     return train_df, val_df, test_df

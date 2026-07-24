@@ -4,6 +4,8 @@ import dataclasses
 import functools
 import io
 import logging
+import os
+import pathlib
 
 import flax.nnx as nnx
 import jax
@@ -11,6 +13,7 @@ import jax.numpy as jnp
 import mlflow
 import optax
 import sklearn.preprocessing as skpp
+from dotenv import load_dotenv
 
 from qmodem.battery.models import HeteroscedasticCNN
 from qmodem.data import (
@@ -38,8 +41,6 @@ from qmodem.train_base import (
 )
 from qmodem.utils import count_parameters
 from scripts.battery_multiple_scenarios.commons import (
-    DATA_GEN_RUN_ID,
-    RAW_DATA_DIR,
     TrainHyperparameters,
     get_dataframes,
     train_dataloader_builder,
@@ -47,6 +48,8 @@ from scripts.battery_multiple_scenarios.commons import (
 
 
 def main() -> None:
+    load_dotenv()
+
     log_stream = io.StringIO()
     logging.basicConfig(
         level=logging.INFO,
@@ -58,6 +61,8 @@ def main() -> None:
     )
 
     hp = TrainHyperparameters(beta_nll=0.5, early_stopping_patience=50)
+
+    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 
     mlflow_setup = MLFlowSetup(
         run_name="hnn-3",
@@ -105,7 +110,7 @@ def main() -> None:
             to_jax,
         ]
     )
-    data_gen_run = mlflow.get_run(DATA_GEN_RUN_ID)
+    data_gen_run = mlflow.get_run(os.environ["DATA_GEN_RUN_ID"])
     train_df, val_df, _ = get_dataframes(
         RAW_DATA_DIR / "train.csv",
         RAW_DATA_DIR / "test.csv",

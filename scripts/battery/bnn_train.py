@@ -4,6 +4,7 @@ import dataclasses
 import functools
 import io
 import logging
+import os
 import pathlib
 
 import flax.nnx as nnx
@@ -12,8 +13,9 @@ import jax.numpy as jnp
 import mlflow
 import optax
 import sklearn.preprocessing as skpp
+from dotenv import load_dotenv
 
-from qmodem.battery.models import BayesianCNN, ConvLayerType
+from qmodem.battery.models import BayesianCNN
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
@@ -47,12 +49,9 @@ from scripts.battery.commons import (
 )
 
 
-@dataclasses.dataclass
-class Hyperparameters(TrainHyperparameters):
-    conv_layer_type: str = ConvLayerType.FLIPOUT
-
-
 def main() -> None:
+    load_dotenv()
+
     log_stream = io.StringIO()
     logging.basicConfig(
         level=logging.INFO,
@@ -63,14 +62,9 @@ def main() -> None:
         ],
     )
 
-    hp = Hyperparameters(early_stopping_patience=20)
+    hp = TrainHyperparameters()
 
-    RAW_DATA_DIR = (
-        pathlib.Path(__file__).resolve().parent.parent.parent
-        / "data"
-        / "raw"
-        / "battery"
-    )
+    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 
     mlflow_setup = MLFlowSetup(
         run_name="bnn",
@@ -121,8 +115,11 @@ def main() -> None:
         ]
     )
 
+    data_gen_run = mlflow.get_run(os.environ["DATA_GEN_RUN_ID"])
     train_df, val_df, _ = get_dataframes(
-        RAW_DATA_DIR / "train.csv", RAW_DATA_DIR / "test.csv"
+        RAW_DATA_DIR / "train.csv",
+        RAW_DATA_DIR / "test.csv",
+        n_histories_train=int(data_gen_run.data.params["n_histories_train"]),
     )
 
     ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline_train)

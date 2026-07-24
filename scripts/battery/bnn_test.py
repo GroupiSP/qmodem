@@ -17,6 +17,7 @@ from qmodem.tracking import MLFlowSetup
 def main() -> None:
     load_dotenv()
 
+    # TODO: move to a common function for all scripts
     log_stream = io.StringIO()
     logging.basicConfig(
         level=logging.INFO,
