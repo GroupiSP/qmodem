@@ -130,7 +130,7 @@ def main() -> None:
         keys: jax.Array,
         optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
     ) -> jax.Array:
-        return jnp.mean(nll_batched(model, batch, keys, beta=0.0))
+        return jnp.mean(nll_batched(model, batch, keys, beta=hp.beta_nll))
 
     schedule = optax.cosine_decay_schedule(
         init_value=hp.learning_rate,
