@@ -2,32 +2,11 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-from typing import Iterator
 
 import grain
-import numpy as np
 import pandas as pd
-import simbat as sb
 
-from qmodem.battery.policies import VariableDischargeCurrentPolicy
 from qmodem.data import DataSource
-
-DATA_GEN_RUN_ID = "c83bbf3fa3d54d4eb4202eded159124e"
-
-RAW_DATA_DIR = (
-    pathlib.Path(__file__).resolve().parent.parent.parent
-    / "data"
-    / "raw"
-    / "battery_multiple_scenarios"
-)
-constant_cruise_policy = VariableDischargeCurrentPolicy(
-    current_values=[-4.0, -1.0],
-    time_values=[0.0, 600.0],
-)
-variable_cruise_policy = VariableDischargeCurrentPolicy(
-    current_values=[-4.0, -1.0, -2.0, -1.0],
-    time_values=[0.0, 600.0, 1800.0, 4000.0],
-)
 
 
 @dataclasses.dataclass
@@ -50,20 +29,6 @@ class TrainHyperparameters:
     scheduler_alpha: float = 0.1
     n_samples_predictive_mean_variance: int = 100
     activation_function: str = "gelu"
-
-
-@dataclasses.dataclass(frozen=True)
-class TestHyperparameters:
-    """The `test_` prefix is used to distinguish these hyperparameters from the ones
-    used for training."""
-
-    test_rng_seed: int = 123
-    test_n_soc0s: int = 20
-    test_n_mc_samples: int = 100
-    test_grid_crps_start: float = 0.0
-    test_grid_crps_end: float = 5000.0
-    test_grid_crps_num: int = 100
-    test_simulation_dt: float = 20.0
 
 
 def get_dataframes(
@@ -100,23 +65,3 @@ def train_dataloader_builder(
     )
 
     return dataloader_train
-
-
-def run_discharges_from_intermediate_socs(
-    t0s: np.ndarray, soc_0s: np.ndarray, process_noise_std: float, dt: float
-) -> Iterator[sb.SimulationResult]:
-    for t0, soc_0 in zip(t0s, soc_0s):
-        # TODO: simulation config should be loaded from the data generation run.
-        config = sb.SimulationConfig(
-            current_policies=[constant_cruise_policy, variable_cruise_policy],
-            policy_choice_distribution=lambda: np.random.choice([0, 1], p=[0.7, 0.3]),
-            process_noise_distribution=lambda: np.random.normal(
-                loc=0.0, scale=process_noise_std
-            ),
-            measurement_noise_distribution=lambda: 0.0,
-            dt=dt,
-            soc_0=soc_0,
-            t_0=t0,
-        )
-        result = sb.simulate_constant_capacity_simple(n_sim=100, config=config)
-        yield result

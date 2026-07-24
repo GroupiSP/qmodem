@@ -8,11 +8,6 @@ import pandas as pd
 
 from qmodem.data import DataSource
 
-# TODO: remove and load from env
-BATTERY_DATA_DIR = (
-    pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "battery"
-)
-
 
 @dataclasses.dataclass
 class TrainHyperparameters:

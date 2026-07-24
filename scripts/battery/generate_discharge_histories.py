@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import dataclasses
 import functools
-from dataclasses import asdict
+import os
+import pathlib
 
 import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
-import pandas as pd
 import simbat as sb
+from dotenv import load_dotenv
 
 from qmodem.battery.data_generation import (
     Hyperparameters,
@@ -21,21 +23,8 @@ from qmodem.battery.policies import (
     plot_current_profile,
 )
 from qmodem.tracking import MLFlowSetup, track_dataframe, track_mlflow
-from scripts.battery.commons import BATTERY_DATA_DIR
 
 constant_discharge_policy = ConstantDischargeCurrentPolicy(current_value=-2.8 * 0.75)
-
-
-def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
-    df.drop(
-        columns=["rul_probability", "eod_reached_sim_0"], inplace=True
-    )  # Drop the RUL probability column
-    df.rename(
-        columns={"time": "time", "soc_sim_0": "soc", "voltage_sim_0": "voltage"},
-        inplace=True,
-    )
-    df.insert(0, "run_id", run_id)  # Add a run_id column for tracking
-    return None
 
 
 def make_simulator_config(
@@ -61,7 +50,11 @@ def make_simulator_config(
 
 
 def main() -> None:
+    load_dotenv()
+
     hp = Hyperparameters(dt=20.0)
+
+    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 
     # MLFlow setup
     run_tags = {
@@ -77,7 +70,7 @@ def main() -> None:
         train_rng = np.random.default_rng(seed=hp.train_seed)
         test_rng = np.random.default_rng(seed=hp.test_seed)
 
-        mlflow.log_params(asdict(hp))
+        mlflow.log_params(dataclasses.asdict(hp))
 
         # Data generation
         train_df = write_histories(
@@ -91,8 +84,8 @@ def main() -> None:
         log_simulation_config(test_config)
 
         # Saving/tracking
-        train_df.to_csv(BATTERY_DATA_DIR / "train.csv", index=False)
-        test_df.to_csv(BATTERY_DATA_DIR / "test.csv", index=False)
+        train_df.to_csv(RAW_DATA_DIR / "train.csv", index=False)
+        test_df.to_csv(RAW_DATA_DIR / "test.csv", index=False)
 
         track_dataframe(train_df, name="battery_train", context="train")
         track_dataframe(test_df, name="battery_test", context="test")

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import dataclasses
 import functools
-from dataclasses import asdict
+import os
+import pathlib
 
 import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
 import simbat as sb
+from dotenv import load_dotenv
 
 from qmodem.battery.data_generation import (
     Hyperparameters,
@@ -15,14 +18,8 @@ from qmodem.battery.data_generation import (
     log_simulation_config,
     write_histories,
 )
-from qmodem.battery.policies import (
-    VariableDischargeCurrentPolicy,
-    plot_current_profile,
-)
+from qmodem.battery.policies import VariableDischargeCurrentPolicy, plot_current_profile
 from qmodem.tracking import MLFlowSetup, track_dataframe, track_mlflow
-from scripts.battery_multiple_scenarios.commons import (
-    RAW_DATA_DIR,
-)
 
 constant_cruise_policy = VariableDischargeCurrentPolicy(
     current_values=[-4.0, -1.0],
@@ -59,7 +56,11 @@ def make_simulator_config(
 
 
 def main() -> None:
+    load_dotenv()
+
     hp = Hyperparameters()
+
+    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 
     # MLFlow setup
     run_tags = {
@@ -75,7 +76,8 @@ def main() -> None:
     with track_mlflow(tracking_setup):
         train_rng = np.random.default_rng(seed=hp.train_seed)
         test_rng = np.random.default_rng(seed=hp.test_seed)
-        mlflow.log_params(asdict(hp))
+
+        mlflow.log_params(dataclasses.asdict(hp))
 
         train_df = write_histories(
             make_simulator_config(train_rng, hp),
