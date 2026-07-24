@@ -33,7 +33,7 @@ class TrainHyperparameters:
     learning_rate: float = 1e-2
     n_epochs: int = 500
     beta_nll: float = 0.0
-    early_stopping_patience: int = 10
+    early_stopping_patience: int = 20
     early_stopping_min_delta: float = 1e-4
     scheduler_alpha: float = 0.1
     n_samples_predictive_mean_variance: int = 100
