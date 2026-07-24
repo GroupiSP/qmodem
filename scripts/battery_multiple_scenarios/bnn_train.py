@@ -12,6 +12,7 @@ import mlflow
 import optax
 import sklearn.preprocessing as skpp
 
+from qmodem.battery.models import BayesianCNN, ConvLayerType
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
@@ -38,7 +39,6 @@ from qmodem.train_base import (
     mlflow_track_model_best_state,
 )
 from qmodem.utils import count_parameters
-from scripts.battery_multiple_scenarios.bnn_model import ConvLayerType, Net
 from scripts.battery_multiple_scenarios.commons import (
     DATA_GEN_RUN_ID,
     RAW_DATA_DIR,
@@ -78,7 +78,7 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(
+    model = BayesianCNN(
         rngs=nnx.Rngs(hp.net_init_seed),
         layer_type=hp.conv_layer_type,
         act_fn=getattr(nnx, hp.activation_function),

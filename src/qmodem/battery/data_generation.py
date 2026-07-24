@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import dataclasses
+import pathlib
+import pickle
+import tempfile
 from enum import StrEnum, auto
+from typing import Any, Iterable, Iterator, Mapping
 
+import mlflow
+import numpy as np
 import pandas as pd
 import simbat as sb
 
@@ -35,6 +41,57 @@ class Hyperparameters:
     test_seed: int = 123
 
 
+def gaussian_noise(*, rng: np.random.Generator, noise_std: float) -> float:
+    """Draw a zero-mean Gaussian noise sample.
+
+    Module-level (picklable) replacement for lambda-based noise distributions.
+    """
+    return rng.normal(loc=0.0, scale=noise_std)
+
+
+def always_first_policy() -> int:
+    """Deterministically select the first current policy.
+
+    Picklable replacement for the
+    default lambda of ``SimulationConfig.policy_choice_distribution``.
+    """
+    return 0
+
+
+def bernoulli_policy_choice(*, rng: np.random.Generator, p: tuple[float, float]) -> int:
+    """Stochastically select between the first two current policies.
+
+    Picklable replacement for lambda-based policy choice.
+    """
+    return int(rng.choice([0, 1], p=p))
+
+
+def log_simulation_config(
+    config: sb.SimulationConfig, artifact_file: str = "simulation_config.pkl"
+) -> None:
+    """Pickle a :class:`simbat.SimulationConfig` and log it as an MLflow artifact.
+
+    The config must be free of lambdas/closures so that it is picklable with the
+    standard library ``pickle`` (all callables should be module-level functions,
+    ``functools.partial`` of module-level functions, or picklable class instances).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / artifact_file
+        path.write_bytes(pickle.dumps(config))
+        mlflow.log_artifact(str(path))
+
+
+def load_simulation_config(
+    run_id: str, artifact_file: str = "simulation_config.pkl"
+) -> sb.SimulationConfig:
+    """Download and unpickle a :class:`simbat.SimulationConfig` logged with
+    :func:`log_simulation_config` from the given MLflow run."""
+    path = mlflow.artifacts.download_artifacts(
+        run_id=run_id, artifact_path=artifact_file
+    )
+    return pickle.loads(pathlib.Path(path).read_bytes())
+
+
 def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
     df.drop(
         columns=["rul_probability", "eod_reached_sim_0"], inplace=True
@@ -60,3 +117,25 @@ def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFra
         out_df = pd.concat([out_df, df], ignore_index=True)
 
     return out_df
+
+
+def run_discharges_from_intermediate_socs(
+    config: sb.SimulationConfig,
+    overrides: Iterable[Mapping[str, Any]],
+    n_sim: int = 100,
+) -> Iterator[sb.SimulationResult]:
+    """Run Monte Carlo discharge simulations from a set of intermediate starting states.
+
+    Args:
+        config: Base simulation config (e.g. loaded from the data-generation run).
+        overrides: One mapping of ``SimulationConfig`` field overrides per starting
+            point, applied via :func:`dataclasses.replace` (typically ``soc_0`` and
+            ``t_0``).
+        n_sim: Number of Monte Carlo particles per discharge.
+
+    Yields:
+        One :class:`simbat.SimulationResult` per override.
+    """
+    for override in overrides:
+        cfg = dataclasses.replace(config, **override)
+        yield sb.simulate_constant_capacity_simple(n_sim=n_sim, config=cfg)

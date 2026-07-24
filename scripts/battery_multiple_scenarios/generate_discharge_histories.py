@@ -8,7 +8,13 @@ import mlflow
 import numpy as np
 import simbat as sb
 
-from qmodem.battery.data_generation import Hyperparameters, write_histories
+from qmodem.battery.data_generation import (
+    Hyperparameters,
+    bernoulli_policy_choice,
+    gaussian_noise,
+    log_simulation_config,
+    write_histories,
+)
 from qmodem.battery.policies import (
     VariableDischargeCurrentPolicy,
     plot_current_profile,
@@ -28,18 +34,6 @@ variable_cruise_policy = VariableDischargeCurrentPolicy(
 )
 
 
-def policy_choice_distribution(*, rng: np.random.Generator) -> int:
-    return rng.choice([0, 1], p=[0.7, 0.3])
-
-
-def gaussian_noise(
-    *,
-    rng: np.random.Generator,
-    noise_std: float,
-) -> float:
-    return rng.normal(loc=0.0, scale=noise_std)
-
-
 def make_simulator_config(
     rng: np.random.Generator,
     hp: Hyperparameters,
@@ -47,7 +41,7 @@ def make_simulator_config(
     return sb.SimulationConfig(
         current_policies=[constant_cruise_policy, variable_cruise_policy],
         policy_choice_distribution=functools.partial(
-            policy_choice_distribution, rng=rng
+            bernoulli_policy_choice, rng=rng, p=(0.7, 0.3)
         ),
         process_noise_distribution=functools.partial(
             gaussian_noise,
@@ -87,9 +81,11 @@ def main() -> None:
             make_simulator_config(train_rng, hp),
             n_histories=hp.n_histories_train + hp.n_histories_val,
         )
-        test_df = write_histories(
-            make_simulator_config(test_rng, hp), n_histories=hp.n_histories_test
-        )
+        test_config = make_simulator_config(test_rng, hp)
+        test_df = write_histories(test_config, n_histories=hp.n_histories_test)
+
+        # Log the test simulation config so it can be reloaded at evaluation time.
+        log_simulation_config(test_config)
 
         train_df.to_csv(RAW_DATA_DIR / "train.csv", index=False)
         test_df.to_csv(RAW_DATA_DIR / "test.csv", index=False)

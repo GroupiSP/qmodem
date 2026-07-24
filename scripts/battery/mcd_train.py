@@ -13,6 +13,7 @@ import mlflow
 import optax
 import sklearn.preprocessing as skpp
 
+from qmodem.battery.models import MCDropoutCNN
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
@@ -42,7 +43,6 @@ from scripts.battery.commons import (
     get_dataframes,
     train_dataloader_builder,
 )
-from scripts.battery.mcd_model import Net
 
 
 @dataclasses.dataclass
@@ -82,7 +82,7 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(rngs=nnx.Rngs(hp.net_init_seed), dropout_rate=hp.dropout_rate)
+    model = MCDropoutCNN(rngs=nnx.Rngs(hp.net_init_seed), dropout_rate=hp.dropout_rate)
 
     # Build the data sources, including windowing and normalization
     scaler = skpp.MinMaxScaler(feature_range=(0, 1))

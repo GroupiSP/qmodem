@@ -10,7 +10,6 @@ import pandas as pd
 import simbat as sb
 
 from qmodem.battery.policies import VariableDischargeCurrentPolicy
-from qmodem.battery.scoring import DischargeData
 from qmodem.data import DataSource
 
 DATA_GEN_RUN_ID = "c83bbf3fa3d54d4eb4202eded159124e"
@@ -101,27 +100,6 @@ def train_dataloader_builder(
     )
 
     return dataloader_train
-
-
-def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
-    """Return the discharge data for a given test case ID from the test CSV file.
-
-    Args:
-        test_path (pathlib.Path): Path to the test CSV file.
-        test_case_id (int): ID of the test case to retrieve.
-
-    Returns:
-        DischargeData: Discharge data for the specified test case.
-    """
-    df_test = pd.read_csv(test_path)
-    df_test_case_i = df_test[df_test["run_id"] == test_case_id]
-    time = df_test_case_i["time"].values
-    return DischargeData(
-        time=time,
-        soc=df_test_case_i["soc"].values,
-        voltage=df_test_case_i["voltage"].values,
-        rul=time[-1] - time,
-    )
 
 
 def run_discharges_from_intermediate_socs(

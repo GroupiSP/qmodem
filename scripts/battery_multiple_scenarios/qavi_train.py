@@ -12,6 +12,7 @@ import mlflow
 import optax
 import sklearn.preprocessing as skpp
 
+from qmodem.battery.models import QuantumVICNN, WeightGenerator
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
@@ -43,7 +44,6 @@ from scripts.battery_multiple_scenarios.commons import (
     get_dataframes,
     train_dataloader_builder,
 )
-from scripts.battery_multiple_scenarios.qavi_model import Net, WeightGenerator
 
 
 class Discriminator(nnx.Module):
@@ -108,7 +108,7 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(
+    model = QuantumVICNN(
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,
         generator=w_gen,

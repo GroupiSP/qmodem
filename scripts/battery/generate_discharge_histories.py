@@ -9,7 +9,13 @@ import numpy as np
 import pandas as pd
 import simbat as sb
 
-from qmodem.battery.data_generation import Hyperparameters, write_histories
+from qmodem.battery.data_generation import (
+    Hyperparameters,
+    always_first_policy,
+    gaussian_noise,
+    log_simulation_config,
+    write_histories,
+)
 from qmodem.battery.policies import (
     ConstantDischargeCurrentPolicy,
     plot_current_profile,
@@ -32,20 +38,13 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
     return None
 
 
-def gaussian_noise(
-    *,
-    rng: np.random.Generator,
-    noise_std: float,
-) -> float:
-    return rng.normal(loc=0.0, scale=noise_std)
-
-
 def make_simulator_config(
     rng: np.random.Generator,
     hp: Hyperparameters,
 ) -> sb.SimulationConfig:
     return sb.SimulationConfig(
         current_policies=[constant_discharge_policy],
+        policy_choice_distribution=always_first_policy,
         process_noise_distribution=functools.partial(
             gaussian_noise,
             rng=rng,
@@ -85,9 +84,11 @@ def main() -> None:
             make_simulator_config(train_rng, hp),
             n_histories=hp.n_histories_train + hp.n_histories_val,
         )
-        test_df = write_histories(
-            make_simulator_config(test_rng, hp), n_histories=hp.n_histories_test
-        )
+        test_config = make_simulator_config(test_rng, hp)
+        test_df = write_histories(test_config, n_histories=hp.n_histories_test)
+
+        # Log the test simulation config so it can be reloaded at evaluation time.
+        log_simulation_config(test_config)
 
         # Saving/tracking
         train_df.to_csv(BATTERY_DATA_DIR / "train.csv", index=False)

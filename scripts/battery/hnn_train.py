@@ -13,6 +13,7 @@ import mlflow
 import optax
 import sklearn.preprocessing as skpp
 
+from qmodem.battery.models import HeteroscedasticCNN
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
@@ -42,7 +43,6 @@ from scripts.battery.commons import (
     get_dataframes,
     train_dataloader_builder,
 )
-from scripts.battery.hnn_model import Net
 
 
 def main() -> None:
@@ -77,7 +77,7 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(rngs=nnx.Rngs(hp.net_init_seed))
+    model = HeteroscedasticCNN(rngs=nnx.Rngs(hp.net_init_seed))
 
     # Build the data sources, including windowing and normalization
     scaler = skpp.MinMaxScaler(feature_range=(0, 1))

@@ -15,19 +15,29 @@ import orbax.checkpoint as ocp
 import sklearn.preprocessing as skpp
 from matplotlib import pyplot as plt
 
+from qmodem.battery.models import (
+    BayesianCNN as BnnNet,
+)
+from qmodem.battery.models import (
+    HeteroscedasticCNN as HnnNet,
+)
+from qmodem.battery.models import (
+    MCDropoutCNN as McdNet,
+)
+from qmodem.battery.models import (
+    QuantumVICNN as QaviNet,
+)
+from qmodem.battery.models import (
+    WeightGenerator,
+)
 from qmodem.battery.scoring import EvalTimeStamp
 from qmodem.module import mc_sample
 from qmodem.tracking import MLFlowSetup, track_mlflow
-from scripts.battery.bnn_model import Net as BnnNet
 from scripts.battery.commons import (
     DATA_GEN_RUN_ID,
     get_test_case_data,
     run_discharges_from_intermediate_socs,
 )
-from scripts.battery.hnn_model import Net as HnnNet
-from scripts.battery.mcd_model import Net as McdNet
-from scripts.battery.qavi_model import Net as QaviNet
-from scripts.battery.qavi_model import WeightGenerator
 
 
 @dataclasses.dataclass

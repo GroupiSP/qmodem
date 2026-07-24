@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import simbat as sb
 
-from qmodem.battery.scoring import DischargeData
 from qmodem.data import DataSource
 
 DATA_GEN_RUN_ID = "48ce4a61104840c58e892006c1bc7880"
@@ -39,20 +38,6 @@ class TrainHyperparameters:
     scheduler_alpha: float = 0.1
     n_samples_predictive_mean_variance: int = 100
     activation_function: str = "gelu"
-
-
-@dataclasses.dataclass(frozen=True)
-class TestHyperparameters:
-    """The `test_` prefix is used to distinguish these hyperparameters from the ones
-    used for training."""
-
-    test_rng_seed: int = 123
-    test_n_soc0s: int = 10
-    test_n_mc_samples: int = 100
-    test_grid_crps_start: float = 0.0
-    test_grid_crps_end: float = 5000.0
-    test_grid_crps_num: int = 100
-    test_simulation_dt: float = 20.0
 
 
 def get_dataframes(
@@ -89,27 +74,6 @@ def train_dataloader_builder(
     )
 
     return dataloader_train
-
-
-def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
-    """Return the discharge data for a given test case ID from the test CSV file.
-
-    Args:
-        test_path (pathlib.Path): Path to the test CSV file.
-        test_case_id (int): ID of the test case to retrieve.
-
-    Returns:
-        DischargeData: Discharge data for the specified test case.
-    """
-    df_test = pd.read_csv(test_path)
-    df_test_case_i = df_test[df_test["run_id"] == test_case_id]
-    time = df_test_case_i["time"].values
-    return DischargeData(
-        time=time,
-        soc=df_test_case_i["soc"].values,
-        voltage=df_test_case_i["voltage"].values,
-        rul=time[-1] - time,
-    )
 
 
 def run_discharges_from_intermediate_socs(

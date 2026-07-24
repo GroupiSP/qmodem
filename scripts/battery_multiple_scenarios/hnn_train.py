@@ -12,6 +12,7 @@ import mlflow
 import optax
 import sklearn.preprocessing as skpp
 
+from qmodem.battery.models import HeteroscedasticCNN
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
@@ -43,7 +44,6 @@ from scripts.battery_multiple_scenarios.commons import (
     get_dataframes,
     train_dataloader_builder,
 )
-from scripts.battery_multiple_scenarios.hnn_model import Net
 
 
 def main() -> None:
@@ -71,7 +71,7 @@ def main() -> None:
     )
 
     # Model, schedule, optimizer
-    model = Net(
+    model = HeteroscedasticCNN(
         rngs=nnx.Rngs(hp.net_init_seed), act_fn=getattr(nnx, hp.activation_function)
     )
 
