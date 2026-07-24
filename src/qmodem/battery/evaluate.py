@@ -53,7 +53,7 @@ class Hyperparameters:
     used for training."""
 
     test_rng_seed: int = 123
-    test_n_soc0s: int = 10
+    test_n_soc0s: int = 20
     test_n_mc_samples: int = 100
     test_grid_crps_start: float = 0.0
     test_grid_crps_end: float = 5000.0

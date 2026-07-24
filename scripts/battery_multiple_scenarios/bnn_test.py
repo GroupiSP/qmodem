@@ -20,8 +20,7 @@ def main() -> None:
 
     TRAIN_RUN_ID = "a7145df57fed4061a8eaf82f38c6b049"
 
-    # TODO: set the **default** number of test SOC_0s to 20.
-    hp = Hyperparameters(test_n_soc0s=20)
+    hp = Hyperparameters()
 
     mlflow_setup = MLFlowSetup(
         experiment_name="variable_loading_conditions", run_id=TRAIN_RUN_ID
