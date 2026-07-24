@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from enum import StrEnum, auto
-
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
@@ -9,7 +7,6 @@ import pennylane as qp
 
 from qmodem.module import (
     ConvWeightGenerator,
-    FlipoutConv1D,
     GaussianBlock,
     GeneratorConv1D,
     StandardBayesConv1D,
@@ -183,39 +180,11 @@ class MCDropoutCNN(nnx.Module):
         return jnp.array(samples).reshape(-1, 1)
 
 
-class ConvLayerType(StrEnum):
-    BBB = auto()
-    FLIPOUT = auto()
-
-
-_map_to_layer = {
-    ConvLayerType.BBB: lambda rngs, in_features, out_features, kernel_size: (
-        StandardBayesConv1D(
-            in_features=in_features,
-            out_features=out_features,
-            kernel_size=kernel_size,
-            padding="VALID",
-            rngs=rngs,
-        )
-    ),
-    ConvLayerType.FLIPOUT: lambda rngs, in_features, out_features, kernel_size: (
-        FlipoutConv1D(
-            in_features=in_features,
-            out_features=out_features,
-            kernel_size=kernel_size,
-            padding="VALID",
-            rngs=rngs,
-        )
-    ),
-}
-
-
 class BayesianCNN(nnx.Module):
     def __init__(
         self,
         n_filters: int = 4,
         kernel_size: int = 5,
-        layer_type: ConvLayerType = ConvLayerType.FLIPOUT,
         act_fn: nnx.Module = nnx.gelu,
         *,
         rngs: nnx.Rngs,
@@ -230,7 +199,6 @@ class BayesianCNN(nnx.Module):
         Args:
             n_filters: Number of convolutional filters. Defaults to 4.
             kernel_size: Size of the convolutional kernel. Defaults to 5.
-            layer_type: Type of convolutional layer. Defaults to flipout perturbation.
             act_fn: Activation function. Defaults to ``nnx.gelu``.
             rngs: RNGs for the flax internal modules.
         """
@@ -238,8 +206,12 @@ class BayesianCNN(nnx.Module):
         self.kernel_size = kernel_size
         self.act_fn = act_fn
 
-        self.conv = _map_to_layer[layer_type](
-            rngs=rngs, in_features=1, out_features=n_filters, kernel_size=kernel_size
+        self.conv = StandardBayesConv1D(
+            in_features=1,
+            out_features=n_filters,
+            kernel_size=kernel_size,
+            padding="VALID",
+            rngs=rngs,
         )
         # GaussianBlock to output mean and variance
         self.gauss = GaussianBlock(n_filters, 1, rngs=rngs)

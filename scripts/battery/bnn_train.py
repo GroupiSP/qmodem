@@ -69,7 +69,6 @@ def main() -> None:
     # Model, schedule, optimizer
     model = BayesianCNN(
         rngs=nnx.Rngs(hp.net_init_seed),
-        layer_type=hp.conv_layer_type,
         act_fn=getattr(nnx, hp.activation_function),
     )
 

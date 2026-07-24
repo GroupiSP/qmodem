@@ -13,7 +13,7 @@ import optax
 import sklearn.preprocessing as skpp
 from dotenv import load_dotenv
 
-from qmodem.battery.models import BayesianCNN, ConvLayerType
+from qmodem.battery.models import BayesianCNN
 from qmodem.data import (
     DataFrameSource,
     DataPipeline,
@@ -46,17 +46,12 @@ from scripts.battery_multiple_scenarios.commons import (
 )
 
 
-@dataclasses.dataclass
-class Hyperparameters(TrainHyperparameters):
-    conv_layer_type: str = ConvLayerType.BBB
-
-
 def main() -> None:
     load_dotenv()
 
     log_stream = setup_script_logging()
 
-    hp = Hyperparameters()
+    hp = TrainHyperparameters()
 
     RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 
@@ -74,7 +69,6 @@ def main() -> None:
     # Model, schedule, optimizer
     model = BayesianCNN(
         rngs=nnx.Rngs(hp.net_init_seed),
-        layer_type=hp.conv_layer_type,
         act_fn=getattr(nnx, hp.activation_function),
     )
 

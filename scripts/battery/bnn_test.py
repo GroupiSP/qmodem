@@ -32,7 +32,6 @@ def main() -> None:
     params = mlflow.get_run(TRAIN_RUN_ID).data.params
     model = BayesianCNN(
         rngs=nnx.Rngs(0),
-        layer_type=params["conv_layer_type"],
         act_fn=getattr(nnx, params["activation_function"]),
     )  # RNGs won't be used for inference, so the seed is arbitrary.
 
