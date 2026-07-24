@@ -53,7 +53,7 @@ def main() -> None:
         raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR"]),
         data_gen_run_id=os.environ["DATA_GEN_RUN_ID"],
         log_stream=log_stream,
-        train_mode=True,  # Enables weight sampling.
+        train_mode=False,  # Only relevant for MC Dropout
     )
 
 
