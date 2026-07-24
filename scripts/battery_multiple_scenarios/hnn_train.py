@@ -34,7 +34,6 @@ from qmodem.train import (
 )
 from qmodem.train_base import (
     EarlyStopper,
-    OutputVarianceTracker,
     mlflow_track_model_best_state,
 )
 from qmodem.utils import count_parameters, setup_script_logging
@@ -149,15 +148,6 @@ def main() -> None:
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
 
-        key = jax.random.key(hp.train_rng_seed)
-        key, subkey = jax.random.split(key)
-
-        batch_variance_tracking = ds_val[
-            jax.random.choice(
-                subkey, len(ds_val), shape=(hp.batch_size,), replace=False
-            )
-        ]
-
         train_loop(
             n_epochs=hp.n_epochs,
             train_dataloader_builder=functools.partial(
@@ -169,7 +159,7 @@ def main() -> None:
             val_dataloader_builder=lambda n: [
                 (ds_val.X, ds_val.y)
             ],  # single "batch" = whole val set, because no SGD happens at eval time
-            initial_key=key,
+            initial_key=jax.random.key(hp.train_rng_seed),
             model=model,
             optimizer=optimizer,
             train_batch_fn=train_step,
@@ -178,11 +168,6 @@ def main() -> None:
                 LogReporter(log_every=10),
                 mlflow_track_model_best_state,
                 mlflow_track_losses,
-                OutputVarianceTracker(
-                    base_key=subkey,
-                    X_batch=batch_variance_tracking[0],
-                    n_samples=hp.n_samples_predictive_mean_variance,
-                ),
             ],
             early_stopper=early_stopper,
         )

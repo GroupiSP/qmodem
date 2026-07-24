@@ -9,11 +9,8 @@ from typing import Callable
 
 import flax.nnx as nnx
 import jax
-import jax.numpy as jnp
 import mlflow
 import orbax.checkpoint as ocp
-
-from qmodem.module import model_fwd
 
 
 class TrainingPhase(Enum):
@@ -91,42 +88,3 @@ def mlflow_track_model_best_state(
             checkpointer.save(ckpt_path, context.model_best_state)
             time.sleep(0.1)  # let Orbax finish async writes
             mlflow.log_artifacts(str(ckpt_path), artifact_path="best_model_state")
-
-
-class OutputVarianceTracker:
-    def __init__(
-        self, base_key: jax.Array, X_batch: jax.Array, n_samples: int = 100
-    ) -> None:
-        """Callback to track the variance of the predictive mean over a batch of
-        inputs."""
-        self.key = base_key
-        self.X_batch = X_batch
-        self.n_samples = n_samples
-
-    def __call__(self, phase: TrainingPhase, context: BaseTrainingContext) -> None:
-        if phase == TrainingPhase.EPOCH_END:
-            context.model.train()  # e.g. MCD
-
-            preds = []
-            for _ in range(self.n_samples):
-                self.key, key_sample = jax.random.split(self.key)
-                subkeys = jax.random.split(key_sample, num=self.X_batch.shape[0])
-                preds.append(model_fwd(context.model, self.X_batch, subkeys))
-
-            preds = jnp.stack(preds, axis=0)  # Shape (n_samples, batch_size, 2)
-            var_preds = jnp.var(preds, axis=0)  # Variance across samples for each input
-            mean_var_preds = jnp.mean(
-                var_preds, axis=0
-            )  # Mean variance across the batch
-
-            context.model.eval()
-            mlflow.log_metric(
-                "predictive_mean_variance",
-                mean_var_preds[0],
-                step=context.epoch,
-            )
-            mlflow.log_metric(
-                "predictive_variance_variance",
-                mean_var_preds[1],
-                step=context.epoch,
-            )
