@@ -18,6 +18,10 @@ from qmodem.module import (
     mc_sample as _mc_sample,
 )
 
+# TODO: There should be a single backbone CNN class that includes dropout (MCD only if mode=train during inference)
+# TODO: The final layer should be an input argument to the network initializer.
+# TODO: The convolutional layer should be an input argument to the network initializer (standard, bayesian, flipout, generator).
+
 
 class HeteroscedasticCNN(nnx.Module):
     def __init__(
