@@ -56,11 +56,11 @@ def make_simulator_config(
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
 
     hp = Hyperparameters()
 
-    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
+    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
 
     # MLFlow setup
     run_tags = {
