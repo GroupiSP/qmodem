@@ -19,8 +19,8 @@ def main() -> None:
     hp = QAVITrainHyperparameters(pqc_n_layers=2)
 
     mlflow_setup = MLFlowSetup(
-        run_name="qavi",
-        experiment_name="variable_loading_conditions",
+        run_name="dummy_qavi",
+        experiment_name="refactoring_jul_2026",
         tags={
             "model": "QAVI",
             "case_study": "battery",
@@ -58,8 +58,8 @@ def main() -> None:
         discriminator=discriminator,
         hp=hp,
         mlflow_setup=mlflow_setup,
-        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR"]),
-        data_gen_run_id=os.environ["DATA_GEN_RUN_ID"],
+        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+        data_gen_run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
         log_stream=log_stream,
         generator_batch_fn=generator_step,
         discriminator_batch_fn=discriminator_step,

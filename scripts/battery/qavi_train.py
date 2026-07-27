@@ -22,8 +22,8 @@ def main() -> None:
     )
 
     mlflow_setup = MLFlowSetup(
-        run_name="qavi",
-        experiment_name="checkpoint_phme_2026",
+        run_name="dummy_qavi",
+        experiment_name="refactoring_jul_2026",
         tags={
             "model": "QAVI",
             "case_study": "battery",

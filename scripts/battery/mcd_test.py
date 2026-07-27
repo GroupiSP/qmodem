@@ -17,12 +17,12 @@ def main() -> None:
 
     log_stream = setup_script_logging()
 
-    TRAIN_RUN_ID = "29b4a225a607499eb7557f19b3c70b30"
+    TRAIN_RUN_ID = "303b8f4f795d41b9808fc2c3dda16c2d"
 
     hp = Hyperparameters()
 
     mlflow_setup = MLFlowSetup(
-        experiment_name="checkpoint_phme_2026", run_id=TRAIN_RUN_ID
+        experiment_name="refactoring_jul_2026", run_id=TRAIN_RUN_ID
     )
 
     model = MCDropoutCNN(

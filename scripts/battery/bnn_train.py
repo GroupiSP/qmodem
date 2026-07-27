@@ -20,13 +20,13 @@ def main() -> None:
     hp = TrainHyperparameters()
 
     mlflow_setup = MLFlowSetup(
-        run_name="bnn",
-        experiment_name="checkpoint_phme_2026",
+        run_name="dummy_bnn",
+        experiment_name="refactoring_jul_2026",
         run_description="""Baseline.""",
         tags={
             "model": "BNN",
             "case_study": "battery",
-            "stage": "publication",
+            "stage": "prototyping",
         },
     )
     model = BayesianCNN(

@@ -18,12 +18,12 @@ def main() -> None:
 
     log_stream = setup_script_logging()
 
-    TRAIN_RUN_ID = "d7d63c2dccb54494bacbf2c0dbb078aa"
+    TRAIN_RUN_ID = "12b2b1280f5142ec81d5c3ca0367029b"
 
     hp = Hyperparameters()
 
     mlflow_setup = MLFlowSetup(
-        experiment_name="checkpoint_phme_2026", run_id=TRAIN_RUN_ID
+        experiment_name="refactoring_jul_2026", run_id=TRAIN_RUN_ID
     )
 
     # Build the model from the training-run parameters before opening the tracking

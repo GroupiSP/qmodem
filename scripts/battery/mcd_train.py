@@ -19,12 +19,12 @@ def main() -> None:
 
     mlflow_setup = MLFlowSetup(
         run_name="mcd",
-        experiment_name="checkpoint_phme_2026",
+        experiment_name="refactoring_jul_2026",
         run_description="""Baseline.""",
         tags={
             "model": "MCD",
             "case_study": "battery",
-            "stage": "publication",
+            "stage": "prototyping",
         },
     )
     model = MCDropoutCNN(
