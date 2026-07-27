@@ -77,8 +77,10 @@ class MLFlowSetup:
         if self.tracking_server is not None:
             raise NotImplementedError("Remote tracking server is not supported yet.")
         if self.backend_store is None:
-            self.backend_store = os.environ.get(
-                "MLFLOW_BACKEND_STORE", "sqlite:///mlflow.db"
+            object.__setattr__(
+                self,
+                "backend_store",
+                os.environ.get("MLFLOW_BACKEND_STORE", "sqlite:///mlflow.db"),
             )
 
 
