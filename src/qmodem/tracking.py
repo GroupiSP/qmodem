@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -58,7 +59,7 @@ class MLFlowSetup:
         run_id: Optional existing run ID to resume. If None, a new run is created.
         run_description: Optional description for the MLflow run.
         tags: Arbitrary key-value tags attached to the run.
-        backend_store: SQLAlchemy URI for the MLflow backend store.
+        backend_store: SQLAlchemy URI for the MLflow backend store. Defaults to the value of the `MLFLOW_BACKEND_STORE` environment variable or `sqlite:///mlflow.db` if not set.
         artifact_store: Local path where artifacts are stored.
         tracking_server: Remote tracking server URI (not yet supported).
     """
@@ -68,13 +69,17 @@ class MLFlowSetup:
     run_id: str | None = None
     run_description: str | None = None
     tags: dict[str, Any] = field(default_factory=dict)
-    backend_store: str = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
+    backend_store: str | None = None
     artifact_store: str | Path = ROOT_DIR / "mlruns"
     tracking_server: str | None = None
 
     def __post_init__(self):
         if self.tracking_server is not None:
             raise NotImplementedError("Remote tracking server is not supported yet.")
+        if self.backend_store is None:
+            self.backend_store = os.environ.get(
+                "MLFLOW_BACKEND_STORE", "sqlite:///mlflow.db"
+            )
 
 
 @contextmanager
