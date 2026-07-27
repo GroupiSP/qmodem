@@ -69,7 +69,7 @@ def main() -> None:
     }
     tracking_setup = MLFlowSetup(
         experiment_name="refactoring_jul_2026",
-        run_name="gen_multiple",
+        run_name="generate_dummy_multiple",
         tags=run_tags,
     )
 
