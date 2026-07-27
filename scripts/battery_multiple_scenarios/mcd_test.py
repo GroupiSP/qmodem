@@ -13,7 +13,7 @@ from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
 
     log_stream = setup_script_logging()
 

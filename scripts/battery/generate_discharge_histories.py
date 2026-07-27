@@ -50,7 +50,7 @@ def make_simulator_config(
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
 
     hp = Hyperparameters(dt=20.0)
 
