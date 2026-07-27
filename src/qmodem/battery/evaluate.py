@@ -152,8 +152,14 @@ def evaluate_test_case(
 
     i = 1
     for sr in sims_iterator:
+        if soc0_idxs[i] < int(window_size):
+            time_window_start_idx = 0
+        else:
+            time_window_start_idx = soc0_idxs[i] - int(window_size)
         previous_voltage_window = test_data.voltage[
-            soc0_idxs[i] - window_size : soc0_idxs[i] + 1
+            time_window_start_idx : soc0_idxs[
+                i
+            ]  # time-window ends one step before the RUL timestamp
         ]
         X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
 
