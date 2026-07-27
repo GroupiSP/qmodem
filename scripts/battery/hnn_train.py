@@ -13,13 +13,13 @@ from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     log_stream = setup_script_logging()
     hp = TrainHyperparameters()
 
     mlflow_setup = MLFlowSetup(
-        run_name="hnn",
-        experiment_name="checkpoint_phme_2026",
+        run_name="dummy_hnn",
+        experiment_name="refactoring_jul_2026",
         run_description="""Baseline.""",
         tags={
             "model": "HNN",

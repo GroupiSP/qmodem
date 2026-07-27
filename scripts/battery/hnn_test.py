@@ -13,16 +13,16 @@ from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
 
     log_stream = setup_script_logging()
 
-    TRAIN_RUN_ID = "f58082c7c1fb413b8f7f90febac6ad64"
+    TRAIN_RUN_ID = "a285e1841c684bad8ae1fbb0e3ce1b46"
 
     hp = Hyperparameters()
 
     mlflow_setup = MLFlowSetup(
-        experiment_name="checkpoint_phme_2026", run_id=TRAIN_RUN_ID
+        experiment_name="refactoring_jul_2026", run_id=TRAIN_RUN_ID
     )
 
     model = HeteroscedasticCNN(

@@ -13,14 +13,14 @@ from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     log_stream = setup_script_logging()
-    hp = TrainHyperparameters(beta_nll=0.5, early_stopping_patience=50)
+    hp = TrainHyperparameters(beta_nll=0.5)
 
     mlflow_setup = MLFlowSetup(
-        run_name="hnn-3",
-        experiment_name="variable_loading_conditions",
-        run_description="""Beta=0.5 NLL.""",
+        run_name="hnn_multiple_dummy",
+        experiment_name="refactoring_jul_2026",
+        run_description="""Baseline.""",
         tags={
             "model": "HNN",
             "case_study": "battery",
