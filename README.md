@@ -14,18 +14,20 @@ uv sync
 
 ### Data generation
 
-1. Start by setting up your `.env` file. Specify `RAW_DATA_DIR`, i.e. the location where to write the battery simulation data.
-2. Run one of the `generate_discharge_history.py` scripts.
-3. Write the data generation run ID from mlflow to `.env`.
+Run one of the `generate_discharge_history.py` scripts.
+
+### Setup of the environment file (`.env`)
+
+1. Specify `RAW_DATA_DIR`, i.e. the location where to write the battery simulation data. For the multiple loading scenarios case, you can do the same with `RAW_DATA_DIR_MULTI`.
+2. Copy-paste the MLFlow run ID to `DATA_GEN_RUN_ID` (`DATA_GEN_RUN_ID_MULTI` for the multiple scenarios case).
+3. Set `MLFLOW_USE_LAST_TRAINED=true` if you plan to run the test script right after the corresponding training one. If `MLFLOW_USE_LAST_TRAINED=true`, the program will prompt you to provide the experiment name and run ID for MLFlow to retrieve the correct run.
+4. Set a meaningful `MLFLOW_EXPERIMENT_NAME` for your numerical campaign.
 
 ### Training/testing
 
 1. Make sure the data genration run ID is the correct one.
 2. Run one of the `_train.py` scripts to train the network.
-3. Copy the training run ID to `TRAIN_RUN_ID` in the corresponding `_test.py` file.
-4. Run the test script
-
-The logic of steps 3 and 4 is to write the test results in the same training run entry, making it possible to compare different runs in the MLFlow UI.
+3. Run the corresponding test script.
 
 ## Development
 
