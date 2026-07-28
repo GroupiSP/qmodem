@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import io
-import json
-import os
 import pathlib
 import tempfile
 from typing import Protocol
@@ -30,7 +28,7 @@ from qmodem.battery.scoring import (
     bar_plot_metrics_per_test_case,
 )
 from qmodem.battery.train import LAST_TRAIN_SETUP_PATH
-from qmodem.tracking import MLFlowSetup, track_mlflow
+from qmodem.tracking import retrieve_mlflow_setup_train, track_mlflow
 
 
 class MCSampler(Protocol):
@@ -61,27 +59,6 @@ class Hyperparameters:
     test_grid_crps_start: float = 0.0
     test_grid_crps_end: float = 5000.0
     test_grid_crps_num: int = 100
-
-
-def _retrieve_mlflow_setup_train() -> MLFlowSetup:
-    use_last = os.environ.get("MLFLOW_USE_LAST_TRAINED", "").lower() in ("1", "true")
-    if use_last:
-        with open(LAST_TRAIN_SETUP_PATH, "r") as f:
-            data = json.load(f)
-        return MLFlowSetup(
-            run_id=data["run_id"],
-            experiment_name=data["experiment_name"],
-        )
-    else:
-        print(
-            "MLFLOW_USE_LAST_TRAINED is set to False. Please input the training run ID and experiment name."
-        )
-        run_id = input("Enter the training run ID: ").strip()
-        experiment_name = input("Enter the experiment name: ").strip()
-        return MLFlowSetup(
-            run_id=run_id,
-            experiment_name=experiment_name,
-        )
 
 
 def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
@@ -278,7 +255,7 @@ def run_evaluation(
             otherwise eval mode.
         n_test_cases: Number of test cases to evaluate.
     """
-    mlflow_setup = _retrieve_mlflow_setup_train()
+    mlflow_setup = retrieve_mlflow_setup_train(path=LAST_TRAIN_SETUP_PATH)
 
     with track_mlflow(setup=mlflow_setup) as run:
         run_params_training = run.data.params

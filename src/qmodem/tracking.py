@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import pathlib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -120,3 +122,24 @@ def get_tags_from_mlflow_run(run_id: str) -> dict[str, str]:
 def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
     dataset = mlflow.data.from_pandas(df, name=name)
     mlflow.log_input(dataset=dataset, context=context)
+
+
+def retrieve_mlflow_setup_train(path: pathlib.Path) -> MLFlowSetup:
+    use_last = os.environ.get("MLFLOW_USE_LAST_TRAINED", "").lower() in ("1", "true")
+    if use_last:
+        with open(path, "r") as f:
+            data = json.load(f)
+        return MLFlowSetup(
+            run_id=data["run_id"],
+            experiment_name=data["experiment_name"],
+        )
+    else:
+        print(
+            "MLFLOW_USE_LAST_TRAINED is set to False. Please input the training run ID and experiment name."
+        )
+        run_id = input("Enter the training run ID: ").strip()
+        experiment_name = input("Enter the experiment name: ").strip()
+        return MLFlowSetup(
+            run_id=run_id,
+            experiment_name=experiment_name,
+        )
