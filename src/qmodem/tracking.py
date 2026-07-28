@@ -65,7 +65,7 @@ class MLFlowSetup:
         tracking_server: Remote tracking server URI (not yet supported).
     """
 
-    experiment_name: str
+    experiment_name: str | None = None
     run_name: str | None = None
     run_id: str | None = None
     run_description: str | None = None
@@ -75,6 +75,12 @@ class MLFlowSetup:
     tracking_server: str | None = None
 
     def __post_init__(self):
+        if self.experiment_name is None:
+            object.__setattr__(
+                self,
+                "experiment_name",
+                os.environ.get("MLFLOW_EXPERIMENT_NAME", "default"),
+            )
         if self.tracking_server is not None:
             raise NotImplementedError("Remote tracking server is not supported yet.")
         if self.backend_store is None:
