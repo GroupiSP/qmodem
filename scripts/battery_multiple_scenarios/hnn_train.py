@@ -14,19 +14,11 @@ from qmodem.utils import setup_script_logging
 
 def main() -> None:
     load_dotenv(override=True)
-    log_stream = setup_script_logging()
-    hp = TrainHyperparameters(beta_nll=0.5)
 
-    mlflow_setup = MLFlowSetup(
-        run_name="hnn_multiple_dummy",
-        experiment_name="refactoring_jul_2026",
-        run_description="""Baseline.""",
-        tags={
-            "model": "HNN",
-            "case_study": "battery",
-            "stage": "prototyping",
-        },
-    )
+    log_stream = setup_script_logging()
+    hp = TrainHyperparameters()
+
+    mlflow_setup = MLFlowSetup(run_name="dummy_hnn_multiple")
     model = HeteroscedasticCNN(
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,
@@ -38,8 +30,8 @@ def main() -> None:
         model=model,
         hp=hp,
         mlflow_setup=mlflow_setup,
-        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR"]),
-        data_gen_run_id=os.environ["DATA_GEN_RUN_ID"],
+        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+        data_gen_run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
         log_stream=log_stream,
     )
 

@@ -57,15 +57,8 @@ def main() -> None:
     RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 
     # MLFlow setup
-    run_tags = {
-        "case_study": "battery",
-        "stage": "data_generation",
-    }
-    tracking_setup = MLFlowSetup(
-        experiment_name="refactoring_jul_2026",
-        run_name="generate_dummy",
-        tags=run_tags,
-    )
+    tracking_setup = MLFlowSetup(run_name="generate_dummy")
+
     with track_mlflow(tracking_setup):
         train_rng = np.random.default_rng(seed=hp.train_seed)
         test_rng = np.random.default_rng(seed=hp.test_seed)

@@ -14,19 +14,11 @@ from qmodem.utils import setup_script_logging
 
 def main() -> None:
     load_dotenv(override=True)
-    log_stream = setup_script_logging()
-    hp = MCDTrainHyperparameters(early_stopping_patience=20)
 
-    mlflow_setup = MLFlowSetup(
-        run_name="mcd",
-        experiment_name="refactoring_jul_2026",
-        run_description="""Baseline.""",
-        tags={
-            "model": "MCD",
-            "case_study": "battery",
-            "stage": "prototyping",
-        },
-    )
+    log_stream = setup_script_logging()
+    hp = MCDTrainHyperparameters()
+
+    mlflow_setup = MLFlowSetup(run_name="dummy_mcd")
     model = MCDropoutCNN(
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,

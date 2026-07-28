@@ -15,19 +15,12 @@ from qmodem.utils import setup_script_logging
 
 def main() -> None:
     load_dotenv(override=True)
+
     log_stream = setup_script_logging()
+
     hp = QAVITrainHyperparameters(pqc_n_layers=2)
 
-    mlflow_setup = MLFlowSetup(
-        run_name="dummy_qavi",
-        experiment_name="refactoring_jul_2026",
-        tags={
-            "model": "QAVI",
-            "case_study": "battery",
-            "stage": "prototyping",
-        },
-        run_description="""Baseline.""",
-    )
+    mlflow_setup = MLFlowSetup(run_name="qavi_multiple_dummy")
 
     weight_generator = WeightGenerator(
         n_qubits=hp.pqc_n_qubits,

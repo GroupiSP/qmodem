@@ -4,12 +4,11 @@ import os
 import pathlib
 
 import flax.nnx as nnx
-import mlflow
 from dotenv import load_dotenv
 
 from qmodem.battery.evaluate import Hyperparameters, run_evaluation
 from qmodem.battery.models import BayesianCNN
-from qmodem.tracking import MLFlowSetup
+from qmodem.tracking import get_run_parameters, retrieve_mlflow_setup_train
 from qmodem.utils import setup_script_logging
 
 
@@ -18,27 +17,20 @@ def main() -> None:
 
     log_stream = setup_script_logging()
 
-    TRAIN_RUN_ID = "f06a0493b511453786fea777222c5fd8"
-
     hp = Hyperparameters()
 
-    mlflow_setup = MLFlowSetup(
-        experiment_name="refactoring_jul_2026", run_id=TRAIN_RUN_ID
-    )
+    mlflow_setup = retrieve_mlflow_setup_train()
+    run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
 
-    # Build the model from the training-run parameters before opening the tracking
-    # context. Setting the tracking URI is required for `get_run` to resolve the run.
-    mlflow.set_tracking_uri(mlflow_setup.backend_store)
-    params = mlflow.get_run(TRAIN_RUN_ID).data.params
     model = BayesianCNN(
         rngs=nnx.Rngs(0),
-        act_fn=getattr(nnx, params["activation_function"]),
+        act_fn=getattr(nnx, run_parameters["activation_function"]),
     )  # RNGs won't be used for inference, so the seed is arbitrary.
 
     run_evaluation(
         model=model,
-        mlflow_setup=mlflow_setup,
         hp=hp,
+        mlflow_setup=mlflow_setup,
         raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR"]),
         data_gen_run_id=os.environ["DATA_GEN_RUN_ID"],
         log_stream=log_stream,

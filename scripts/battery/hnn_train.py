@@ -18,10 +18,7 @@ def main() -> None:
     log_stream = setup_script_logging()
     hp = TrainHyperparameters()
 
-    mlflow_setup = MLFlowSetup(
-        run_name="dummy_hnn",
-        run_description="""Baseline.""",
-    )
+    mlflow_setup = MLFlowSetup(run_name="dummy_hnn")
     model = HeteroscedasticCNN(
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,

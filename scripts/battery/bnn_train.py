@@ -16,19 +16,11 @@ from qmodem.utils import setup_script_logging
 
 def main() -> None:
     load_dotenv(override=True)
+
     log_stream = setup_script_logging()
     hp = TrainHyperparameters()
 
-    mlflow_setup = MLFlowSetup(
-        run_name="dummy_bnn",
-        experiment_name="refactoring_jul_2026",
-        run_description="""Baseline.""",
-        tags={
-            "model": "BNN",
-            "case_study": "battery",
-            "stage": "prototyping",
-        },
-    )
+    mlflow_setup = MLFlowSetup(run_name="dummy_bnn")
     model = BayesianCNN(
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,
