@@ -21,12 +21,6 @@ def main() -> None:
     mlflow_setup = MLFlowSetup(
         run_name="dummy_hnn",
         run_description="""Baseline.""",
-        # TODO: remove tags
-        tags={
-            "model": "HNN",
-            "case_study": "battery",
-            "stage": "publication",
-        },
     )
     model = HeteroscedasticCNN(
         n_filters=hp.conv_n_filters,
