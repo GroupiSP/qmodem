@@ -65,7 +65,7 @@ class BaseTrainHyperparameters:
     train_rng_seed: int = 1
     drop_remainder: bool = False
     n_epochs: int = 500
-    beta_nll: float = 0.0
+    beta_nll: float = 0.5
     early_stopping_patience: int = 20
     early_stopping_min_delta: float = 1e-4
     n_samples_predictive_mean_variance: int = 100
