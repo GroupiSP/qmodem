@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import json
+import os
 import pathlib
 import tempfile
 from typing import Protocol
@@ -27,6 +29,7 @@ from qmodem.battery.scoring import (
     TestCaseResults,
     bar_plot_metrics_per_test_case,
 )
+from qmodem.battery.train import LAST_TRAIN_SETUP_PATH
 from qmodem.tracking import MLFlowSetup, track_mlflow
 
 
@@ -58,6 +61,27 @@ class Hyperparameters:
     test_grid_crps_start: float = 0.0
     test_grid_crps_end: float = 5000.0
     test_grid_crps_num: int = 100
+
+
+def _retrieve_mlflow_setup_train() -> MLFlowSetup:
+    use_last = os.environ.get("MLFLOW_USE_LAST_TRAINED", "").lower() in ("1", "true")
+    if use_last:
+        with open(LAST_TRAIN_SETUP_PATH, "r") as f:
+            data = json.load(f)
+        return MLFlowSetup(
+            run_id=data["run_id"],
+            experiment_name=data["experiment_name"],
+        )
+    else:
+        print(
+            "MLFLOW_USE_LAST_TRAINED is set to False. Please input the training run ID and experiment name."
+        )
+        run_id = input("Enter the training run ID: ").strip()
+        experiment_name = input("Enter the experiment name: ").strip()
+        return MLFlowSetup(
+            run_id=run_id,
+            experiment_name=experiment_name,
+        )
 
 
 def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
@@ -234,12 +258,10 @@ def log_evaluation_metrics(
 def run_evaluation(
     *,
     model: MCSampler,
-    mlflow_setup: MLFlowSetup,
     hp: Hyperparameters,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
-    train_run_id: str | None = None,
     train_mode: bool = True,
     n_test_cases: int = 10,
 ) -> None:
@@ -247,34 +269,26 @@ def run_evaluation(
 
     Args:
         model: Model implementing :class:`MCSampler`, already constructed by the caller.
-        mlflow_setup: MLflow run configuration. When ``train_run_id`` is None, its
-            ``run_id`` is assumed to be the training run (results are written onto it).
         hp: Evaluation hyperparameters.
         raw_data_dir: Directory containing ``test.csv``.
         data_gen_run_id: MLflow run ID of the data-generation run holding the pickled
             simulation config.
         log_stream: In-memory log stream logged as an artifact at the end.
-        train_run_id: Training run holding the scaler and model checkpoint. Defaults to
-            ``mlflow_setup.run_id``.
         train_mode: If True, put the model in train mode (e.g. to enable MC dropout);
             otherwise eval mode.
         n_test_cases: Number of test cases to evaluate.
     """
-    train_run_id = train_run_id or mlflow_setup.run_id
-    if train_run_id is None:
-        raise ValueError(
-            "train_run_id must be provided, either explicitly or via mlflow_setup.run_id."
-        )
+    mlflow_setup = _retrieve_mlflow_setup_train()
 
     with track_mlflow(setup=mlflow_setup) as run:
         run_params_training = run.data.params
 
         # Load the scaler fitted on the training data.
         scaler: skpp.MinMaxScaler = mlflow.sklearn.load_model(
-            f"runs:/{train_run_id}/sklearn_scaler"
+            f"runs:/{mlflow_setup.run_id}/sklearn_scaler"
         )
 
-        restore_model_state(model, train_run_id)
+        restore_model_state(model, mlflow_setup.run_id)
 
         # Load the simulation config used to generate the test cases.
         config = load_simulation_config(data_gen_run_id)

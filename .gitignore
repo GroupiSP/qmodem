@@ -44,3 +44,6 @@ mlruns/
 
 # Log files
 *.log
+
+# Last training run data
+.last_trained.json
