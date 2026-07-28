@@ -44,15 +44,13 @@ from qmodem.train_adversarial import (
     train_loop as adversarial_train_loop,
 )
 from qmodem.train_base import Callback, EarlyStopper, mlflow_track_model_best_state
-from qmodem.utils import ROOT_DIR, count_parameters
+from qmodem.utils import LAST_TRAIN_SETUP_PATH, count_parameters
 
 from .train_steps import (
     StandardStepFactory,
     StandardStepFactoryContext,
     make_nll_steps,
 )
-
-LAST_TRAIN_SETUP_PATH = ROOT_DIR / ".last_trained.json"
 
 
 @dataclasses.dataclass

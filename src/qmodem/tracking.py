@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import pathlib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -12,7 +11,7 @@ from typing import Any, Generator
 import mlflow
 import pandas as pd
 
-from .utils import ROOT_DIR
+from .utils import LAST_TRAIN_SETUP_PATH, ROOT_DIR
 
 
 class DatasetChoice(StrEnum):
@@ -124,10 +123,16 @@ def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
     mlflow.log_input(dataset=dataset, context=context)
 
 
-def retrieve_mlflow_setup_train(path: pathlib.Path) -> MLFlowSetup:
+def retrieve_mlflow_setup_train() -> MLFlowSetup:
+    """Retrieves the MLFlowSetup from a JSON file at the given path. If the file does
+    not exist, prompts the user for input.
+
+    Returns:
+        An instance of MLFlowSetup.
+    """
     use_last = os.environ.get("MLFLOW_USE_LAST_TRAINED", "").lower() in ("1", "true")
     if use_last:
-        with open(path, "r") as f:
+        with open(LAST_TRAIN_SETUP_PATH, "r") as f:
             data = json.load(f)
         return MLFlowSetup(
             run_id=data["run_id"],
@@ -143,3 +148,17 @@ def retrieve_mlflow_setup_train(path: pathlib.Path) -> MLFlowSetup:
             run_id=run_id,
             experiment_name=experiment_name,
         )
+
+
+def get_run_parameters(run_id: str, backend_store: str) -> dict[str, Any]:
+    """Retrieves the parameters of a specific MLflow run.
+
+    Args:
+        run_id (str): The ID of the MLflow run.
+
+    Returns:
+        dict[str, Any]: A dictionary containing the parameters of the run.
+    """
+    mlflow.set_tracking_uri(backend_store)
+    run = mlflow.get_run(run_id)
+    return run.data.params

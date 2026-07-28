@@ -27,8 +27,7 @@ from qmodem.battery.scoring import (
     TestCaseResults,
     bar_plot_metrics_per_test_case,
 )
-from qmodem.battery.train import LAST_TRAIN_SETUP_PATH
-from qmodem.tracking import retrieve_mlflow_setup_train, track_mlflow
+from qmodem.tracking import MLFlowSetup, track_mlflow
 
 
 class MCSampler(Protocol):
@@ -236,6 +235,7 @@ def run_evaluation(
     *,
     model: MCSampler,
     hp: Hyperparameters,
+    mlflow_setup: MLFlowSetup,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
@@ -247,6 +247,7 @@ def run_evaluation(
     Args:
         model: Model implementing :class:`MCSampler`, already constructed by the caller.
         hp: Evaluation hyperparameters.
+        mlflow_setup: MLflow setup for the evaluation run.
         raw_data_dir: Directory containing ``test.csv``.
         data_gen_run_id: MLflow run ID of the data-generation run holding the pickled
             simulation config.
@@ -255,8 +256,6 @@ def run_evaluation(
             otherwise eval mode.
         n_test_cases: Number of test cases to evaluate.
     """
-    mlflow_setup = retrieve_mlflow_setup_train(path=LAST_TRAIN_SETUP_PATH)
-
     with track_mlflow(setup=mlflow_setup) as run:
         run_params_training = run.data.params
 
