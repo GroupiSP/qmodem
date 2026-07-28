@@ -50,13 +50,25 @@ class MCSampler(Protocol):
 @dataclasses.dataclass(frozen=True)
 class Hyperparameters:
     """The `test_` prefix is used to distinguish these hyperparameters from the ones
-    used for training."""
+    used for training.
+
+    Attributes:
+        test_rng_seed: Seed for the PRNG key used to sample the model.
+        test_n_soc0s: Number of intermediate starting SoCs to evaluate per test case.
+        test_n_mc_samples: Number of Monte Carlo samples to draw per intermediate SoC.
+        test_grid_crps_start: Start of the RUL grid for CRPS computation. Before this value,
+            it is assumed that no particle reached the end of life.
+        test_grid_crps_end: End of the RUL grid for CRPS computation. After this value,
+            it is assumed that all particles reached the end of life.
+        test_grid_crps_num: Number of points in the RUL grid for CRPS computation.
+    """
 
     test_rng_seed: int = 123
     test_n_soc0s: int = 20
-    test_n_mc_samples: int = 100
-    test_grid_crps_start: float = 0.0
-    test_grid_crps_end: float = 5000.0
+    test_n_mc_samples: int = 200
+    test_grid_crps_start: float = 2_000.0
+    test_grid_crps_end: float = 10_000.0
+    # TODO: Specify the step, rather than the number of CRPS grid points.
     test_grid_crps_num: int = 100
 
 
