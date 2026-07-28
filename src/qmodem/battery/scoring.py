@@ -69,6 +69,7 @@ class TestCaseResults:
 
     def __post_init__(self) -> None:
         self._times: np.ndarray = np.array([ets.time for ets in self.eval_time_stamps])
+        self._period: float = self._times[-1] - self._times[0]
 
     @property
     def squared_errors(self) -> np.ndarray:
@@ -80,26 +81,29 @@ class TestCaseResults:
 
     @property
     def wsu(self) -> float:
-        return np.dot(
-            (
-                np.array(
-                    [
-                        (ets_t.ci_95_pred[1] + ets_t1.ci_95_pred[1]) / 2
-                        for (ets_t, ets_t1) in zip(
-                            self.eval_time_stamps[2:], self.eval_time_stamps[1:-1]
-                        )
-                    ]
-                )
-                - np.array(
-                    [
-                        (ets_t.ci_95_pred[0] + ets_t1.ci_95_pred[0]) / 2
-                        for (ets_t, ets_t1) in zip(
-                            self.eval_time_stamps[2:], self.eval_time_stamps[1:-1]
-                        )
-                    ]
-                )
-            ),
-            self._times[1:-1] - self._times[0],
+        return (
+            np.dot(
+                (
+                    np.array(
+                        [
+                            (ets_t.ci_95_pred[1] + ets_t1.ci_95_pred[1]) / 2
+                            for (ets_t, ets_t1) in zip(
+                                self.eval_time_stamps[2:], self.eval_time_stamps[1:-1]
+                            )
+                        ]
+                    )
+                    - np.array(
+                        [
+                            (ets_t.ci_95_pred[0] + ets_t1.ci_95_pred[0]) / 2
+                            for (ets_t, ets_t1) in zip(
+                                self.eval_time_stamps[2:], self.eval_time_stamps[1:-1]
+                            )
+                        ]
+                    )
+                ),
+                self._times[1:-1] - self._times[0],
+            )
+            / self._period**2
         )
 
     @property
