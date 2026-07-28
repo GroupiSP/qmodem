@@ -1,28 +1,75 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
+import flax.nnx as nnx
+import jax
 import jax.numpy as jnp
+import optax
 import pytest
 
-from qmodem.train import EarlyStopper, train_loop
+from qmodem.train import PrintReporter, TrainingContext, train_loop
+from qmodem.train_base import EarlyStopper, TrainingPhase
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_dataloader(n_batches: int, value: float = 1.0) -> list[jnp.ndarray]:
-    """Return a simple list of scalar batches."""
-    return [jnp.array(value)] * n_batches
+type Batch = tuple[jax.Array, jax.Array]
 
 
-def _identity_step(batch: jnp.ndarray) -> jnp.ndarray:
-    """Step that returns the batch as a loss."""
-    return batch
+def _make_dataloader(
+    n_batches: int, value: float = 1.0, batch_size: int = 2
+) -> list[Batch]:
+    batch = (
+        jnp.full((batch_size, 1), value),
+        jnp.full((batch_size, 1), value),
+    )
+    return [batch] * n_batches
 
 
-# ---------------------------------------------------------------------------
-# EarlyStopper tests
-# ---------------------------------------------------------------------------
+def _identity_step(
+    model: nnx.Module,
+    batch: Batch,
+    keys: jax.Array,
+    optimizer: nnx.Optimizer,
+) -> jax.Array:
+    return jnp.mean(batch[1])
+
+
+@dataclass
+class ContextRecorder:
+    phases: list[TrainingPhase] = field(default_factory=list)
+    epochs: list[int] = field(default_factory=list)
+    best_val_losses: list[float] = field(default_factory=list)
+
+    def __call__(self, phase: TrainingPhase, context: TrainingContext) -> None:
+        self.phases.append(phase)
+        if phase == TrainingPhase.EPOCH_END:
+            self.epochs.append(context.epoch)
+        if phase == TrainingPhase.BEFORE_RETURN:
+            self.best_val_losses.append(context.best_val_loss)
+
+
+def _run_train_loop(
+    *,
+    n_epochs: int,
+    dataloader: list[Batch],
+    train_batch_fn=_identity_step,
+    eval_batch_fn=_identity_step,
+    callbacks=(),
+    early_stopper: EarlyStopper | None = None,
+) -> None:
+    model = nnx.Linear(1, 1, rngs=nnx.Rngs(0))
+    optimizer = nnx.Optimizer(model, optax.sgd(1e-3), wrt=nnx.Param)
+    train_loop(
+        n_epochs=n_epochs,
+        train_dataloader_builder=lambda epoch: dataloader,
+        val_dataloader_builder=lambda epoch: dataloader,
+        initial_key=jax.random.key(0),
+        model=model,
+        optimizer=optimizer,
+        train_batch_fn=train_batch_fn,
+        eval_batch_fn=eval_batch_fn,
+        callbacks=callbacks,
+        early_stopper=early_stopper,
+    )
 
 
 class TestEarlyStopper:
@@ -33,142 +80,122 @@ class TestEarlyStopper:
 
     def test_triggers_after_patience(self) -> None:
         stopper = EarlyStopper(patience=2, min_delta=0.0)
-        assert stopper(jnp.array(1.0)) is False  # improving
-        assert stopper(jnp.array(1.0)) is False  # plateau, counter=1
-        assert stopper(jnp.array(1.0)) is True  # plateau, counter=2 => stop
+        assert stopper(jnp.array(1.0)) is False
+        assert stopper(jnp.array(1.0)) is False
+        assert stopper(jnp.array(1.0)) is True
 
     def test_min_delta(self) -> None:
         stopper = EarlyStopper(patience=1, min_delta=0.1)
-        assert stopper(jnp.array(1.0)) is False  # improving
-        # Improvement < min_delta: treated as no improvement
+        assert stopper(jnp.array(1.0)) is False
         assert stopper(jnp.array(0.95)) is True
-
-
-# ---------------------------------------------------------------------------
-# train_loop tests
-# ---------------------------------------------------------------------------
 
 
 class TestTrainLoop:
     def test_runs_for_n_epochs(self) -> None:
-        """train_loop completes exactly n_epochs epochs when no stopping occurs."""
-        n_epochs = 5
-        dl = _make_dataloader(2)
-        _, epochs_completed = train_loop(
-            n_epochs=n_epochs,
-            dataloader_train=dl,
-            dataloader_val=dl,
-            train_batch_fn=_identity_step,
-            eval_batch_fn=_identity_step,
+        recorder = ContextRecorder()
+        _run_train_loop(
+            n_epochs=5,
+            dataloader=_make_dataloader(2),
+            callbacks=(recorder,),
         )
-        assert epochs_completed == n_epochs
+        assert recorder.epochs == list(range(5))
 
-    def test_returns_best_val_loss(self) -> None:
-        """The returned best_val_loss is the minimum validation loss seen."""
-        dl = _make_dataloader(1, value=0.5)
-        best, _ = train_loop(
+    def test_tracks_best_val_loss(self) -> None:
+        recorder = ContextRecorder()
+        _run_train_loop(
             n_epochs=3,
-            dataloader_train=dl,
-            dataloader_val=dl,
-            train_batch_fn=_identity_step,
-            eval_batch_fn=_identity_step,
+            dataloader=_make_dataloader(1, value=0.5),
+            callbacks=(recorder,),
         )
-        assert float(best) == pytest.approx(0.5)
+        assert recorder.best_val_losses == pytest.approx([0.5])
 
     def test_early_stopping(self) -> None:
-        """train_loop stops early when EarlyStopper fires."""
-        stopper = EarlyStopper(patience=2, min_delta=0.0)
-        # Constant loss => early stopper triggers after patience epochs
-        dl = _make_dataloader(1, value=1.0)
-        _, epochs_completed = train_loop(
+        recorder = ContextRecorder()
+        _run_train_loop(
             n_epochs=100,
-            dataloader_train=dl,
-            dataloader_val=dl,
-            train_batch_fn=_identity_step,
-            eval_batch_fn=_identity_step,
-            early_stopper=stopper,
+            dataloader=_make_dataloader(1),
+            callbacks=(recorder,),
+            early_stopper=EarlyStopper(patience=2),
         )
-        # patience=2: epoch1 (best), epoch2 (counter=1), epoch3 (counter=2 => stop)
-        assert epochs_completed == 3
+        assert recorder.epochs == [0, 1, 2]
 
-    def test_on_epoch_start_callbacks(self) -> None:
-        """on_train_epoch_start and on_val_epoch_start are called each epoch."""
-        train_calls: list[int] = []
-        val_calls: list[int] = []
-
-        dl = _make_dataloader(1)
-        n_epochs = 4
-        train_loop(
-            n_epochs=n_epochs,
-            dataloader_train=dl,
-            dataloader_val=dl,
-            train_batch_fn=_identity_step,
-            eval_batch_fn=_identity_step,
-            on_train_epoch_start=lambda: train_calls.append(1),
-            on_val_epoch_start=lambda: val_calls.append(1),
+    def test_callback_phases(self) -> None:
+        recorder = ContextRecorder()
+        _run_train_loop(
+            n_epochs=2,
+            dataloader=_make_dataloader(1),
+            callbacks=(recorder,),
         )
-        assert len(train_calls) == n_epochs
-        assert len(val_calls) == n_epochs
+        assert recorder.phases == [
+            TrainingPhase.INIT,
+            TrainingPhase.EPOCH_START,
+            TrainingPhase.EVAL_START,
+            TrainingPhase.EPOCH_END,
+            TrainingPhase.EPOCH_START,
+            TrainingPhase.EVAL_START,
+            TrainingPhase.EPOCH_END,
+            TrainingPhase.BEFORE_RETURN,
+        ]
 
     def test_graceful_keyboard_interrupt(self) -> None:
-        """A KeyboardInterrupt exits the loop and execution resumes."""
-        interrupt_at_epoch = 2
-        call_count = [0]
+        recorder = ContextRecorder()
+        call_count = 0
 
-        def train_fn(batch: jnp.ndarray) -> jnp.ndarray:
-            call_count[0] += 1
-            if call_count[0] >= interrupt_at_epoch:
+        def interrupting_step(
+            model: nnx.Module,
+            batch: Batch,
+            keys: jax.Array,
+            optimizer: nnx.Optimizer,
+        ) -> jax.Array:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
                 raise KeyboardInterrupt
-            return batch
+            return jnp.mean(batch[1])
 
-        dl = _make_dataloader(1)
-        # Should NOT raise; execution must resume after train_loop returns
-        best, epochs_completed = train_loop(
+        _run_train_loop(
             n_epochs=100,
-            dataloader_train=dl,
-            dataloader_val=dl,
-            train_batch_fn=train_fn,
-            eval_batch_fn=_identity_step,
+            dataloader=_make_dataloader(1),
+            train_batch_fn=interrupting_step,
+            callbacks=(recorder,),
         )
-        assert epochs_completed < 100
-        # best_val_loss should be a numeric value (either float or jax scalar)
-        assert float(best) >= 0.0
+        assert recorder.epochs == [0]
+        assert recorder.phases[-1] == TrainingPhase.BEFORE_RETURN
 
     def test_with_batched_arrays(self) -> None:
-        """train_loop works correctly with multi-dimensional batches."""
+        recorder = ContextRecorder()
         batch_size, features = 8, 10
-        dl = [jnp.ones((batch_size, features))] * 3
+        dataloader = [
+            (
+                jnp.ones((batch_size, features)),
+                jnp.ones((batch_size, 1)),
+            )
+        ] * 3
 
-        def train_fn(batch: jnp.ndarray) -> jnp.ndarray:
-            assert batch.shape == (batch_size, features)
-            return jnp.zeros((batch_size, features))
+        def shape_checking_step(
+            model: nnx.Module,
+            batch: Batch,
+            keys: jax.Array,
+            optimizer: nnx.Optimizer,
+        ) -> jax.Array:
+            assert batch[0].shape == (batch_size, features)
+            assert keys.shape[0] == batch_size
+            return jnp.mean(batch[1])
 
-        def eval_fn(batch: jnp.ndarray) -> jnp.ndarray:
-            return jnp.mean(batch)
-
-        best, epochs = train_loop(
+        _run_train_loop(
             n_epochs=2,
-            dataloader_train=dl,
-            dataloader_val=dl,
-            train_batch_fn=train_fn,
-            eval_batch_fn=eval_fn,
+            dataloader=dataloader,
+            train_batch_fn=shape_checking_step,
+            eval_batch_fn=shape_checking_step,
+            callbacks=(recorder,),
         )
-        assert epochs == 2
-        assert float(best) == pytest.approx(1.0)
+        assert recorder.best_val_losses == pytest.approx([1.0])
 
-    def test_print_every(self, capsys: pytest.CaptureFixture) -> None:
-        """Progress is printed on epoch 1 and every print_every epochs."""
-        dl = _make_dataloader(1)
-        n_epochs = 6
-        print_every = 3
-        train_loop(
-            n_epochs=n_epochs,
-            dataloader_train=dl,
-            dataloader_val=dl,
-            train_batch_fn=_identity_step,
-            eval_batch_fn=_identity_step,
-            print_every=print_every,
+    def test_print_every(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _run_train_loop(
+            n_epochs=6,
+            dataloader=_make_dataloader(1),
+            callbacks=(PrintReporter(print_every=3),),
         )
         captured = capsys.readouterr()
-        # Epochs printed: 1, 3, 6 → 3 "Epoch" lines
-        assert captured.out.count("Epoch") == 3
+        assert captured.out.count("Epoch") == 2

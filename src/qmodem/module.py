@@ -57,7 +57,8 @@ class GaussianBlock(nnx.Module):
 
 
 class StandardBayesConv1D(nnx.Module):
-    """Bayesian 1D convolution with shared perturbation (reparameterisation trick).
+    """Bayesian 1D convolution with shared perturbation. Follows the weight distribution
+    q(w) = N(μ, softplus(ρ)²), proposed by Blundell et al. (2015), i.e. BayesByBackprop.
 
     Each kernel and bias weight follows q(w) = N(μ, softplus(ρ)²). A single noise draw ε
     is shared across every sample in the batch.

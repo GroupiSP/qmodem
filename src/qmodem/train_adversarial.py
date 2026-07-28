@@ -218,9 +218,10 @@ def train_loop(
             val_losses = []
             dataloader_val = val_dataloader_builder(epoch)
             for batch in dataloader_val:
-                key, subkey = jax.random.split(key)
+                splits = jax.random.split(key, num=batch[0].shape[0] + 1)
+                key, subkeys = splits[0], splits[1:]
                 val_losses.append(
-                    eval_batch_fn(model, batch, subkey, optimizer_generator)
+                    eval_batch_fn(model, batch, subkeys, optimizer_generator)
                 )
 
             val_loss = jnp.mean(jnp.array(val_losses)).item()

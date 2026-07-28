@@ -1,235 +1,43 @@
 from __future__ import annotations
 
-import dataclasses
-import functools
-import io
-import logging
+import os
 import pathlib
 
 import flax.nnx as nnx
-import jax
-import jax.numpy as jnp
-import mlflow
-import optax
-import sklearn.preprocessing as skpp
+from dotenv import load_dotenv
 
-from qmodem.data import (
-    DataFrameSource,
-    DataPipeline,
-    add_feature_dimension_to_y,
-    get_time_windows_and_join,
-    normalize_ruls,
-    to_jax,
-)
-from qmodem.module import nll_batched
-from qmodem.tracking import (
-    MLFlowSetup,
-    track_mlflow,
-)
-from qmodem.train import (
-    LogReporter,
-    mlflow_track_losses,
-    train_loop,
-)
-from qmodem.train_base import (
-    BaseTrainingContext,
-    EarlyStopper,
-    OutputVarianceTracker,
-    TrainingPhase,
-    mlflow_track_model_best_state,
-)
-from qmodem.utils import count_parameters
-from scripts.battery.bnn_model import ConvLayerType, Net
-from scripts.battery.commons import (
-    TrainHyperparameters,
-    get_dataframes,
-    train_dataloader_builder,
-)
-
-
-@dataclasses.dataclass
-class Hyperparameters(TrainHyperparameters):
-    conv_layer_type: str = ConvLayerType.FLIPOUT
+from qmodem.battery.models import BayesianCNN
+from qmodem.battery.train import TrainHyperparameters, run_training
+from qmodem.battery.train_steps import make_elbo_steps
+from qmodem.callbacks import track_conv_weights_variance
+from qmodem.tracking import MLFlowSetup
+from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
-    log_stream = io.StringIO()
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        handlers=[
-            logging.StreamHandler(),  # console (stderr)
-            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
-        ],
-    )
+    load_dotenv(override=True)
 
-    hp = Hyperparameters(early_stopping_patience=20)
+    log_stream = setup_script_logging()
+    hp = TrainHyperparameters()
 
-    RAW_DATA_DIR = (
-        pathlib.Path(__file__).resolve().parent.parent.parent
-        / "data"
-        / "raw"
-        / "battery"
-    )
-
-    mlflow_setup = MLFlowSetup(
-        run_name="bnn",
-        experiment_name="checkpoint_phme_2026",
-        run_description="""Baseline.""",
-        tags={
-            "model": "BNN",
-            "case_study": "battery",
-            "stage": "publication",
-        },
-    )
-
-    # Model, schedule, optimizer
-    model = Net(
-        rngs=nnx.Rngs(hp.net_init_seed),
-        layer_type=hp.conv_layer_type,
+    mlflow_setup = MLFlowSetup(run_name="dummy_bnn")
+    model = BayesianCNN(
+        n_filters=hp.conv_n_filters,
+        kernel_size=hp.conv_kernel_size,
         act_fn=getattr(nnx, hp.activation_function),
+        rngs=nnx.Rngs(hp.net_init_seed),
     )
 
-    # Build the data sources, including windowing and normalization
-    scaler = skpp.MinMaxScaler(feature_range=(0, 1))
-    data_pipeline_train = DataPipeline(
-        [
-            functools.partial(
-                get_time_windows_and_join,
-                window_size=hp.window_size,
-                stride=hp.stride,
-            ),
-            add_feature_dimension_to_y,
-            functools.partial(normalize_ruls, transform_fn=scaler.fit_transform)
-            if hp.normalize_rul
-            else lambda x: x,
-            to_jax,
-        ]
+    run_training(
+        model=model,
+        hp=hp,
+        mlflow_setup=mlflow_setup,
+        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR"]),
+        data_gen_run_id=os.environ["DATA_GEN_RUN_ID"],
+        log_stream=log_stream,
+        step_factory=make_elbo_steps,
+        callbacks=(track_conv_weights_variance,),
     )
-    data_pipeline_val = DataPipeline(
-        [
-            functools.partial(
-                get_time_windows_and_join,
-                window_size=hp.window_size,
-                stride=hp.stride,
-            ),
-            add_feature_dimension_to_y,
-            functools.partial(normalize_ruls, transform_fn=scaler.transform)
-            if hp.normalize_rul
-            else lambda x: x,
-            to_jax,
-        ]
-    )
-
-    train_df, val_df, _ = get_dataframes(
-        RAW_DATA_DIR / "train.csv", RAW_DATA_DIR / "test.csv"
-    )
-
-    ds_train = DataFrameSource(df=train_df, pipeline=data_pipeline_train)
-    ds_val = DataFrameSource(df=val_df, pipeline=data_pipeline_val)
-
-    # Loss evaluation functions and steps for the training.
-
-    def kl_divergence(model) -> jax.Array:
-        # KL divergence is deterministic, so we don't need to vmap over samples or use RNGs.
-        return model.kl_divergence() / len(ds_train)  # average KL per sample
-
-    def elbo_loss(model, batch, keys) -> jax.Array:
-        # This is the ELBO loss for the batch.
-        return jnp.mean(nll_batched(model, batch, keys)) + kl_divergence(model)
-
-    @nnx.jit
-    def train_step(
-        model: nnx.Module,
-        batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
-        optimizer: nnx.Optimizer,
-    ) -> jax.Array:
-        def loss_fn(model):
-            # This is the ELBO loss for the batch.
-            return elbo_loss(model, batch, keys)
-
-        loss, grads = nnx.value_and_grad(loss_fn)(model)
-        optimizer.update(model, grads)
-        return loss
-
-    @nnx.jit
-    def eval_step(
-        model: nnx.Module,
-        batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
-        optimizer: nnx.Optimizer = None,  # not used, but we keep the same signature as train_step for simplicity
-    ) -> jax.Array:
-        return elbo_loss(model, batch, keys)
-
-    schedule = optax.cosine_decay_schedule(
-        init_value=hp.learning_rate,
-        decay_steps=hp.n_epochs * (len(ds_train) // hp.batch_size),
-        alpha=hp.scheduler_alpha,
-    )
-    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
-
-    early_stopper = EarlyStopper(
-        patience=hp.early_stopping_patience, min_delta=hp.early_stopping_min_delta
-    )
-
-    # Add a callback to track the variance of the convolutional layer weights
-    def track_conv_weights_variance(
-        phase: TrainingPhase, context: BaseTrainingContext
-    ) -> None:
-        if phase == TrainingPhase.EPOCH_END:
-            mlflow.log_metric(
-                "conv_weights_variance",
-                context.model.conv_mean_posterior_variance(),
-                step=context.epoch,
-            )
-
-    with track_mlflow(setup=mlflow_setup):
-        mlflow.sklearn.log_model(scaler, artifact_path="sklearn_scaler")
-        mlflow.log_params(dataclasses.asdict(hp))
-        mlflow.log_param("n_params", count_parameters(model))
-
-        key = jax.random.key(hp.train_rng_seed)
-        key, subkey = jax.random.split(key)
-
-        batch_variance_tracking = ds_val[
-            jax.random.choice(
-                subkey, len(ds_val), shape=(hp.batch_size,), replace=False
-            )
-        ]
-        _, subkey = jax.random.split(subkey)
-
-        train_loop(
-            n_epochs=hp.n_epochs,
-            train_dataloader_builder=functools.partial(
-                train_dataloader_builder,
-                ds_train=ds_train,
-                batch_size=hp.batch_size,
-                drop_remainder=hp.drop_remainder,
-            ),
-            val_dataloader_builder=lambda n: [
-                (ds_val.X, ds_val.y)
-            ],  # single "batch" = whole val set, because no SGD happens at eval time
-            initial_key=key,
-            model=model,
-            optimizer=optimizer,
-            train_batch_fn=train_step,
-            eval_batch_fn=eval_step,
-            callbacks=[
-                LogReporter(log_every=10),
-                mlflow_track_model_best_state,
-                mlflow_track_losses,
-                OutputVarianceTracker(
-                    base_key=subkey,
-                    X_batch=batch_variance_tracking[0],
-                    n_samples=hp.n_samples_predictive_mean_variance,
-                ),
-                track_conv_weights_variance,
-            ],
-            early_stopper=early_stopper,
-        )
-
-        mlflow.log_text(log_stream.getvalue(), "training_log.txt")
 
 
 if __name__ == "__main__":

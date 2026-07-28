@@ -12,6 +12,7 @@ dependencies = [
     "mlflow>=3.7.0",
     "optuna>=4.8.0",
     "pennylane>=0.44.0",
+    "python-dotenv>=1.0.0",
     "scikit-learn>=1.8.0",
     "simbat",
     "tqdm>=4.67.3",

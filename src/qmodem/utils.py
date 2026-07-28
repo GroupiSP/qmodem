@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +14,23 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 RAW_DATA_DIR_PATH = ROOT_DIR / "data" / "raw"
 CMAPSS_DIR_PATH = RAW_DATA_DIR_PATH / "CMAPSSData"
 PROCESSED_DATA_DIR_PATH = ROOT_DIR / "data" / "processed"
+
+LAST_TRAIN_SETUP_PATH = ROOT_DIR / ".last_trained.json"
+
+
+def setup_script_logging(level: int = logging.INFO) -> io.StringIO:
+    """Configure console + in-memory logging and return the memory stream."""
+
+    log_stream = io.StringIO()
+    logging.basicConfig(
+        level=level,
+        force=True,
+        handlers=[
+            logging.StreamHandler(),  # console (stderr)
+            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
+        ],
+    )
+    return log_stream
 
 
 @dataclass(frozen=True)

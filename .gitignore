@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment variables
+.env
+
 .DS_Store
 
 # Checkpoints
@@ -41,3 +44,6 @@ mlruns/
 
 # Log files
 *.log
+
+# Last training run data
+.last_trained.json

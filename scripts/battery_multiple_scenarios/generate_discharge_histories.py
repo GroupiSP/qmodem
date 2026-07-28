@@ -1,243 +1,107 @@
 from __future__ import annotations
 
+import dataclasses
+import functools
+import os
 import pathlib
-from dataclasses import asdict, dataclass, field
-from enum import StrEnum, auto
-from typing import Any
 
 import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
-import pandas as pd
 import simbat as sb
+from dotenv import load_dotenv
 
-from qmodem.tracking import MLFlowSetup, track_mlflow
-from scripts.battery_multiple_scenarios.commons import (
-    RAW_DATA_DIR,
-    constant_cruise_policy,
-    variable_cruise_policy,
+from qmodem.battery.data_generation import (
+    Hyperparameters,
+    bernoulli_policy_choice,
+    gaussian_noise,
+    log_simulation_config,
+    write_histories,
+)
+from qmodem.battery.policies import VariableDischargeCurrentPolicy, plot_current_profile
+from qmodem.tracking import MLFlowSetup, track_dataframe, track_mlflow
+
+constant_cruise_policy = VariableDischargeCurrentPolicy(
+    current_values=[-4.0, -1.0],
+    time_values=[0.0, 600.0],
+)
+variable_cruise_policy = VariableDischargeCurrentPolicy(
+    current_values=[-4.0, -1.0, -2.0, -1.0],
+    time_values=[0.0, 600.0, 1800.0, 4000.0],
 )
 
 
-class ProcessNoiseDistribution(StrEnum):
-    NORMAL = auto()
-    UNIFORM = auto()
-    ZERO = auto()
-
-
-class VOCModel(StrEnum):
-    BUSTOS_BAEZA = auto()
-
-
-class ECMModel(StrEnum):
-    THEVENIN_ZERO_ORDER = auto()
-
-
-dist_name_to_params = {
-    ProcessNoiseDistribution.NORMAL: lambda loc, scale: {"loc": loc, "scale": scale},
-    ProcessNoiseDistribution.UNIFORM: lambda low, high: {"low": low, "high": high},
-    ProcessNoiseDistribution.ZERO: lambda: {},
-}
-
-ecm_model_name_to_params = {
-    ECMModel.THEVENIN_ZERO_ORDER: lambda r0: {"r0": r0},
-}
-
-
-@dataclass(frozen=True)
-class Hyperparameters:
-    voc_model: VOCModel = VOCModel.BUSTOS_BAEZA
-    ecm_model: ECMModel = ECMModel.THEVENIN_ZERO_ORDER
-    ecm_model_params: dict[str, float] = field(
-        default_factory=lambda: ecm_model_name_to_params[ECMModel.THEVENIN_ZERO_ORDER](
-            r0=0.1
-        )
-    )
-    battery_nominal_capacity: float = 10080.0  # in Coulombs
-    dt: float = 60.0
-    v_cutoff: float = 2.5  # in Volts
-    n_histories_train: int = 50
-    n_histories_val: int = 20
-    n_histories_test: int = 10
-    process_noise_distribution: ProcessNoiseDistribution = (
-        ProcessNoiseDistribution.NORMAL
-    )
-    measurement_noise_distribution: ProcessNoiseDistribution = (
-        ProcessNoiseDistribution.ZERO
-    )
-    # TODO: noise parameter tracking can be improved by using `dist_name_to_params`. But it
-    # is not a prio right now.
-    process_noise_loc: float = 0.0
-    process_noise_std: float = 5e-3
-    measurement_noise_param: Any = None
-    soc_range_train_val: tuple[float, float] = (0.05, 1.0)
-    train_seed: int = 42
-    test_seed: int = 123
-
-
-def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
-    df.drop(
-        columns=["rul_probability", "eod_reached_sim_0"], inplace=True
-    )  # Drop the RUL probability column
-    df.rename(
-        columns={"time": "time", "soc_sim_0": "soc", "voltage_sim_0": "voltage"},
-        inplace=True,
-    )
-    df.insert(0, "run_id", run_id)  # Add a run_id column for tracking
-    return None
-
-
-def generate_train(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame:
-    """Generate training and validation discharge histories.
-
-    A first initial Monte Carlo simulation is run to generate a set of initial SoC
-    values and record the intermediate times. Then, for each initial SoC, a discharge
-    history is generated using the same simulation parameters.
-    """
-    current_policies = [constant_cruise_policy, variable_cruise_policy]
-
-    def policy_choice_distribution():
-        return rng.choice([0, 1], p=[0.7, 0.3])
-
-    def process_noise_distribution():
-        return rng.normal(loc=hp.process_noise_loc, scale=hp.process_noise_std)
-
-    def measurement_noise_distribution():
-        return 0.0
-
-    out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
-
-    for i in range(hp.n_histories_train + hp.n_histories_val):
-        config = sb.SimulationConfig(
-            current_policies=current_policies,
-            policy_choice_distribution=policy_choice_distribution,
-            process_noise_distribution=process_noise_distribution,
-            measurement_noise_distribution=measurement_noise_distribution,
-            dt=hp.dt,
-            soc_0=1.0,
-        )
-
-        result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
-        df = result.to_dataframe()
-
-        _modify_dataframe(df, i)
-
-        out_df = pd.concat([out_df, df], ignore_index=True)
-
-    return out_df
-
-
-def generate_test(rng: np.random.Generator, hp: Hyperparameters) -> pd.DataFrame:
-    # TODO: This function is very similar to `generate_train`. We can refactor it to avoid code duplication.
-    current_policies = [constant_cruise_policy, variable_cruise_policy]
-
-    def policy_choice_distribution():
-        return rng.choice([0, 1], p=[0.7, 0.3])
-
-    def process_noise_distribution():
-        return rng.normal(loc=hp.process_noise_loc, scale=hp.process_noise_std)
-
-    def measurement_noise_distribution():
-        return 0.0
-
-    out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
-
-    for i in range(hp.n_histories_test):
-        config = sb.SimulationConfig(
-            current_policies=current_policies,
-            policy_choice_distribution=policy_choice_distribution,
-            process_noise_distribution=process_noise_distribution,
-            measurement_noise_distribution=measurement_noise_distribution,
-            dt=hp.dt,
-            soc_0=1.0,
-        )
-
-        result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
-        df = result.to_dataframe()
-
-        _modify_dataframe(df, i)
-
-        out_df = pd.concat([out_df, df], ignore_index=True)
-
-    return out_df
-
-
-def run_sims_from_tzero(
-    rng: np.random.Generator, hp: Hyperparameters
-) -> sb.SimulationResult:
-    # TODO: This function is very similar to `generate_train`. We can refactor it to avoid code duplication.
-    config = sb.SimulationConfig(
+def make_simulator_config(
+    rng: np.random.Generator,
+    hp: Hyperparameters,
+) -> sb.SimulationConfig:
+    return sb.SimulationConfig(
         current_policies=[constant_cruise_policy, variable_cruise_policy],
-        policy_choice_distribution=lambda: rng.choice([0, 1], p=[0.7, 0.3]),
-        process_noise_distribution=lambda: rng.normal(
-            loc=hp.process_noise_loc, scale=hp.process_noise_std
+        policy_choice_distribution=functools.partial(
+            bernoulli_policy_choice, rng=rng, p=(0.7, 0.3)
         ),
-        measurement_noise_distribution=lambda: 0.0,
+        process_noise_distribution=functools.partial(
+            gaussian_noise,
+            rng=rng,
+            noise_std=hp.process_noise_std,
+        ),
+        measurement_noise_distribution=functools.partial(
+            gaussian_noise,
+            rng=rng,
+            noise_std=hp.measurement_noise_std,
+        ),
         dt=hp.dt,
         soc_0=1.0,
     )
-    return sb.simulate_constant_capacity_simple(n_sim=1_000, config=config)
-
-
-def save_dataframe_to_file(df: pd.DataFrame, path: pathlib.Path) -> None:
-    df.to_csv(path, index=False)
-
-
-def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
-    dataset = mlflow.data.from_pandas(df, name=name)
-    mlflow.log_input(dataset=dataset, context=context)
 
 
 def main() -> None:
-    """Single access point to generate the training, validation and test discharge
-    histories and save them to disk.
-
-    Train/validation data generation:
-    - 100 discharge histories for training, 20 for validation.
-    - Same RNG for reproducibility.
-
-    Test data generation:
-    - 10 test cases.
-    - Different RNG to ensure independent test data.
-    """
+    load_dotenv(override=True)
 
     hp = Hyperparameters()
 
+    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
+
     # MLFlow setup
-    run_tags = {
-        "case_study": "battery",
-        "stage": "data_generation",
-    }
-    tracking_setup = MLFlowSetup(
-        experiment_name="variable_loading_conditions",
-        run_name="generate_discharge_histories_multiple_policies",
-        tags=run_tags,
-    )
+    tracking_setup = MLFlowSetup(run_name="generate_dummy_multiple")
+
     with track_mlflow(tracking_setup):
         train_rng = np.random.default_rng(seed=hp.train_seed)
         test_rng = np.random.default_rng(seed=hp.test_seed)
 
-        mlflow.log_params(asdict(hp))
+        mlflow.log_params(dataclasses.asdict(hp))
 
-        train_df = generate_train(train_rng, hp)
-        test_df = generate_test(test_rng, hp)
+        train_df = write_histories(
+            make_simulator_config(train_rng, hp),
+            n_histories=hp.n_histories_train + hp.n_histories_val,
+        )
+        test_config = make_simulator_config(test_rng, hp)
+        test_df = write_histories(test_config, n_histories=hp.n_histories_test)
 
-        save_dataframe_to_file(train_df, path=RAW_DATA_DIR / "train.csv")
-        save_dataframe_to_file(test_df, path=RAW_DATA_DIR / "test.csv")
+        # Log the test simulation config so it can be reloaded at evaluation time.
+        log_simulation_config(test_config)
+
+        train_df.to_csv(RAW_DATA_DIR / "train.csv", index=False)
+        test_df.to_csv(RAW_DATA_DIR / "test.csv", index=False)
 
         track_dataframe(train_df, name="battery_train", context="train")
         track_dataframe(test_df, name="battery_test", context="test")
 
         fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(12, 5))
 
-        constant_cruise_policy.plot(ax=axs[0])
+        plot_current_profile(ax=axs[0], policy=constant_cruise_policy)
         axs[0].set_title("Constant Cruise Policy")
 
-        variable_cruise_policy.plot(ax=axs[1])
+        plot_current_profile(ax=axs[1], policy=variable_cruise_policy)
         axs[1].set_title("Variable Cruise Policy")
         mlflow.log_figure(fig, artifact_file="current_profiles.png")
 
-        res_for_plots = run_sims_from_tzero(rng=train_rng, hp=hp)
+        res_for_plots = sb.simulate_constant_capacity_simple(
+            n_sim=1_000,
+            config=make_simulator_config(
+                rng=np.random.default_rng(seed=hp.train_seed + 1), hp=hp
+            ),
+        )
 
         fig, axs = plt.subplots(nrows=1, ncols=4, figsize=(20, 5))
         sb.plot_rul_results(ax=axs[0], results=[res_for_plots])

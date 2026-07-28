@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
-import io
 import logging
+import os
 import pathlib
 import tempfile
 
@@ -13,51 +13,51 @@ import mlflow
 import numpy as np
 import orbax.checkpoint as ocp
 import sklearn.preprocessing as skpp
+from dotenv import load_dotenv
 from matplotlib import pyplot as plt
 
-from qmodem.module import mc_sample
-from qmodem.tracking import MLFlowSetup, track_mlflow
-from scripts.battery.bnn_model import Net as BnnNet
-from scripts.battery.commons import (
-    DATA_GEN_RUN_ID,
-    EvalTimeStamp,
-    get_test_case_data,
+from qmodem.battery.data_generation import (
+    load_simulation_config,
     run_discharges_from_intermediate_socs,
 )
-from scripts.battery.hnn_model import Net as HnnNet
-from scripts.battery.mcd_model import Net as McdNet
-from scripts.battery.qavi_model import Net as QaviNet
-from scripts.battery.qavi_model import WeightGenerator
+from qmodem.battery.evaluate import get_test_case_data
+from qmodem.battery.models import (
+    BayesianCNN as BnnNet,
+)
+from qmodem.battery.models import (
+    HeteroscedasticCNN as HnnNet,
+)
+from qmodem.battery.models import (
+    MCDropoutCNN as McdNet,
+)
+from qmodem.battery.models import (
+    QuantumVICNN as QaviNet,
+)
+from qmodem.battery.models import (
+    WeightGenerator,
+)
+from qmodem.battery.scoring import EvalTimeStamp
+from qmodem.module import mc_sample
+from qmodem.tracking import MLFlowSetup, track_mlflow
+from qmodem.utils import setup_script_logging
 
 
 @dataclasses.dataclass
-class CompareCRPSHyperparameters:
+class Hyperparameters:
     rng_seed: int = 0
     n_soc0s: int = 10
     n_mc_samples: int = 100
     grid_crps_start: float = 0.0
     grid_crps_end: float = 5000.0
     grid_crps_num: int = 100
-    simulation_dt: float = 20.0
 
 
 def main() -> None:
-    log_stream = io.StringIO()
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        handlers=[
-            logging.StreamHandler(),  # console (stderr)
-            logging.StreamHandler(log_stream),  # in-memory stream for MLflow logging
-        ],
-    )
+    load_dotenv(override=True)
 
-    RAW_DATA_DIR = (
-        pathlib.Path(__file__).resolve().parent.parent.parent
-        / "data"
-        / "raw"
-        / "battery"
-    )
+    log_stream = setup_script_logging()
+
+    RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR"])
 
     TRAIN_RUN_IDS = {
         "hnn": "f58082c7c1fb413b8f7f90febac6ad64",
@@ -73,7 +73,10 @@ def main() -> None:
         "qavi": [],
     }
 
-    hp = CompareCRPSHyperparameters()
+    hp = Hyperparameters()
+
+    # load the battery simulator configuration from the data generation run
+    sim_config = load_simulation_config(os.environ["DATA_GEN_RUN_ID"])
 
     rul_grid_crps = np.linspace(hp.grid_crps_start, hp.grid_crps_end, hp.grid_crps_num)
 
@@ -154,11 +157,13 @@ def main() -> None:
             )
 
             # Load process noise parameters from the data generation run.
-            data_gen_run = mlflow.get_run(DATA_GEN_RUN_ID)
             sims_iterator = run_discharges_from_intermediate_socs(
-                soc_0s=test_data.soc[soc0_idxs],
-                process_noise_std=float(data_gen_run.data.params["process_noise_std"]),
-                dt=hp.simulation_dt,
+                config=sim_config,
+                overrides=[
+                    {"soc_0": test_data.soc[idx], "t_0": test_data.time[idx]}
+                    for idx in soc0_idxs
+                ],
+                n_sim=100,
             )
 
             # Discard the first sample, since there is no prediction for it.
