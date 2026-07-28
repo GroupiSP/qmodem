@@ -199,11 +199,17 @@ def log_evaluation_metrics(
 ) -> None:
     """Log the standard evaluation metrics and figures to the active MLflow run."""
     # Metric 1: plot RUL predictions with CI over time.
-    fig, axes = plt.subplots(2, 5, figsize=(15, 6))
-    axes = axes.flatten()
-    for test_case_result, ax in zip(test_case_results, axes):
-        test_case_result.plot_rul_over_time(ax)
-    fig.tight_layout()
+    fig, axs = plt.subplots(2, 5, figsize=(15, 6))
+    axs = axs.flatten()
+
+    for test_case_result, ax in zip(test_case_results, axs):
+        test_case_result.plot_rul_over_time(ax, legend=False)
+
+    # Add a single legend for all subplots
+    handles, labels = axs.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=5)
+    fig.tight_layout(rect=[0, 0, 1, 0.92])  # Make room for the figure legend
+
     mlflow.log_figure(fig, artifact_file="rul_predictions_over_test_cases.png")
 
     # Metric 2: average RMSE
@@ -234,10 +240,10 @@ def log_evaluation_metrics(
     )
 
     # Metric 6: bar plot of all metrics per test case.
-    fig, axes = plt.subplots(2, 2, figsize=(10, 6))
-    axes = axes.flatten()
+    fig, axs = plt.subplots(2, 2, figsize=(10, 6))
+    axs = axs.flatten()
     bar_plot_metrics_per_test_case(
-        axes=axes, test_case_results=test_case_results, rul_grid_crps=rul_grid_crps
+        axes=axs, test_case_results=test_case_results, rul_grid_crps=rul_grid_crps
     )
     fig.tight_layout()
     mlflow.log_figure(fig, artifact_file="metrics_per_test_case.png")
