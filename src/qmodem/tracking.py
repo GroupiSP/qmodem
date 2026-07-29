@@ -59,6 +59,7 @@ class MLFlowSetup:
         run_name: Optional human-readable name for the MLflow run. If None, MLflow will auto-generate a name.
         run_id: Optional existing run ID to resume. If None, a new run is created.
         run_description: Optional description for the MLflow run.
+        run_nested: Whether this run is a nested run. Defaults to False.
         tags: Arbitrary key-value tags attached to the run.
         backend_store: SQLAlchemy URI for the MLflow backend store. Defaults to the value of the `MLFLOW_BACKEND_STORE` environment variable or `sqlite:///mlflow.db` if not set.
         artifact_store: Local path where artifacts are stored.
@@ -69,12 +70,30 @@ class MLFlowSetup:
     run_name: str | None = None
     run_id: str | None = None
     run_description: str | None = None
+    run_nested: bool = False
     tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str | None = None
     artifact_store: str | Path = ROOT_DIR / "mlruns"
     tracking_server: str | None = None
 
+    def _are_all_defaults_nested_true(self) -> bool:
+        """Checks if all attributes except `run_nested` are set to their default
+        values."""
+        return (
+            self.experiment_name is None
+            and self.run_name is None
+            and self.run_id is None
+            and self.run_description is None
+            and self.backend_store is None
+            and self.artifact_store == ROOT_DIR / "mlruns"
+            and self.tracking_server is None
+        )
+
     def __post_init__(self):
+        if self.run_nested and not self._are_all_defaults_nested_true():
+            raise ValueError(
+                "When run_nested is True, all other arguments must be defaults."
+            )
         if self.experiment_name is None:
             object.__setattr__(
                 self,
@@ -109,6 +128,7 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
         active_run = mlflow.start_run(
             run_id=setup.run_id,
             run_name=setup.run_name,
+            nested=setup.run_nested,
             description=setup.run_description,
         )
         mlflow.set_tags(setup.tags)
