@@ -5,7 +5,6 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from pathlib import Path
 from typing import Any, Generator
 
 import mlflow
@@ -73,7 +72,7 @@ class MLFlowSetup:
     run_nested: bool = False
     tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str | None = None
-    artifact_store: str | Path = ROOT_DIR / "mlruns"
+    artifact_store: str | None = None
     tracking_server: str | None = None
 
     def _are_all_defaults_nested_true(self) -> bool:
@@ -85,11 +84,13 @@ class MLFlowSetup:
             and self.run_id is None
             and self.run_description is None
             and self.backend_store is None
-            and self.artifact_store == ROOT_DIR / "mlruns"
+            and self.artifact_store is None
             and self.tracking_server is None
         )
 
     def __post_init__(self):
+        if self.tracking_server is not None:
+            raise NotImplementedError("Remote tracking server is not supported yet.")
         if self.run_nested and not self._are_all_defaults_nested_true():
             raise ValueError(
                 "When run_nested is True, all other arguments must be defaults."
@@ -98,15 +99,19 @@ class MLFlowSetup:
             object.__setattr__(
                 self,
                 "experiment_name",
-                os.environ.get("MLFLOW_EXPERIMENT_NAME", "default"),
+                os.environ.get("MLFLOW_EXPERIMENT_NAME", "Default"),
             )
-        if self.tracking_server is not None:
-            raise NotImplementedError("Remote tracking server is not supported yet.")
         if self.backend_store is None:
             object.__setattr__(
                 self,
                 "backend_store",
                 os.environ.get("MLFLOW_BACKEND_STORE", "sqlite:///mlflow.db"),
+            )
+        if self.artifact_store is None:
+            object.__setattr__(
+                self,
+                "artifact_store",
+                os.environ.get("MLFLOW_ARTIFACT_STORE", ROOT_DIR / "mlruns"),
             )
 
 
