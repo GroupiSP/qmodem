@@ -1,28 +1,15 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
 import io
 import pathlib
-from collections.abc import Callable, Iterable
+from typing import Iterable
 
 import flax.nnx as nnx
-import grain
 import jax
 import mlflow
 import optax
-import pandas as pd
-import sklearn.preprocessing as skpp
 
-from qmodem.data import (
-    DataFrameSource,
-    DataPipeline,
-    DataSource,
-    add_feature_dimension_to_y,
-    get_time_windows_and_join,
-    normalize_ruls,
-    to_jax,
-)
 from qmodem.tracking import MLFlowSetup, track_mlflow, write_setup_to_file
 from qmodem.train import (
     LogReporter,
@@ -45,6 +32,7 @@ from qmodem.train_adversarial import (
 from qmodem.train_base import Callback, EarlyStopper, mlflow_track_model_best_state
 from qmodem.utils import count_parameters
 
+from .data_processing import dataloader_builders, prepare_data
 from .train_steps import (
     StandardStepFactory,
     StandardStepFactoryContext,
@@ -94,116 +82,6 @@ class QAVITrainHyperparameters(BaseTrainHyperparameters):
     adversarial_loss_weight: float = 0.1
 
 
-@dataclasses.dataclass
-class PreparedData:
-    train: DataFrameSource
-    val: DataFrameSource
-    scaler: skpp.MinMaxScaler
-
-
-def _split_train_val(
-    train_path: pathlib.Path, n_histories_train: int
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    data = pd.read_csv(train_path)
-    return (
-        data[data["run_id"] < n_histories_train],
-        data[data["run_id"] >= n_histories_train],
-    )
-
-
-def _prepare_data(
-    raw_data_dir: pathlib.Path,
-    data_gen_run_id: str,
-    hp: BaseTrainHyperparameters,
-) -> PreparedData:
-    data_gen_run = mlflow.get_run(data_gen_run_id)
-    train_df, val_df = _split_train_val(
-        raw_data_dir / "train.csv",
-        n_histories_train=int(data_gen_run.data.params["n_histories_train"]),
-    )
-
-    scaler = skpp.MinMaxScaler(feature_range=(0, 1))
-    common_steps = [
-        functools.partial(
-            get_time_windows_and_join,
-            window_size=hp.window_size,
-            stride=hp.stride,
-        ),
-        add_feature_dimension_to_y,
-    ]
-    train_pipeline = DataPipeline(
-        [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.fit_transform)
-            if hp.normalize_rul
-            else lambda data: data,
-            to_jax,
-        ]
-    )
-    val_pipeline = DataPipeline(
-        [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.transform)
-            if hp.normalize_rul
-            else lambda data: data,
-            to_jax,
-        ]
-    )
-
-    return PreparedData(
-        train=DataFrameSource(df=train_df, pipeline=train_pipeline),
-        val=DataFrameSource(df=val_df, pipeline=val_pipeline),
-        scaler=scaler,
-    )
-
-
-def _train_dataloader_builder(
-    sampler_seed: int,
-    ds_train: DataSource,
-    batch_size: int,
-    drop_remainder: bool,
-) -> grain.DataLoader:
-    sampler = grain.samplers.IndexSampler(
-        num_records=len(ds_train),
-        num_epochs=1,
-        shuffle=True,
-        seed=sampler_seed,
-    )
-    return grain.DataLoader(
-        data_source=ds_train,
-        sampler=sampler,
-        operations=[
-            grain.transforms.Batch(
-                batch_size=batch_size,
-                drop_remainder=drop_remainder,
-            )
-        ],
-        worker_count=0,
-    )
-
-
-def _dataloader_builders(
-    data: PreparedData, hp: BaseTrainHyperparameters
-) -> tuple[Callable[[int], Iterable], Callable[[int], Iterable]]:
-    train_builder = functools.partial(
-        _train_dataloader_builder,
-        ds_train=data.train,
-        batch_size=hp.batch_size,
-        drop_remainder=hp.drop_remainder,
-    )
-
-    def val_builder(epoch: int) -> list[tuple[jax.Array, jax.Array]]:
-        """The validation dataloader is a convention for consistency with the training
-        loop.
-
-        It returns a single batch containing the entire validation set, which is assumed
-        to be small enough to fit in memory.
-        """
-        return [(data.val.X, data.val.y)]
-
-    return train_builder, val_builder
-
-
 def run_training(
     *,
     model: nnx.Module,
@@ -215,8 +93,18 @@ def run_training(
     step_factory: StandardStepFactory | None = None,
     callbacks: Iterable[Callback] = (),
 ) -> None:
-    data = _prepare_data(raw_data_dir, data_gen_run_id, hp)
-    train_dataloader_builder, val_dataloader_builder = _dataloader_builders(data, hp)
+    data = prepare_data(
+        raw_data_dir,
+        data_gen_run_id,
+        window_size=hp.window_size,
+        stride=hp.stride,
+        normalize_rul=hp.normalize_rul,
+    )
+    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
+        data,
+        batch_size=hp.batch_size,
+        drop_remainder=hp.drop_remainder,
+    )
 
     if step_factory is None:
         train_batch_fn, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
@@ -278,8 +166,18 @@ def run_adversarial_training(
     eval_batch_fn: EvalStepFn | None = None,
     callbacks: Iterable[Callback] = (),
 ) -> None:
-    data = _prepare_data(raw_data_dir, data_gen_run_id, hp)
-    train_dataloader_builder, val_dataloader_builder = _dataloader_builders(data, hp)
+    data = prepare_data(
+        raw_data_dir,
+        data_gen_run_id,
+        window_size=hp.window_size,
+        stride=hp.stride,
+        normalize_rul=hp.normalize_rul,
+    )
+    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
+        data,
+        batch_size=hp.batch_size,
+        drop_remainder=hp.drop_remainder,
+    )
 
     if eval_batch_fn is None:
         _, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
