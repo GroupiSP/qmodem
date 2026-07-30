@@ -22,6 +22,15 @@ def cdf(x: float, samples: np.ndarray) -> float:
     return cdf_value
 
 
+def crps(
+    samples_true: np.ndarray, samples_pred: np.ndarray, x_grid: np.ndarray
+) -> float:
+    F0 = np.array([cdf(x, samples_true) for x in x_grid])
+    F1 = np.array([cdf(x, samples_pred) for x in x_grid])
+
+    return np.trapezoid((F0 - F1) ** 2, x_grid)
+
+
 def _point_crps(y_true, samples_predicted, x_grid):
     F0 = jnp.where(x_grid < y_true, 0.0, 1.0)
     F1 = jax.vmap(cdf, in_axes=(0, None), out_axes=0)(x_grid, samples_predicted)

@@ -6,7 +6,7 @@ from typing import Iterable
 import matplotlib.pyplot as plt
 import numpy as np
 
-from qmodem.metrics import cdf
+from qmodem.metrics import crps as _crps
 
 
 @dataclasses.dataclass(frozen=True)
@@ -47,10 +47,11 @@ class EvalTimeStamp:
         return lower_bound_pred <= self.target <= upper_bound_pred
 
     def crps(self, x_grid: np.ndarray) -> float:
-        F0 = np.array([cdf(x, self.samples_true) for x in x_grid])
-        F1 = np.array([cdf(x, self.samples_pred) for x in x_grid])
-
-        return np.trapezoid((F0 - F1) ** 2, x_grid)
+        return _crps(
+            samples_true=self.samples_true,
+            samples_pred=self.samples_pred,
+            x_grid=x_grid,
+        )
 
 
 @dataclasses.dataclass
