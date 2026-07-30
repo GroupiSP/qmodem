@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import functools
 import io
-import json
 import pathlib
 from collections.abc import Callable, Iterable
 
@@ -24,7 +23,7 @@ from qmodem.data import (
     normalize_ruls,
     to_jax,
 )
-from qmodem.tracking import MLFlowSetup, track_mlflow
+from qmodem.tracking import MLFlowSetup, track_mlflow, write_setup_to_file
 from qmodem.train import (
     LogReporter,
     mlflow_track_losses,
@@ -44,7 +43,7 @@ from qmodem.train_adversarial import (
     train_loop as adversarial_train_loop,
 )
 from qmodem.train_base import Callback, EarlyStopper, mlflow_track_model_best_state
-from qmodem.utils import LAST_TRAIN_SETUP_PATH, count_parameters
+from qmodem.utils import count_parameters
 
 from .train_steps import (
     StandardStepFactory,
@@ -205,21 +204,6 @@ def _dataloader_builders(
     return train_builder, val_builder
 
 
-def _write_setup_to_file(experiment_name: str) -> None:
-    """Writes only the setup information necessary to resume a trained run for testing
-    purposes."""
-    active_run = mlflow.active_run()
-
-    with open(LAST_TRAIN_SETUP_PATH, "w") as f:
-        json.dump(
-            {
-                "run_id": active_run.info.run_id,
-                "experiment_name": experiment_name,
-            },
-            f,
-        )
-
-
 def run_training(
     *,
     model: nnx.Module,
@@ -253,7 +237,7 @@ def run_training(
     )
 
     with track_mlflow(setup=mlflow_setup):
-        _write_setup_to_file(mlflow_setup.experiment_name)
+        write_setup_to_file(mlflow_setup.experiment_name)
 
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
@@ -314,7 +298,7 @@ def run_adversarial_training(
     )
 
     with track_mlflow(setup=mlflow_setup):
-        _write_setup_to_file(mlflow_setup.experiment_name)
+        write_setup_to_file(mlflow_setup.experiment_name)
 
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))

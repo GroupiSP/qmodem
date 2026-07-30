@@ -154,6 +154,23 @@ def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
     mlflow.log_input(dataset=dataset, context=context)
 
 
+def write_setup_to_file(experiment_name: str) -> None:
+    """Writes only the setup information necessary to resume a trained run for testing
+    purposes."""
+    active_run = mlflow.active_run()
+
+    with open(LAST_TRAIN_SETUP_PATH, "w") as f:
+        json.dump(
+            {
+                "run_id": active_run.info.run_id,
+                "experiment_name": experiment_name,
+            },
+            f,
+        )
+
+    return
+
+
 def retrieve_mlflow_setup_train() -> MLFlowSetup:
     """Retrieves the MLFlowSetup from a JSON file at the given path. If the file does
     not exist, prompts the user for input.
