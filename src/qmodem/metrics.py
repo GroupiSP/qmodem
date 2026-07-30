@@ -5,17 +5,18 @@ from typing import Protocol, SupportsIndex
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import nnx
 
 from .module import RandomCallModel, mc_sample
 
 
-def _cdf(x, samples):
+def cdf(x: float, samples: np.ndarray) -> float:
     if len(samples) == 0:
         return 0.0
 
-    sorted_samples = jnp.sort(samples)
-    count = jnp.sum(jnp.where(sorted_samples <= x, 1, 0))
+    sorted_samples = np.sort(samples)
+    count = np.sum(sorted_samples <= x)
     cdf_value = count / len(sorted_samples)
 
     return cdf_value
@@ -23,7 +24,7 @@ def _cdf(x, samples):
 
 def _point_crps(y_true, samples_predicted, x_grid):
     F0 = jnp.where(x_grid < y_true, 0.0, 1.0)
-    F1 = jax.vmap(_cdf, in_axes=(0, None), out_axes=0)(x_grid, samples_predicted)
+    F1 = jax.vmap(cdf, in_axes=(0, None), out_axes=0)(x_grid, samples_predicted)
 
     crps_value = jnp.trapezoid(jnp.square(F0 - F1), x_grid)
     return crps_value
