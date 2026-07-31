@@ -58,7 +58,6 @@ class MLFlowSetup:
         run_name: Optional human-readable name for the MLflow run. If None, MLflow will auto-generate a name.
         run_id: Optional existing run ID to resume. If None, a new run is created.
         run_description: Optional description for the MLflow run.
-        run_nested: Whether this run is a nested run. Defaults to False.
         tags: Arbitrary key-value tags attached to the run.
         backend_store: SQLAlchemy URI for the MLflow backend store. Defaults to the value of the `MLFLOW_BACKEND_STORE` environment variable or `sqlite:///mlflow.db` if not set.
         artifact_store: Local path where artifacts are stored.
