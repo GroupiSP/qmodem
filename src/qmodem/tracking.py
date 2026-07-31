@@ -69,32 +69,14 @@ class MLFlowSetup:
     run_name: str | None = None
     run_id: str | None = None
     run_description: str | None = None
-    run_nested: bool = False
     tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str | None = None
     artifact_store: str | None = None
     tracking_server: str | None = None
 
-    def _are_all_defaults_nested_true(self) -> bool:
-        """Checks if all attributes except `run_nested` are set to their default
-        values."""
-        return (
-            self.experiment_name is None
-            and self.run_name is None
-            and self.run_id is None
-            and self.run_description is None
-            and self.backend_store is None
-            and self.artifact_store is None
-            and self.tracking_server is None
-        )
-
     def __post_init__(self):
         if self.tracking_server is not None:
             raise NotImplementedError("Remote tracking server is not supported yet.")
-        if self.run_nested and not self._are_all_defaults_nested_true():
-            raise ValueError(
-                "When run_nested is True, all other arguments must be defaults."
-            )
         if self.experiment_name is None:
             object.__setattr__(
                 self,
@@ -133,7 +115,6 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
         active_run = mlflow.start_run(
             run_id=setup.run_id,
             run_name=setup.run_name,
-            nested=setup.run_nested,
             description=setup.run_description,
         )
         mlflow.set_tags(setup.tags)
