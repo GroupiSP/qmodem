@@ -58,17 +58,13 @@ class BaseTrainHyperparameters:
     early_stopping_min_delta: float = 1e-4
     n_samples_predictive_mean_variance: int = 100
     activation_function: str = "gelu"
+    dropout_rate: float = 0.1
 
 
 @dataclasses.dataclass
 class TrainHyperparameters(BaseTrainHyperparameters):
     learning_rate: float = 1e-2
     scheduler_alpha: float = 0.1
-
-
-@dataclasses.dataclass
-class MCDTrainHyperparameters(TrainHyperparameters):
-    dropout_rate: float = 0.1
 
 
 @dataclasses.dataclass
