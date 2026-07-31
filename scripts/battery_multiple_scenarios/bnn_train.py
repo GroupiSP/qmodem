@@ -18,9 +18,15 @@ def main() -> None:
     load_dotenv(override=True)
 
     log_stream = setup_script_logging()
-    hp = TrainHyperparameters()
+    hp = TrainHyperparameters(
+        conv_kernel_size=10,
+        conv_n_filters=24,
+        window_size=10,
+        beta_nll=0.374,
+        learning_rate=0.000748,
+    )
 
-    mlflow_setup = MLFlowSetup(run_name="dummy_bnn_multiple")
+    mlflow_setup = MLFlowSetup(run_name="bnn_train_optimized_hps")
     model = BayesianCNN(
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,

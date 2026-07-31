@@ -5,7 +5,6 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from pathlib import Path
 from typing import Any, Generator
 
 import mlflow
@@ -71,23 +70,29 @@ class MLFlowSetup:
     run_description: str | None = None
     tags: dict[str, Any] = field(default_factory=dict)
     backend_store: str | None = None
-    artifact_store: str | Path = ROOT_DIR / "mlruns"
+    artifact_store: str | None = None
     tracking_server: str | None = None
 
     def __post_init__(self):
+        if self.tracking_server is not None:
+            raise NotImplementedError("Remote tracking server is not supported yet.")
         if self.experiment_name is None:
             object.__setattr__(
                 self,
                 "experiment_name",
-                os.environ.get("MLFLOW_EXPERIMENT_NAME", "default"),
+                os.environ.get("MLFLOW_EXPERIMENT_NAME", "Default"),
             )
-        if self.tracking_server is not None:
-            raise NotImplementedError("Remote tracking server is not supported yet.")
         if self.backend_store is None:
             object.__setattr__(
                 self,
                 "backend_store",
                 os.environ.get("MLFLOW_BACKEND_STORE", "sqlite:///mlflow.db"),
+            )
+        if self.artifact_store is None:
+            object.__setattr__(
+                self,
+                "artifact_store",
+                os.environ.get("MLFLOW_ARTIFACT_STORE", ROOT_DIR / "mlruns"),
             )
 
 
@@ -127,6 +132,23 @@ def get_tags_from_mlflow_run(run_id: str) -> dict[str, str]:
 def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
     dataset = mlflow.data.from_pandas(df, name=name)
     mlflow.log_input(dataset=dataset, context=context)
+
+
+def write_setup_to_file(experiment_name: str) -> None:
+    """Writes only the setup information necessary to resume a trained run for testing
+    purposes."""
+    active_run = mlflow.active_run()
+
+    with open(LAST_TRAIN_SETUP_PATH, "w") as f:
+        json.dump(
+            {
+                "run_id": active_run.info.run_id,
+                "experiment_name": experiment_name,
+            },
+            f,
+        )
+
+    return
 
 
 def retrieve_mlflow_setup_train() -> MLFlowSetup:

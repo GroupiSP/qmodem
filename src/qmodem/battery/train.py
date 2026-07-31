@@ -1,30 +1,17 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
 import io
-import json
 import pathlib
-from collections.abc import Callable, Iterable
+from contextlib import contextmanager
+from typing import Generator, Iterable
 
 import flax.nnx as nnx
-import grain
 import jax
 import mlflow
 import optax
-import pandas as pd
-import sklearn.preprocessing as skpp
 
-from qmodem.data import (
-    DataFrameSource,
-    DataPipeline,
-    DataSource,
-    add_feature_dimension_to_y,
-    get_time_windows_and_join,
-    normalize_ruls,
-    to_jax,
-)
-from qmodem.tracking import MLFlowSetup, track_mlflow
+from qmodem.tracking import MLFlowSetup, track_mlflow, write_setup_to_file
 from qmodem.train import (
     LogReporter,
     mlflow_track_losses,
@@ -44,8 +31,9 @@ from qmodem.train_adversarial import (
     train_loop as adversarial_train_loop,
 )
 from qmodem.train_base import Callback, EarlyStopper, mlflow_track_model_best_state
-from qmodem.utils import LAST_TRAIN_SETUP_PATH, count_parameters
+from qmodem.utils import count_parameters
 
+from .data_processing import dataloader_builders, prepare_data
 from .train_steps import (
     StandardStepFactory,
     StandardStepFactoryContext,
@@ -95,144 +83,41 @@ class QAVITrainHyperparameters(BaseTrainHyperparameters):
     adversarial_loss_weight: float = 0.1
 
 
-@dataclasses.dataclass
-class PreparedData:
-    train: DataFrameSource
-    val: DataFrameSource
-    scaler: skpp.MinMaxScaler
+@contextmanager
+def _null_context(setup: MLFlowSetup) -> Generator[None, None, None]:
+    """A context manager that does nothing.
 
-
-def _split_train_val(
-    train_path: pathlib.Path, n_histories_train: int
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    data = pd.read_csv(train_path)
-    return (
-        data[data["run_id"] < n_histories_train],
-        data[data["run_id"] >= n_histories_train],
-    )
-
-
-def _prepare_data(
-    raw_data_dir: pathlib.Path,
-    data_gen_run_id: str,
-    hp: BaseTrainHyperparameters,
-) -> PreparedData:
-    data_gen_run = mlflow.get_run(data_gen_run_id)
-    train_df, val_df = _split_train_val(
-        raw_data_dir / "train.csv",
-        n_histories_train=int(data_gen_run.data.params["n_histories_train"]),
-    )
-
-    scaler = skpp.MinMaxScaler(feature_range=(0, 1))
-    common_steps = [
-        functools.partial(
-            get_time_windows_and_join,
-            window_size=hp.window_size,
-            stride=hp.stride,
-        ),
-        add_feature_dimension_to_y,
-    ]
-    train_pipeline = DataPipeline(
-        [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.fit_transform)
-            if hp.normalize_rul
-            else lambda data: data,
-            to_jax,
-        ]
-    )
-    val_pipeline = DataPipeline(
-        [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.transform)
-            if hp.normalize_rul
-            else lambda data: data,
-            to_jax,
-        ]
-    )
-
-    return PreparedData(
-        train=DataFrameSource(df=train_df, pipeline=train_pipeline),
-        val=DataFrameSource(df=val_df, pipeline=val_pipeline),
-        scaler=scaler,
-    )
-
-
-def _train_dataloader_builder(
-    sampler_seed: int,
-    ds_train: DataSource,
-    batch_size: int,
-    drop_remainder: bool,
-) -> grain.DataLoader:
-    sampler = grain.samplers.IndexSampler(
-        num_records=len(ds_train),
-        num_epochs=1,
-        shuffle=True,
-        seed=sampler_seed,
-    )
-    return grain.DataLoader(
-        data_source=ds_train,
-        sampler=sampler,
-        operations=[
-            grain.transforms.Batch(
-                batch_size=batch_size,
-                drop_remainder=drop_remainder,
-            )
-        ],
-        worker_count=0,
-    )
-
-
-def _dataloader_builders(
-    data: PreparedData, hp: BaseTrainHyperparameters
-) -> tuple[Callable[[int], Iterable], Callable[[int], Iterable]]:
-    train_builder = functools.partial(
-        _train_dataloader_builder,
-        ds_train=data.train,
-        batch_size=hp.batch_size,
-        drop_remainder=hp.drop_remainder,
-    )
-
-    def val_builder(epoch: int) -> list[tuple[jax.Array, jax.Array]]:
-        """The validation dataloader is a convention for consistency with the training
-        loop.
-
-        It returns a single batch containing the entire validation set, which is assumed
-        to be small enough to fit in memory.
-        """
-        return [(data.val.X, data.val.y)]
-
-    return train_builder, val_builder
-
-
-def _write_setup_to_file(experiment_name: str) -> None:
-    """Writes only the setup information necessary to resume a trained run for testing
-    purposes."""
-    active_run = mlflow.active_run()
-
-    with open(LAST_TRAIN_SETUP_PATH, "w") as f:
-        json.dump(
-            {
-                "run_id": active_run.info.run_id,
-                "experiment_name": experiment_name,
-            },
-            f,
-        )
+    This is useful when the MLFlowSetup is defined at a higher level than training, for
+    example when doing hyperparameter optimization, where we do not want to create an
+    independent MLFlow run/experiment for each training run, but rather spawn nested
+    training runs under the same parent run.
+    """
+    yield
 
 
 def run_training(
     *,
     model: nnx.Module,
     hp: TrainHyperparameters,
-    mlflow_setup: MLFlowSetup,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
+    mlflow_setup: MLFlowSetup | None = None,
     step_factory: StandardStepFactory | None = None,
     callbacks: Iterable[Callback] = (),
 ) -> None:
-    data = _prepare_data(raw_data_dir, data_gen_run_id, hp)
-    train_dataloader_builder, val_dataloader_builder = _dataloader_builders(data, hp)
+    data = prepare_data(
+        raw_data_dir,
+        data_gen_run_id,
+        window_size=hp.window_size,
+        stride=hp.stride,
+        normalize_rul=hp.normalize_rul,
+    )
+    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
+        data,
+        batch_size=hp.batch_size,
+        drop_remainder=hp.drop_remainder,
+    )
 
     if step_factory is None:
         train_batch_fn, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
@@ -252,8 +137,14 @@ def run_training(
         min_delta=hp.early_stopping_min_delta,
     )
 
-    with track_mlflow(setup=mlflow_setup):
-        _write_setup_to_file(mlflow_setup.experiment_name)
+    # Workaround for the fact that our MLFlow wrapper does not support nested runs natively.
+    if mlflow_setup:
+        mlflow_context = track_mlflow(setup=mlflow_setup)
+    else:
+        mlflow_context = _null_context(setup=mlflow_setup)
+
+    with mlflow_context:
+        write_setup_to_file(mlflow_setup.experiment_name)
 
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
@@ -285,7 +176,6 @@ def run_adversarial_training(
     model: nnx.Module,
     discriminator: nnx.Module,
     hp: QAVITrainHyperparameters,
-    mlflow_setup: MLFlowSetup,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
@@ -293,9 +183,20 @@ def run_adversarial_training(
     discriminator_batch_fn: TrainStepFn,
     eval_batch_fn: EvalStepFn | None = None,
     callbacks: Iterable[Callback] = (),
+    mlflow_setup: MLFlowSetup | None = None,
 ) -> None:
-    data = _prepare_data(raw_data_dir, data_gen_run_id, hp)
-    train_dataloader_builder, val_dataloader_builder = _dataloader_builders(data, hp)
+    data = prepare_data(
+        raw_data_dir,
+        data_gen_run_id,
+        window_size=hp.window_size,
+        stride=hp.stride,
+        normalize_rul=hp.normalize_rul,
+    )
+    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
+        data,
+        batch_size=hp.batch_size,
+        drop_remainder=hp.drop_remainder,
+    )
 
     if eval_batch_fn is None:
         _, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
@@ -313,9 +214,14 @@ def run_adversarial_training(
         min_delta=hp.early_stopping_min_delta,
     )
 
-    with track_mlflow(setup=mlflow_setup):
-        _write_setup_to_file(mlflow_setup.experiment_name)
+    # Workaround for the fact that our MLFlow wrapper does not support nested runs natively.
+    if mlflow_setup:
+        mlflow_context = track_mlflow(setup=mlflow_setup)
+        write_setup_to_file(mlflow_setup.experiment_name)
+    else:
+        mlflow_context = _null_context(setup=mlflow_setup)
 
+    with mlflow_context:
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))

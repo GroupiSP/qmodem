@@ -23,6 +23,8 @@ def main() -> None:
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
 
     model = HeteroscedasticCNN(
+        n_filters=int(run_parameters["conv_n_filters"]),
+        kernel_size=int(run_parameters["conv_kernel_size"]),
         rngs=nnx.Rngs(0),
         act_fn=getattr(nnx, run_parameters["activation_function"]),
     )  # RNGs won't be used for inference, so the seed is arbitrary.

@@ -36,7 +36,7 @@ class Hyperparameters:
     n_histories_test: int = 10
     process_noise_std: float = 5e-3
     measurement_noise_std: float = 5e-3
-    soc_range_train_val: tuple[float, float] = (0.05, 1.0)
+    soc_range_train_val: tuple[float, float] = (0.05, 1.0)  # TODO is this still used?
     train_seed: int = 42
     test_seed: int = 123
 

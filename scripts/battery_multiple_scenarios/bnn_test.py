@@ -23,8 +23,10 @@ def main() -> None:
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
 
     model = BayesianCNN(
-        rngs=nnx.Rngs(0),
+        n_filters=int(run_parameters["conv_n_filters"]),
+        kernel_size=int(run_parameters["conv_kernel_size"]),
         act_fn=getattr(nnx, run_parameters["activation_function"]),
+        rngs=nnx.Rngs(0),
     )  # RNGs won't be used for inference, so the seed is arbitrary.
 
     run_evaluation(
@@ -34,7 +36,7 @@ def main() -> None:
         raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
         data_gen_run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
         log_stream=log_stream,
-        train_mode=False,
+        train_mode=False,  # Only used for MCD
     )
 
 
