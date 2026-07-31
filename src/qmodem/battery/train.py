@@ -3,7 +3,8 @@ from __future__ import annotations
 import dataclasses
 import io
 import pathlib
-from typing import Iterable
+from contextlib import contextmanager
+from typing import Generator, Iterable
 
 import flax.nnx as nnx
 import jax
@@ -82,14 +83,26 @@ class QAVITrainHyperparameters(BaseTrainHyperparameters):
     adversarial_loss_weight: float = 0.1
 
 
+@contextmanager
+def _null_context(setup: MLFlowSetup) -> Generator[None, None, None]:
+    """A context manager that does nothing.
+
+    This is useful when the MLFlowSetup is defined at a higher level than training, for
+    example when doing hyperparameter optimization, where we do not want to create an
+    independent MLFlow run/experiment for each training run, but rather spawn nested
+    training runs under the same parent run.
+    """
+    yield
+
+
 def run_training(
     *,
     model: nnx.Module,
     hp: TrainHyperparameters,
-    mlflow_setup: MLFlowSetup,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
+    mlflow_setup: MLFlowSetup | None = None,
     step_factory: StandardStepFactory | None = None,
     callbacks: Iterable[Callback] = (),
 ) -> None:
@@ -124,9 +137,14 @@ def run_training(
         min_delta=hp.early_stopping_min_delta,
     )
 
-    with track_mlflow(setup=mlflow_setup):
+    # Workaround for the fact that our MLFlow wrapper does not support nested runs natively.
+    if mlflow_setup:
+        mlflow_context = track_mlflow(setup=mlflow_setup)
         write_setup_to_file(mlflow_setup.experiment_name)
+    else:
+        mlflow_context = _null_context(setup=mlflow_setup)
 
+    with mlflow_context:
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
@@ -157,7 +175,6 @@ def run_adversarial_training(
     model: nnx.Module,
     discriminator: nnx.Module,
     hp: QAVITrainHyperparameters,
-    mlflow_setup: MLFlowSetup,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
@@ -165,6 +182,7 @@ def run_adversarial_training(
     discriminator_batch_fn: TrainStepFn,
     eval_batch_fn: EvalStepFn | None = None,
     callbacks: Iterable[Callback] = (),
+    mlflow_setup: MLFlowSetup | None = None,
 ) -> None:
     data = prepare_data(
         raw_data_dir,
@@ -195,9 +213,14 @@ def run_adversarial_training(
         min_delta=hp.early_stopping_min_delta,
     )
 
-    with track_mlflow(setup=mlflow_setup):
+    # Workaround for the fact that our MLFlow wrapper does not support nested runs natively.
+    if mlflow_setup:
+        mlflow_context = track_mlflow(setup=mlflow_setup)
         write_setup_to_file(mlflow_setup.experiment_name)
+    else:
+        mlflow_context = _null_context(setup=mlflow_setup)
 
+    with mlflow_context:
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
