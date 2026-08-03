@@ -115,6 +115,7 @@ def run_training(
         drop_remainder=hp.drop_remainder,
     )
 
+    # TODO Unify the arguments of the step factories to a single context
     if step_factory is None:
         train_batch_fn, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
     else:
@@ -213,11 +214,12 @@ def run_adversarial_training(
     # Workaround for the fact that our MLFlow wrapper does not support nested runs natively.
     if mlflow_setup:
         mlflow_context = track_mlflow(setup=mlflow_setup)
-        write_setup_to_file(mlflow_setup.experiment_name)
     else:
         mlflow_context = _null_context(setup=mlflow_setup)
 
     with mlflow_context:
+        write_setup_to_file(mlflow_setup.experiment_name)
+
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
