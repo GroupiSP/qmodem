@@ -164,10 +164,10 @@ def evaluate_test_case(
 
     i = 1
     for sr in sims_iterator:
-        if soc0_idxs[i] < int(window_size):
+        if soc0_idxs[i] < window_size:
             time_window_start_idx = 0
         else:
-            time_window_start_idx = soc0_idxs[i] - int(window_size)
+            time_window_start_idx = soc0_idxs[i] - window_size
         previous_voltage_window = test_data.voltage[
             time_window_start_idx : soc0_idxs[
                 i
