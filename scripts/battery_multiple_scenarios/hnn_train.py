@@ -6,7 +6,7 @@ import pathlib
 import flax.nnx as nnx
 from dotenv import load_dotenv
 
-from qmodem.battery.models import HeteroscedasticCNN
+from qmodem.battery.models import CNN, ConvType
 from qmodem.battery.train import TrainHyperparameters, run_training
 from qmodem.tracking import MLFlowSetup
 from qmodem.utils import setup_script_logging
@@ -22,12 +22,16 @@ def main() -> None:
         window_size=10,
         beta_nll=0.374,
         learning_rate=0.000748,
+        dropout_rate=0.1,
     )
 
     mlflow_setup = MLFlowSetup(run_name="hnn_train_optimized_hps")
-    model = HeteroscedasticCNN(
+    model = CNN(
+        conv_type=ConvType.DETERMINISTIC,
+        in_features=1,
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,
+        dropout_rate=hp.dropout_rate,
         act_fn=getattr(nnx, hp.activation_function),
         rngs=nnx.Rngs(hp.net_init_seed),
     )

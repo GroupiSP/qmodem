@@ -7,7 +7,7 @@ import flax.nnx as nnx
 from dotenv import load_dotenv
 
 from qmodem.battery.evaluate import Hyperparameters, run_evaluation
-from qmodem.battery.models import HeteroscedasticCNN
+from qmodem.battery.models import CNN, ConvType
 from qmodem.tracking import get_run_parameters, retrieve_mlflow_setup_train
 from qmodem.utils import setup_script_logging
 
@@ -22,11 +22,14 @@ def main() -> None:
     mlflow_setup = retrieve_mlflow_setup_train()
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
 
-    model = HeteroscedasticCNN(
+    model = CNN(
+        conv_type=ConvType.DETERMINISTIC,
+        in_features=1,
         n_filters=int(run_parameters["conv_n_filters"]),
         kernel_size=int(run_parameters["conv_kernel_size"]),
-        rngs=nnx.Rngs(0),
+        dropout_rate=float(run_parameters["dropout_rate"]),
         act_fn=getattr(nnx, run_parameters["activation_function"]),
+        rngs=nnx.Rngs(0),
     )  # RNGs won't be used for inference, so the seed is arbitrary.
 
     run_evaluation(

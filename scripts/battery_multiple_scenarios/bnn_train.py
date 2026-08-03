@@ -6,7 +6,7 @@ import pathlib
 import flax.nnx as nnx
 from dotenv import load_dotenv
 
-from qmodem.battery.models import BayesianCNN
+from qmodem.battery.models import CNN, CNNForELBO, ConvType
 from qmodem.battery.train import TrainHyperparameters, run_training
 from qmodem.battery.train_steps import make_elbo_steps
 from qmodem.callbacks import track_conv_weights_variance
@@ -24,15 +24,21 @@ def main() -> None:
         window_size=10,
         beta_nll=0.374,
         learning_rate=0.000748,
+        dropout_rate=0.1,
     )
 
-    mlflow_setup = MLFlowSetup(run_name="bnn_train_optimized_hps")
-    model = BayesianCNN(
+    mlflow_setup = MLFlowSetup(run_name="bnn")
+
+    cnn = CNN(
+        conv_type=ConvType.BAYESIAN,
+        in_features=1,
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,
+        dropout_rate=hp.dropout_rate,
         act_fn=getattr(nnx, hp.activation_function),
         rngs=nnx.Rngs(hp.net_init_seed),
     )
+    model = CNNForELBO(cnn)
 
     run_training(
         model=model,
