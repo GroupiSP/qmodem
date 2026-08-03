@@ -141,7 +141,7 @@ def run_training(
         mlflow_context = _null_context(setup=mlflow_setup)
 
     with mlflow_context:
-        write_setup_to_file(mlflow_setup.experiment_name)
+        write_setup_to_file()
 
         mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
