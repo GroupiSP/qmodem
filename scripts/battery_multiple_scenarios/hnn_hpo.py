@@ -22,6 +22,7 @@ def objective_factory(hp_hpo: HPOHyperparameters, log_stream: io.StringIO) -> fl
         with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
             mlflow.log_params(trial.params)
 
+            # TODO Move hyperparameters of the HPO to `hpo.py`
             window_size = trial.suggest_int("window_size", 10, 100)
             max_kernel_size = (window_size - 1) // 3
             conv_kernel_size = trial.suggest_int(
@@ -36,6 +37,7 @@ def objective_factory(hp_hpo: HPOHyperparameters, log_stream: io.StringIO) -> fl
                 learning_rate=trial.suggest_float(
                     "learning_rate", 1e-4, 1e-2, log=True
                 ),
+                dropout_rate=trial.suggest_float("dropout_rate", 0.0, 0.9),
             )
 
             model = CNN(
@@ -61,7 +63,7 @@ def objective_factory(hp_hpo: HPOHyperparameters, log_stream: io.StringIO) -> fl
                 model=model,
                 hp=hp_hpo,
                 raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-                validation_history_ids=list(range(50, 70)),
+                validation_history_ids=list(range(10, 15)),
             )
 
     return objective
@@ -90,7 +92,9 @@ def main() -> None:
         for key, value in best_trial.params.items():
             logging.info(f"{key}: {value}")
 
+        mlflow.log_param("best_trial_id", best_trial.number)
         mlflow.log_params(best_trial.params)  # log best trial params to the parent run
+
         mlflow.log_text(log_stream.getvalue(), "hpo_log.txt")
 
 

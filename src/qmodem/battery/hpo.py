@@ -21,11 +21,11 @@ class HPOHyperparameters:
     seed_hp_sampler: int = 123
     num_validation_histories: int = 5
     rul_grid_crps_start: float = 0.0
-    rul_grid_crps_end: float = 12_000.0
-    rul_grid_crps_resolution: int = 60
+    rul_grid_crps_end: float = 5_000.0
+    rul_grid_crps_resolution: float = 50.0
     num_mc_samples: int = 100
     num_hp_trials: int = 100
-    eval_window_size: int = 20
+    eval_window_size: int = 5  # Number of time steps to use for evaluation of the model on validation histories
 
 
 def pick_history_ids(num: int, seed: int, all_ids: list[int]) -> list[int]:
