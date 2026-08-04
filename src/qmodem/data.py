@@ -14,7 +14,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
 def _make_windows(
-    voltage: np.ndarray,
+    features: np.ndarray,
     ruls: np.ndarray,
     window_size: int,
     stride: int,
@@ -27,21 +27,26 @@ def _make_windows(
     is produced.
 
     Args:
-        voltage: 1-D voltage history of shape ``(N_t,)``.
-        ruls: 1-D RUL values of shape ``(N_t,)`` aligned with *voltage*.
+        features: N_i-D feature history of shape ``(N_t, N_i)``.
+        ruls: 1-D RUL values of shape ``(N_t,)`` aligned with *features*.
         window_size: Number of time steps per window.
         stride: Step size for the sliding window.
 
     Returns:
         A tuple ``(windows, targets)`` where each window has shape
-        ``(window_size, 1)`` and each target is a scalar RUL value.
+        ``(window_size, N_i)`` and each target is a scalar RUL value.
     """
-    N_t = len(voltage)
+    N_t = features.shape[0]
 
     # Left-edge-pad short histories so at least one full window can be made.
     if N_t < window_size:
         pad_len = window_size - N_t
-        voltage = np.concatenate([np.full(pad_len, voltage[0]), voltage])
+        features = np.concatenate(
+            [
+                np.full(shape=(pad_len, features.shape[1]), fill_value=features[0]),
+                features,
+            ]
+        )
         ruls = np.concatenate([np.full(pad_len, ruls[0]), ruls])
         N_t = window_size
 
@@ -50,10 +55,10 @@ def _make_windows(
 
     for start in range(0, N_t - window_size, stride):
         end = start + window_size
-        windows.append(voltage[start:end].reshape(-1, 1))
+        windows.append(features[start:end])
         targets.append(float(ruls[end]))
 
-    windows.append(voltage[-window_size:].reshape(-1, 1))
+    windows.append(features[-window_size:])
     targets.append(0.0)
 
     return windows, targets
@@ -126,37 +131,55 @@ class DataPipeline:
 
 
 def get_time_windows_and_join(
-    df: pd.DataFrame, window_size: int, stride: int
+    df: pd.DataFrame,
+    window_size: int,
+    stride: int,
+    features: Sequence[str],
 ) -> tuple[np.ndarray, np.ndarray]:
-    voltage_windows: list[np.ndarray] = []
-    rul_windows: list[float] = []
+    """Extracts sliding time windows and corresponding RUL targets from a dataframe
+    containing multiple discharge histories.
+
+    Args:
+        df: Dataframe containing multiple discharge histories. Each history is identified by a unique value in the "run_id" column.
+        window_size: Number of time steps per window.
+        stride: Step size for the sliding window.
+        features: List of feature column names to include in the windows.
+    Returns:
+        A tuple ``(feature_windows, rul_targets)`` where shape(feature_windows) = (N_w, window_size, N_i)
+        and shape(rul_targets) = (N_w,), with N_w being the total number of windows across all histories.
+    """
+    # TEST does it work for both 1D and multi-D features? Do the output arrays have the correct shape? (N_w, window_size, N_i) and (N_w,)
+    # TEST does it work for a single unit?
+    # TEST is the final number of windows correct? (N_w = sum_i ceil((N_t_i - window_size) / stride) + 1)
+    feature_windows: list[np.ndarray] = []
+    rul_targets: list[float] = []
 
     unit_ids = df["run_id"].unique()
     for unit_id in unit_ids:
         unit_df = df[df["run_id"] == unit_id].sort_values("time")
-        voltage = unit_df["voltage"].values
+        feature_array = unit_df[features].values
         ruls = unit_df["time"].iloc[-1] - unit_df["time"].values
 
-        vw_i, rw_i = _make_windows(voltage, ruls, window_size, stride)
-        voltage_windows.extend(vw_i)
-        rul_windows.extend(rw_i)
+        fw_i, rul_i = _make_windows(feature_array, ruls, window_size, stride)
+        feature_windows.extend(fw_i)
+        rul_targets.extend(rul_i)
 
-    return np.array(voltage_windows), np.array(rul_windows)
+    return np.array(feature_windows), np.array(rul_targets)
 
 
 def add_feature_dimension_to_y(
     x: tuple[np.ndarray, np.ndarray],
 ) -> tuple[np.ndarray, np.ndarray]:
-    voltage_windows, rul_windows = x
-    return voltage_windows, rul_windows.reshape(-1, 1)
+    feature_windows, rul_windows = x
+    return feature_windows, rul_windows.reshape(-1, 1)
 
 
 def normalize_ruls(
     x: tuple[np.ndarray, np.ndarray],
     transform_fn: Callable[[np.ndarray], np.ndarray],
 ) -> tuple[np.ndarray, np.ndarray]:
-    voltage_windows, rul_windows = x
-    return voltage_windows, transform_fn(rul_windows)
+    feature_windows, rul_windows = x
+    return feature_windows, transform_fn(rul_windows)
 
 
 def to_jax(x: tuple[np.ndarray, np.ndarray]) -> tuple[jax.Array, jax.Array]:

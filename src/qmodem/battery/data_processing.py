@@ -105,6 +105,7 @@ def prepare_data(
             get_time_windows_and_join,
             window_size=window_size,
             stride=stride,
+            features=["voltage"],
         ),
         add_feature_dimension_to_y,
     ]
