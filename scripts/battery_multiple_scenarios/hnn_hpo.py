@@ -11,7 +11,7 @@ import optuna
 from dotenv import load_dotenv
 
 from qmodem.battery.hpo import HPOHyperparameters, score_avg_val_crps
-from qmodem.battery.models import HeteroscedasticCNN
+from qmodem.battery.models import CNN, ConvType
 from qmodem.battery.train import TrainHyperparameters, run_training
 from qmodem.tracking import MLFlowSetup, track_mlflow
 from qmodem.utils import setup_script_logging
@@ -22,19 +22,28 @@ def objective_factory(hp_hpo: HPOHyperparameters, log_stream: io.StringIO) -> fl
         with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
             mlflow.log_params(trial.params)
 
+            window_size = trial.suggest_int("window_size", 10, 100)
+            max_kernel_size = (window_size - 1) // 3
+            conv_kernel_size = trial.suggest_int(
+                "conv_kernel_size", 3, min(10, max_kernel_size)
+            )
+
             hp_train = TrainHyperparameters(
-                conv_kernel_size=trial.suggest_int("conv_kernel_size", 3, 10),
+                conv_kernel_size=conv_kernel_size,
                 conv_n_filters=trial.suggest_int("conv_n_filters", 4, 40),
-                window_size=trial.suggest_int("window_size", 10, 100),
+                window_size=window_size,
                 beta_nll=trial.suggest_float("beta_nll", 0.0, 1.0),
                 learning_rate=trial.suggest_float(
                     "learning_rate", 1e-4, 1e-2, log=True
                 ),
             )
 
-            model = HeteroscedasticCNN(
+            model = CNN(
+                conv_type=ConvType.DETERMINISTIC,
+                in_features=1,
                 n_filters=hp_train.conv_n_filters,
                 kernel_size=hp_train.conv_kernel_size,
+                dropout_rate=hp_train.dropout_rate,
                 act_fn=getattr(nnx, hp_train.activation_function),
                 rngs=nnx.Rngs(hp_train.net_init_seed),
             )
@@ -61,7 +70,7 @@ def objective_factory(hp_hpo: HPOHyperparameters, log_stream: io.StringIO) -> fl
 def main() -> None:
     load_dotenv(override=True)
 
-    mlflow_setup = MLFlowSetup(run_name="hnn_hpo_1")
+    mlflow_setup = MLFlowSetup(run_name="hnn_hpo")
     hp = HPOHyperparameters()
     log_stream = setup_script_logging()
 
