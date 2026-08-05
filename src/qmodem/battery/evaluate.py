@@ -16,6 +16,7 @@ import orbax.checkpoint as ocp
 import pandas as pd
 import simbat as sb
 import sklearn.preprocessing as skpp
+from mlflow.pyfunc import PyFuncModel
 
 from qmodem.battery.data_generation import (
     load_simulation_config,
@@ -176,7 +177,7 @@ def evaluate_test_case(
         X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
 
         key, subkey = jax.random.split(key)
-        samples_pred = model.mc_sample(subkey, X, hp.test_n_mc_samples)
+        samples_pred = np.array(model.mc_sample(subkey, X, hp.test_n_mc_samples))
 
         eval_time_stamps.append(
             EvalTimeStamp(
@@ -192,6 +193,31 @@ def evaluate_test_case(
         TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps),
         key,
     )
+
+
+class _ScalerInverseWrapper:
+    """Wraps around a loaded mlflow.pyfunc.PyFuncModel logged as
+    `src/qmodem/battery/data_processing.py:_ScalerWrapper` to provide a scikit-learn-
+    like interface with ``transform`` and ``inverse_transform`` methods.
+
+    This is useful for loading the scaler from MLflow and using it to inverse-transform predictions back to the original scale.
+    The behaviour of the `predict` method of the pyfunc is determined at logging time. For example, if the scaler normalized the labels,
+    the `predict` method will perform the inverse transformation to return the original labels.
+    """
+
+    def __init__(self, pyfunc: PyFuncModel):
+        self.pyfunc = pyfunc
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        return self.pyfunc.predict(X)
+
+    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
+        return self.pyfunc.predict(X)
+
+
+def mlflow_load_scaler(model_uri: str) -> PyFuncModel:
+    loaded_pyfunc = mlflow.pyfunc.load_model(model_uri)
+    return _ScalerInverseWrapper(loaded_pyfunc)
 
 
 def log_evaluation_metrics(
@@ -278,8 +304,8 @@ def run_evaluation(
         run_params_training = run.data.params
 
         # Load the scaler fitted on the training data.
-        scaler: skpp.MinMaxScaler = mlflow.sklearn.load_model(
-            f"runs:/{mlflow_setup.run_id}/sklearn_scaler"
+        scaler: _ScalerInverseWrapper = mlflow_load_scaler(
+            f"runs:/{mlflow_setup.run_id}/rul_scaler"
         )
 
         restore_model_state(model, mlflow_setup.run_id)
