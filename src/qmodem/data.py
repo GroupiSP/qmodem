@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import pathlib
-from typing import Any, Callable, Protocol, Sequence, SupportsIndex
+from enum import StrEnum, auto
+from typing import Callable, Protocol, Sequence, SupportsIndex
 
 import jax
 import jax.numpy as jnp
+import jaxtyping
 import numpy as np
 import pandas as pd
-from grain import DataLoader
-from grain.samplers import IndexSampler
-from grain.transforms import Batch
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
@@ -64,42 +63,6 @@ def _make_windows(
     return windows, targets
 
 
-def create_dataloaders(
-    ds_train: DataSource,
-    ds_val: DataSource,
-    batch_size: int,
-    seed_train: int,
-    seed_val: int,
-    shuffle_train: bool = True,
-    shuffle_val: bool = False,
-    *,
-    drop_remainder: bool = False,
-) -> tuple[Any, Any]:
-    """Create Grain DataLoaders for training and validation."""
-
-    sampler_train = IndexSampler(
-        num_records=len(ds_train), num_epochs=1, shuffle=shuffle_train, seed=seed_train
-    )
-    dataloader_train = DataLoader(
-        data_source=ds_train,
-        sampler=sampler_train,
-        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
-        worker_count=0,
-    )
-
-    sampler_val = IndexSampler(
-        num_records=len(ds_val), num_epochs=1, shuffle=shuffle_val, seed=seed_val
-    )
-    dataloader_val = DataLoader(
-        data_source=ds_val,
-        sampler=sampler_val,
-        operations=[Batch(batch_size=batch_size, drop_remainder=drop_remainder)],
-        worker_count=0,
-    )
-
-    return dataloader_train, dataloader_val
-
-
 class DataSource(Protocol):
     """Protocol for data sources that can be used with Grain DataLoaders."""
 
@@ -120,6 +83,110 @@ class DataSource(Protocol):
         ...
 
 
+class DataScaler(Protocol):
+    def fit(self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike) -> None: ...
+    def fit_transform(
+        self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike
+    ) -> tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]: ...
+    def transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike: ...
+    def inverse_transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike: ...
+
+
+class IdentityScaler:
+    """A scaler that performs no scaling, returning the input as-is."""
+
+    def fit(self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike) -> None:
+        """No-op for fitting the scaler."""
+        pass
+
+    def fit_transform(
+        self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike = None
+    ) -> tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]:
+        """Returns the input arrays as-is without any scaling."""
+        return x
+
+    def transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike:
+        """Returns the input array as-is without any scaling."""
+        return x
+
+    def inverse_transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike:
+        """Returns the input array as-is without any scaling."""
+        return x
+
+
+class ArrayDataSource:
+    """A simple implementation of the DataSource protocol that wraps feature and target
+    arrays."""
+
+    def __init__(
+        self, features: jaxtyping.ArrayLike, targets: jaxtyping.ArrayLike
+    ) -> None:
+        self.features = features
+        self.targets = targets
+
+    def __len__(self) -> int:
+        return len(self.targets)
+
+    def __getitem__(
+        self, record_key: SupportsIndex
+    ) -> tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]:
+        return self.features[record_key], self.targets[record_key]
+
+
+class ScalingMode(StrEnum):
+    FIT_TRANSFORM = auto()
+    TRANSFORM = auto()
+
+
+class ScalingStep:
+    """A data processing step that scales features and targets using provided scalers.
+
+    Meant to be used in a data pipeline.
+    """
+
+    @staticmethod
+    def _identity_transform(x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike:
+        return x
+
+    def __init__(
+        self,
+        x_scaler: DataScaler = IdentityScaler(),
+        y_scaler: DataScaler = IdentityScaler(),
+    ) -> None:
+        self.x_scaler = x_scaler
+        self.y_scaler = y_scaler
+        self._mode = ScalingMode.FIT_TRANSFORM
+
+    @property
+    def mode(self) -> ScalingMode:
+        return self._mode
+
+    @mode.setter
+    def mode(self, value: ScalingMode) -> None:
+        if not isinstance(value, ScalingMode):
+            raise ValueError(f"mode must be an instance of ScalingMode, got {value}")
+        self._mode = value
+
+    def _fit_transform(self, x, y):
+        x_scaled = self.x_scaler.fit_transform(x)
+        y_scaled = self.y_scaler.fit_transform(y)
+        return x_scaled, y_scaled
+
+    def _transform(self, x, y):
+        return self.x_scaler.transform(x), self.y_scaler.transform(y)
+
+    _dispatch = {
+        ScalingMode.FIT_TRANSFORM: _fit_transform,
+        ScalingMode.TRANSFORM: _transform,
+    }
+
+    def __call__(
+        self, data: tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]
+    ) -> tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]:
+        x, y = data
+        return self._dispatch[self._mode](self, x, y)
+
+
 class DataPipeline:
     def __init__(self, steps: Sequence[Callable]) -> None:
         self.steps = steps
@@ -128,6 +195,11 @@ class DataPipeline:
         for step in self.steps:
             x = step(x)
         return x
+
+    def set_mode(self, mode: ScalingMode) -> None:
+        for step in self.steps:
+            if isinstance(step, ScalingStep):
+                step.mode = mode
 
 
 def get_time_windows_and_join(
@@ -174,33 +246,9 @@ def add_feature_dimension_to_y(
     return feature_windows, rul_windows.reshape(-1, 1)
 
 
-def normalize_ruls(
-    x: tuple[np.ndarray, np.ndarray],
-    transform_fn: Callable[[np.ndarray], np.ndarray],
-) -> tuple[np.ndarray, np.ndarray]:
-    feature_windows, rul_windows = x
-    return feature_windows, transform_fn(rul_windows)
-
-
 def to_jax(x: tuple[np.ndarray, np.ndarray]) -> tuple[jax.Array, jax.Array]:
     X, y = x
     return jnp.array(X), jnp.array(y)
-
-
-class DataFrameSource:
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        pipeline: DataPipeline,
-    ) -> None:
-        self.pipeline = pipeline
-        self.X, self.y = self.pipeline(df)
-
-    def __len__(self) -> int:
-        return len(self.y)
-
-    def __getitem__(self, record_key: SupportsIndex) -> tuple[jax.Array, jax.Array]:
-        return self.X[record_key], self.y[record_key]
 
 
 def _load_cmapss_fd001_train(path: pathlib.Path) -> pd.DataFrame:
