@@ -25,7 +25,7 @@ def main() -> None:
         dropout_rate=0.68,
     )
 
-    mlflow_setup = MLFlowSetup(run_name="hnn_train_optimized_hps")
+    mlflow_setup = MLFlowSetup(run_name="hnn")
     model = CNN(
         conv_type=ConvType.DETERMINISTIC,
         in_features=1,
