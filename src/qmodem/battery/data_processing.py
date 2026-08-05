@@ -8,25 +8,27 @@ from typing import Callable, Iterable
 import grain
 import jax
 import mlflow
+import numpy as np
 import pandas as pd
 import sklearn.preprocessing as skpp
 
 from qmodem.data import (
-    DataFrameSource,
+    ArrayDataSource,
     DataPipeline,
-    DataSource,
+    DataScaler,
+    IdentityScaler,
+    ScalingMode,
+    ScalingStep,
     add_feature_dimension_to_y,
     get_time_windows_and_join,
-    normalize_ruls,
     to_jax,
 )
 
 
 @dataclasses.dataclass
 class PreparedData:
-    train: DataFrameSource
-    val: DataFrameSource
-    scaler: skpp.MinMaxScaler
+    train: ArrayDataSource
+    val: ArrayDataSource
 
 
 def _split_train_val(
@@ -41,7 +43,7 @@ def _split_train_val(
 
 def _train_dataloader_builder(
     sampler_seed: int,
-    ds_train: DataSource,
+    ds_train: ArrayDataSource,
     batch_size: int,
     drop_remainder: bool,
 ) -> grain.DataLoader:
@@ -64,6 +66,33 @@ def _train_dataloader_builder(
     )
 
 
+class _ScalerWrapper(mlflow.pyfunc.PythonModel):
+    def __init__(self, scaler: DataScaler, predict_method: str = "transform"):
+        self.scaler = scaler
+        self.predict_method = predict_method
+
+    def predict(self, model_input: np.ndarray, params=None):
+        return getattr(self.scaler, self.predict_method)(model_input)
+
+
+def mlflow_log_scaler(
+    scaler: DataScaler, name: str, predict_method: str = "transform"
+) -> None:
+    """Wrapper around the mlflow sklearn model logging functionality. If the scaler is
+    not an sklearn estimator, it does not log anything.
+
+    Args:
+        scaler: The scaler to log.
+        name: The name of the MLFlow model for the scaler.
+        predict_method: The method of the scaler to use for prediction (e.g., "inverse_transform").
+    """
+    mlflow.pyfunc.log_model(
+        name=name,
+        python_model=_ScalerWrapper(scaler, predict_method=predict_method),
+        input_example=np.array([[0.0], [1.0]], dtype=np.float32),
+    )
+
+
 def dataloader_builders(
     data: PreparedData, batch_size: int, drop_remainder: bool
 ) -> tuple[Callable[[int], Iterable], Callable[[int], Iterable]]:
@@ -81,7 +110,7 @@ def dataloader_builders(
         It returns a single batch containing the entire validation set, which is assumed
         to be small enough to fit in memory.
         """
-        return [(data.val.X, data.val.y)]
+        return [(data.val.features, data.val.targets)]
 
     return train_builder, val_builder
 
@@ -99,37 +128,37 @@ def prepare_data(
         n_histories_train=int(data_gen_run.data.params["n_histories_train"]),
     )
 
-    scaler = skpp.MinMaxScaler(feature_range=(0, 1))
-    common_steps = [
-        functools.partial(
-            get_time_windows_and_join,
-            window_size=window_size,
-            stride=stride,
-            features=["voltage"],
-        ),
-        add_feature_dimension_to_y,
-    ]
-    train_pipeline = DataPipeline(
-        [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.fit_transform)
-            if normalize_rul
-            else lambda data: data,
-            to_jax,
-        ]
+    # TODO Pass pipeline as an argument, rather than creating them here.
+    rul_scaler = (
+        skpp.MinMaxScaler(feature_range=(0, 1)) if normalize_rul else IdentityScaler()
     )
-    val_pipeline = DataPipeline(
+
+    pipeline = DataPipeline(
         [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.transform)
-            if normalize_rul
-            else lambda data: data,
+            functools.partial(
+                get_time_windows_and_join,
+                window_size=window_size,
+                stride=stride,
+                features=["voltage"],
+            ),
+            add_feature_dimension_to_y,
+            ScalingStep(x_scaler=IdentityScaler(), y_scaler=rul_scaler),
             to_jax,
         ]
     )
 
+    # Apply the pipeline to the training data, then set the mode to TRANSFORM for the validation data.
+    # This ensures that the scalers are fitted on the training data only.
+    pipeline.set_mode(ScalingMode.FIT_TRANSFORM)
+    X_train, y_train = pipeline(train_df)
+
+    pipeline.set_mode(ScalingMode.TRANSFORM)
+    X_val, y_val = pipeline(val_df)
+
+    # Log the scaler with MLFlow for reproducibility and loading at test time.
+    mlflow_log_scaler(rul_scaler, name="rul_scaler", predict_method="inverse_transform")
+
     return PreparedData(
-        train=DataFrameSource(df=train_df, pipeline=train_pipeline),
-        val=DataFrameSource(df=val_df, pipeline=val_pipeline),
-        scaler=scaler,
+        train=ArrayDataSource(features=X_train, targets=y_train),
+        val=ArrayDataSource(features=X_val, targets=y_val),
     )
