@@ -102,38 +102,6 @@ def run_training(
     step_factory: StandardStepFactory | None = None,
     callbacks: Iterable[Callback] = (),
 ) -> None:
-    data = prepare_data(
-        raw_data_dir,
-        data_gen_run_id,
-        window_size=hp.window_size,
-        stride=hp.stride,
-        normalize_rul=hp.normalize_rul,
-    )
-    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
-        data,
-        batch_size=hp.batch_size,
-        drop_remainder=hp.drop_remainder,
-    )
-
-    # TODO Unify the arguments of the step factories to a single context
-    if step_factory is None:
-        train_batch_fn, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
-    else:
-        train_batch_fn, eval_batch_fn = step_factory(
-            StandardStepFactoryContext(n_train_samples=len(data.train))
-        )
-
-    schedule = optax.cosine_decay_schedule(
-        init_value=hp.learning_rate,
-        decay_steps=hp.n_epochs * (len(data.train) // hp.batch_size),
-        alpha=hp.scheduler_alpha,
-    )
-    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
-    early_stopper = EarlyStopper(
-        patience=hp.early_stopping_patience,
-        min_delta=hp.early_stopping_min_delta,
-    )
-
     # Workaround for the fact that our MLFlow wrapper does not support nested runs natively.
     if mlflow_setup:
         mlflow_context = track_mlflow(setup=mlflow_setup)
@@ -143,9 +111,40 @@ def run_training(
     with mlflow_context:
         write_setup_to_file()
 
-        mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
+
+        data = prepare_data(
+            raw_data_dir,
+            data_gen_run_id,
+            window_size=hp.window_size,
+            stride=hp.stride,
+            normalize_rul=hp.normalize_rul,
+        )
+        train_dataloader_builder, val_dataloader_builder = dataloader_builders(
+            data,
+            batch_size=hp.batch_size,
+            drop_remainder=hp.drop_remainder,
+        )
+
+        # TODO Unify the arguments of the step factories to a single context
+        if step_factory is None:
+            train_batch_fn, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
+        else:
+            train_batch_fn, eval_batch_fn = step_factory(
+                StandardStepFactoryContext(n_train_samples=len(data.train))
+            )
+
+        schedule = optax.cosine_decay_schedule(
+            init_value=hp.learning_rate,
+            decay_steps=hp.n_epochs * (len(data.train) // hp.batch_size),
+            alpha=hp.scheduler_alpha,
+        )
+        optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
+        early_stopper = EarlyStopper(
+            patience=hp.early_stopping_patience,
+            min_delta=hp.early_stopping_min_delta,
+        )
 
         train_loop(
             n_epochs=hp.n_epochs,
@@ -182,35 +181,6 @@ def run_adversarial_training(
     callbacks: Iterable[Callback] = (),
     mlflow_setup: MLFlowSetup | None = None,
 ) -> None:
-    data = prepare_data(
-        raw_data_dir,
-        data_gen_run_id,
-        window_size=hp.window_size,
-        stride=hp.stride,
-        normalize_rul=hp.normalize_rul,
-    )
-    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
-        data,
-        batch_size=hp.batch_size,
-        drop_remainder=hp.drop_remainder,
-    )
-
-    if eval_batch_fn is None:
-        _, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
-
-    optimizer_generator = nnx.Optimizer(
-        model, optax.adam(hp.learning_rate_generator), wrt=nnx.Param
-    )
-    optimizer_discriminator = nnx.Optimizer(
-        discriminator,
-        optax.adam(hp.learning_rate_discriminator),
-        wrt=nnx.Param,
-    )
-    early_stopper = EarlyStopper(
-        patience=hp.early_stopping_patience,
-        min_delta=hp.early_stopping_min_delta,
-    )
-
     # Workaround for the fact that our MLFlow wrapper does not support nested runs natively.
     if mlflow_setup:
         mlflow_context = track_mlflow(setup=mlflow_setup)
@@ -218,11 +188,39 @@ def run_adversarial_training(
         mlflow_context = _null_context(setup=mlflow_setup)
 
     with mlflow_context:
-        write_setup_to_file(mlflow_setup.experiment_name)
+        write_setup_to_file()
 
-        mlflow.sklearn.log_model(data.scaler, artifact_path="sklearn_scaler")
         mlflow.log_params(dataclasses.asdict(hp))
         mlflow.log_param("n_params", count_parameters(model))
+
+        data = prepare_data(
+            raw_data_dir,
+            data_gen_run_id,
+            window_size=hp.window_size,
+            stride=hp.stride,
+            normalize_rul=hp.normalize_rul,
+        )
+        train_dataloader_builder, val_dataloader_builder = dataloader_builders(
+            data,
+            batch_size=hp.batch_size,
+            drop_remainder=hp.drop_remainder,
+        )
+
+        if eval_batch_fn is None:
+            _, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
+
+        optimizer_generator = nnx.Optimizer(
+            model, optax.adam(hp.learning_rate_generator), wrt=nnx.Param
+        )
+        optimizer_discriminator = nnx.Optimizer(
+            discriminator,
+            optax.adam(hp.learning_rate_discriminator),
+            wrt=nnx.Param,
+        )
+        early_stopper = EarlyStopper(
+            patience=hp.early_stopping_patience,
+            min_delta=hp.early_stopping_min_delta,
+        )
 
         adversarial_train_loop(
             n_epochs=hp.n_epochs,
