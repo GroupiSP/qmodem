@@ -17,12 +17,12 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = TrainHyperparameters(
-        conv_kernel_size=10,
-        conv_n_filters=24,
-        window_size=10,
-        beta_nll=0.374,
-        learning_rate=0.000748,
-        dropout_rate=0.1,
+        conv_kernel_size=3,
+        conv_n_filters=37,
+        window_size=13,
+        beta_nll=0.0207,
+        learning_rate=0.008,
+        dropout_rate=0.68,
     )
 
     mlflow_setup = MLFlowSetup(run_name="hnn_train_optimized_hps")
