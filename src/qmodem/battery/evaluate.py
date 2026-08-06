@@ -6,7 +6,6 @@ import pathlib
 import tempfile
 from typing import Protocol
 
-import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -15,8 +14,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 import pandas as pd
 import simbat as sb
-import sklearn.preprocessing as skpp
-from mlflow.pyfunc import PyFuncModel
+from flax import nnx
 
 from qmodem.battery.data_generation import (
     load_simulation_config,
@@ -28,6 +26,8 @@ from qmodem.battery.scoring import (
     TestCaseResults,
     bar_plot_metrics_per_test_case,
 )
+from qmodem.battery.tracking import mlflow_load_scaler
+from qmodem.data import DataScaler
 from qmodem.tracking import MLFlowSetup, track_mlflow
 
 
@@ -88,8 +88,8 @@ def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeD
     time = df_test_case_i["time"].values
     return DischargeData(
         time=time,
-        soc=df_test_case_i["soc"].values,
-        voltage=df_test_case_i["voltage"].values,
+        soc=df_test_case_i["soc"].values.astype(np.float32),
+        voltage=df_test_case_i["voltage"].values.astype(np.float32),
         rul=time[-1] - time,
     )
 
@@ -116,7 +116,8 @@ def evaluate_test_case(
     *,
     test_case_id: int,
     test_data: DischargeData,
-    scaler: skpp.MinMaxScaler,
+    x_scaler: DataScaler,
+    y_scaler: DataScaler,
     config: sb.SimulationConfig,
     hp: Hyperparameters,
     window_size: int,
@@ -128,7 +129,8 @@ def evaluate_test_case(
         model: The model implementing :class:`MCSampler`.
         test_case_id: Identifier of the test case (used to label the result).
         test_data: Discharge data of the test case.
-        scaler: Fitted scaler used to map predictions back to RUL units.
+        x_scaler: Fitted scaler for the input features.
+        y_scaler: Fitted scaler for the target RUL values.
         config: Base simulation config (loaded from the data-generation run).
         hp: Evaluation hyperparameters.
         window_size: Voltage window length used by the model (from the training run).
@@ -174,6 +176,9 @@ def evaluate_test_case(
                 i
             ]  # time-window ends one step before the RUL timestamp
         ]
+        previous_voltage_window = x_scaler.transform(
+            previous_voltage_window.reshape(-1, 1)
+        )
         X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
 
         key, subkey = jax.random.split(key)
@@ -184,7 +189,7 @@ def evaluate_test_case(
                 time=test_data.time[soc0_idxs[i]],
                 target=test_data.rul[soc0_idxs[i]],
                 samples_true=sr.times_eod - sr.times[0],
-                samples_pred=scaler.inverse_transform(samples_pred),
+                samples_pred=y_scaler.inverse_transform(samples_pred),
             )
         )
         i += 1
@@ -193,31 +198,6 @@ def evaluate_test_case(
         TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps),
         key,
     )
-
-
-class _ScalerInverseWrapper:
-    """Wraps around a loaded mlflow.pyfunc.PyFuncModel logged as
-    `src/qmodem/battery/data_processing.py:_ScalerWrapper` to provide a scikit-learn-
-    like interface with ``transform`` and ``inverse_transform`` methods.
-
-    This is useful for loading the scaler from MLflow and using it to inverse-transform predictions back to the original scale.
-    The behaviour of the `predict` method of the pyfunc is determined at logging time. For example, if the scaler normalized the labels,
-    the `predict` method will perform the inverse transformation to return the original labels.
-    """
-
-    def __init__(self, pyfunc: PyFuncModel):
-        self.pyfunc = pyfunc
-
-    def transform(self, X: np.ndarray) -> np.ndarray:
-        return self.pyfunc.predict(X)
-
-    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
-        return self.pyfunc.predict(X)
-
-
-def mlflow_load_scaler(model_uri: str) -> PyFuncModel:
-    loaded_pyfunc = mlflow.pyfunc.load_model(model_uri)
-    return _ScalerInverseWrapper(loaded_pyfunc)
 
 
 def log_evaluation_metrics(
@@ -300,13 +280,13 @@ def run_evaluation(
             otherwise eval mode.
         n_test_cases: Number of test cases to evaluate.
     """
+    # TODO Move mlflow ctxt manager at application level
     with track_mlflow(setup=mlflow_setup) as run:
         run_params_training = run.data.params
 
-        # Load the scaler fitted on the training data.
-        scaler: _ScalerInverseWrapper = mlflow_load_scaler(
-            f"runs:/{mlflow_setup.run_id}/rul_scaler"
-        )
+        # Load the scalers fitted on the training data.
+        x_scaler = mlflow_load_scaler(f"runs:/{mlflow_setup.run_id}/x_scaler")
+        y_scaler = mlflow_load_scaler(f"runs:/{mlflow_setup.run_id}/y_scaler")
 
         restore_model_state(model, mlflow_setup.run_id)
 
@@ -332,7 +312,8 @@ def run_evaluation(
                 model,
                 test_case_id=test_case_id,
                 test_data=test_data,
-                scaler=scaler,
+                x_scaler=x_scaler,
+                y_scaler=y_scaler,
                 config=config,
                 hp=hp,
                 window_size=window_size,
