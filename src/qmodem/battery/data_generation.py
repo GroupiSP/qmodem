@@ -4,8 +4,9 @@ import dataclasses
 import pathlib
 import pickle
 import tempfile
+from collections.abc import Iterable, Iterator, Mapping
 from enum import StrEnum, auto
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 
 import mlflow
 import numpy as np
@@ -105,7 +106,6 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
         inplace=True,
     )
     df.insert(0, "run_id", run_id)  # Add a run_id column for tracking
-    return None
 
 
 def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFrame:
@@ -121,6 +121,26 @@ def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFra
         out_df = pd.concat([out_df, df], ignore_index=True)
 
     return out_df
+
+
+def add_rul_series(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a RUL series to the dataframe.
+
+    Args:
+        df: A dataframe with columns "run_id" and "time".
+
+    Returns:
+        A new dataframe with an additional column "rul" containing the remaining
+        useful life for each time step.
+    """
+    df = df.copy()
+    df["rul"] = 0.0  # Initialize the RUL column
+
+    for run_id, group in df.groupby("run_id"):
+        max_time = group["time"].max()
+        df.loc[group.index, "rul"] = max_time - group["time"]
+
+    return df
 
 
 def run_discharges_from_intermediate_socs(

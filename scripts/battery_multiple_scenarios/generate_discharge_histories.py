@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from qmodem.battery.data_generation import (
     Hyperparameters,
+    add_rul_series,
     bernoulli_policy_choice,
     gaussian_noise,
     log_simulation_config,
@@ -77,6 +78,9 @@ def main() -> None:
         )
         test_config = make_simulator_config(test_rng, hp)
         test_df = write_histories(test_config, n_histories=hp.n_histories_test)
+
+        train_df = add_rul_series(train_df)
+        test_df = add_rul_series(test_df)
 
         # Log the test simulation config so it can be reloaded at evaluation time.
         log_simulation_config(test_config)
