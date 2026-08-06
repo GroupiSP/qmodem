@@ -47,18 +47,32 @@ def _make_windows(
                 features,
             ]
         )
-        ruls = np.concatenate([np.full(pad_len, ruls[0]), ruls])
-        N_t = window_size
+        return features.reshape(1, window_size, -1), [0.0]
 
     windows: list[np.ndarray] = []
     targets: list[float] = []
 
-    for start in range(0, N_t - window_size, stride):
-        end = start + window_size
+    # NOTE The second to last and last window may overlap
+    start = 0
+    end = start + window_size
+    while end < N_t:
         windows.append(features[start:end])
         targets.append(float(ruls[end]))
 
-    windows.append(features[-window_size:])
+        start += stride
+        end = start + window_size
+
+    # right pad the last window and assign a RUL of 0.0
+    last_window = features[start:]
+    if last_window.shape[0] < window_size:
+        pad_len = window_size - last_window.shape[0]
+        last_window = np.concatenate(
+            [
+                last_window,
+                np.full(shape=(pad_len, features.shape[1]), fill_value=last_window[-1]),
+            ]
+        )
+    windows.append(last_window)
     targets.append(0.0)
 
     return windows, targets
@@ -220,9 +234,6 @@ def get_time_windows_and_join(
         A tuple ``(feature_windows, rul_targets)`` where shape(feature_windows) = (N_w, window_size, N_i)
         and shape(rul_targets) = (N_w,), with N_w being the total number of windows across all histories.
     """
-    # TEST does it work for both 1D and multi-D features? Do the output arrays have the correct shape? (N_w, window_size, N_i) and (N_w,)
-    # TEST does it work for a single unit?
-    # TEST is the final number of windows correct? (N_w = sum_i ceil((N_t_i - window_size) / stride) + 1)
     feature_windows: list[np.ndarray] = []
     rul_targets: list[float] = []
 
