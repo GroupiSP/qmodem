@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable, Sequence
 from enum import StrEnum, auto
-from typing import Callable, Protocol, Sequence, SupportsIndex
+from typing import Protocol, SupportsIndex
 
 import jax
 import jax.numpy as jnp
@@ -97,7 +98,6 @@ class IdentityScaler:
 
     def fit(self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike) -> None:
         """No-op for fitting the scaler."""
-        pass
 
     def fit_transform(
         self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike = None
@@ -164,7 +164,7 @@ class ScalingStep:
     @mode.setter
     def mode(self, value: ScalingMode) -> None:
         if not isinstance(value, ScalingMode):
-            raise ValueError(f"mode must be an instance of ScalingMode, got {value}")
+            raise TypeError(f"mode must be an instance of ScalingMode, got {value}")
         self._mode = value
 
     def _fit_transform(self, x, y):
