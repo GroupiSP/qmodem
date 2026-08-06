@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import pathlib
 
-import flax.nnx as nnx
 from dotenv import load_dotenv
+from flax import nnx
 
 from qmodem.battery.evaluate import Hyperparameters, run_evaluation
 from qmodem.battery.models import CNN, ConvType
