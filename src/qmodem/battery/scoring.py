@@ -1,20 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Iterable
+from collections.abc import Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 from qmodem.metrics import crps as _crps
-
-
-@dataclasses.dataclass(frozen=True)
-class DischargeData:
-    time: np.ndarray
-    soc: np.ndarray
-    voltage: np.ndarray
-    rul: np.ndarray
 
 
 @dataclasses.dataclass(frozen=True)
@@ -139,7 +131,6 @@ class TestCaseResults:
 
         if legend:
             ax.legend()
-        return
 
 
 def bar_plot_metrics_per_test_case(
@@ -171,5 +162,3 @@ def bar_plot_metrics_per_test_case(
         ax.set_xlabel("Test Case ID")
         ax.set_title(metric)
         ax.grid()
-
-    return
