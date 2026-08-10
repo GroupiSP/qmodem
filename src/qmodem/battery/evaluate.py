@@ -4,6 +4,7 @@ import dataclasses
 import io
 import pathlib
 import tempfile
+from collections.abc import Sequence
 from typing import Protocol
 
 import jax
@@ -21,7 +22,6 @@ from qmodem.battery.data_generation import (
     run_discharges_from_intermediate_socs,
 )
 from qmodem.battery.scoring import (
-    DischargeData,
     EvalTimeStamp,
     TestCaseResults,
     bar_plot_metrics_per_test_case,
@@ -73,7 +73,7 @@ class Hyperparameters:
     test_grid_crps_num: int = 100
 
 
-def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
+def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> pd.DataFrame:
     """Return the discharge data for a given test case ID from the test CSV file.
 
     Args:
@@ -81,17 +81,10 @@ def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeD
         test_case_id (int): ID of the test case to retrieve.
 
     Returns:
-        DischargeData: Discharge data for the specified test case.
+        pd.DataFrame: Discharge data for the specified test case.
     """
     df_test = pd.read_csv(test_path)
-    df_test_case_i = df_test[df_test["run_id"] == test_case_id]
-    time = df_test_case_i["time"].values
-    return DischargeData(
-        time=time,
-        soc=df_test_case_i["soc"].values.astype(np.float32),
-        voltage=df_test_case_i["voltage"].values.astype(np.float32),
-        rul=time[-1] - time,
-    )
+    return df_test[df_test["run_id"] == test_case_id]
 
 
 def restore_model_state(model: nnx.Module, train_run_id: str) -> None:
@@ -115,7 +108,8 @@ def evaluate_test_case(
     model: MCSampler,
     *,
     test_case_id: int,
-    test_data: DischargeData,
+    test_data: pd.DataFrame,
+    features: Sequence[str],
     x_scaler: DataScaler,
     y_scaler: DataScaler,
     config: sb.SimulationConfig,
@@ -139,6 +133,9 @@ def evaluate_test_case(
     Returns:
         The per-test-case results and the advanced PRNG key.
     """
+    # Order the test data by time to ensure correct evaluation.
+    test_data = test_data.sort_values("time").reset_index(drop=True)
+
     soc0_idxs = np.linspace(
         0, len(test_data.time) - 1, num=hp.test_n_soc0s, dtype=np.int32
     )
@@ -171,15 +168,17 @@ def evaluate_test_case(
             time_window_start_idx = 0
         else:
             time_window_start_idx = soc0_idxs[i] - window_size
-        previous_voltage_window = test_data.voltage[
+        previous_window = test_data[
+            features
+        ][
             time_window_start_idx : soc0_idxs[
                 i
             ]  # time-window ends one step before the RUL timestamp
         ]
-        previous_voltage_window = x_scaler.transform(
-            previous_voltage_window.reshape(-1, 1)
-        )
-        X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
+        previous_window = x_scaler.transform(previous_window)
+        X = jnp.array(
+            previous_window.reshape(1, -1, len(features))
+        )  # shape (1, window_size, n_features)
 
         key, subkey = jax.random.split(key)
         samples_pred = np.array(model.mc_sample(subkey, X, hp.test_n_mc_samples))
@@ -263,7 +262,8 @@ def run_evaluation(
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
-    train_mode: bool = True,
+    features: Sequence[str] = ["voltage"],
+    train_mode: bool = False,
     n_test_cases: int = 10,
 ) -> None:
     """Run the full test-time evaluation and log results to MLflow.
@@ -278,6 +278,7 @@ def run_evaluation(
         log_stream: In-memory log stream logged as an artifact at the end.
         train_mode: If True, put the model in train mode (e.g. to enable MC dropout);
             otherwise eval mode.
+        features: List of feature names to use as input to the model.
         n_test_cases: Number of test cases to evaluate.
     """
     # TODO Move mlflow ctxt manager at application level
@@ -312,6 +313,7 @@ def run_evaluation(
                 model,
                 test_case_id=test_case_id,
                 test_data=test_data,
+                features=features,
                 x_scaler=x_scaler,
                 y_scaler=y_scaler,
                 config=config,
