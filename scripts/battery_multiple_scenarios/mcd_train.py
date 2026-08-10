@@ -6,8 +6,8 @@ import pathlib
 import flax.nnx as nnx
 from dotenv import load_dotenv
 
-from qmodem.battery.models import MCDropoutCNN
-from qmodem.battery.train import MCDTrainHyperparameters, run_training
+from qmodem.battery.models import CNN, ConvType
+from qmodem.battery.train import TrainHyperparameters, run_training
 from qmodem.tracking import MLFlowSetup
 from qmodem.utils import setup_script_logging
 
@@ -16,10 +16,19 @@ def main() -> None:
     load_dotenv(override=True)
 
     log_stream = setup_script_logging()
-    hp = MCDTrainHyperparameters()
+    hp = TrainHyperparameters(
+        conv_kernel_size=10,
+        conv_n_filters=24,
+        window_size=10,
+        beta_nll=0.374,
+        learning_rate=0.000748,
+        dropout_rate=0.1,
+    )
 
-    mlflow_setup = MLFlowSetup(run_name="dummy_mcd_multiple")
-    model = MCDropoutCNN(
+    mlflow_setup = MLFlowSetup(run_name="mcd")
+    model = CNN(
+        conv_type=ConvType.DETERMINISTIC,
+        in_features=1,
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,
         dropout_rate=hp.dropout_rate,

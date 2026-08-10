@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import StrEnum, auto
+
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
@@ -33,139 +35,103 @@ class Discriminator(nnx.Module):
         return nnx.sigmoid(self.l3(x))
 
 
-class HeteroscedasticCNN(nnx.Module):
-    def __init__(
-        self,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Heteroscedastic 1D CNN for time-series RUL prediction with uncertainty.
+class ConvType(StrEnum):
+    DETERMINISTIC = auto()
+    BAYESIAN = auto()
+    QUANTUM_GENERATED = auto()
 
-        Architecture: Conv1D -> Activation -> Global Average Pooling -> GaussianBlock
-        Outputs both mean and variance predictions. Accepts variable-length input
-        windows.
 
-        Args:
-            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
-            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
-            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
-            rngs (nnx.Rngs): RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.act_fn = act_fn
-
-        self.conv = nnx.Conv(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",
-            rngs=rngs,
-        )
-
-        # GaussianBlock to output mean and variance
-        self.gauss = GaussianBlock(n_filters, 1, rngs=rngs)
+class _DetConv1D(nnx.Module):
+    def __init__(self, **kwargs) -> None:
+        """Thin wrapper to filter the rngs at call time for the deterministic conv
+        layer."""
+        self._conv = nnx.Conv(**kwargs)
 
     def __call__(self, x: jax.Array, rngs: nnx.Rngs | None = None) -> jax.Array:
-        """Forward pass through the heteroscedastic CNN.
-
-        Args:
-            x (jax.Array): Input with shape (batch, window_size, 1).
-                           Accepts variable-length windows.
-            rngs (nnx.Rngs | None): RNGs at call time. Ignored in this model.
-
-        Returns:
-            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
-        """
-        # Conv1D with activation
-        x = self.conv(x)
-        x = self.act_fn(x)
-
-        # Global Average Pooling: (batch, window_size, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=1)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gauss(x)
-
-    def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
-        """Draw ``n_samples`` Monte Carlo predictions for a single input window.
-
-        The network is deterministic, so all samples come from the predicted output
-        Gaussian (aleatoric uncertainty only).
-
-        Args:
-            key: PRNG key.
-            X: Input with shape ``(1, window_size, 1)``.
-            n_samples: Number of Monte Carlo samples.
-
-        Returns:
-            Samples with shape ``(n_samples, 1)``.
-        """
-        mu, var = self(X, rngs=nnx.Rngs(dropout=key)).squeeze()
-        key, _ = jax.random.split(key)
-        return mu + jnp.sqrt(var) * jax.random.normal(key, shape=(n_samples, 1))
+        return self._conv(x)
 
 
-class MCDropoutCNN(nnx.Module):
+def _conv_layer_factory(conv_type: ConvType, **kwargs) -> nnx.Module:
+    if conv_type == ConvType.DETERMINISTIC:
+        return _DetConv1D(**kwargs)
+    elif conv_type == ConvType.BAYESIAN:
+        return StandardBayesConv1D(**kwargs)
+    elif conv_type == ConvType.QUANTUM_GENERATED:
+        generator = kwargs.pop("generator")
+        return GeneratorConv1D(generator=generator, **kwargs)
+    else:
+        raise ValueError(f"Unsupported convolution type: {conv_type}")
+
+
+class CNN(nnx.Module):
     def __init__(
         self,
+        conv_type: ConvType = ConvType.DETERMINISTIC,
+        in_features: int = 1,
         n_filters: int = 4,
         kernel_size: int = 5,
         dropout_rate: float = 0.1,
         act_fn: nnx.Module = nnx.gelu,
+        generator: ConvWeightGenerator | None = None,
         *,
         rngs: nnx.Rngs,
     ) -> None:
-        """MC Dropout 1D CNN for time-series RUL prediction with uncertainty.
+        """1D CNN for time-series RUL prediction with uncertainty.
 
         Architecture: Conv1D -> Activation -> Dropout -> Global Average Pooling ->
-        GaussianBlock. Combines aleatoric uncertainty (GaussianBlock) with epistemic
-        uncertainty (MC Dropout). Accepts variable-length input windows.
+        GaussianBlock. Accepts variable-length input windows.
 
         Args:
+            conv_type (ConvType, optional): Type of convolutional layer. Defaults to DETERMINISTIC.
+            input_dim (int, optional): Number of input features. Defaults to 1.
             n_filters (int, optional): Number of convolutional filters. Defaults to 4.
             kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
             dropout_rate (float, optional): Dropout rate. Defaults to 0.1.
             act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
+            generator (ConvWeightGenerator | None, optional): Weight generator for quantum-generated convolution. Required if conv_type is QUANTUM_GENERATED, ignored otherwise.
             rngs (nnx.Rngs): RNGs for the flax internal modules.
         """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.dropout_rate = dropout_rate
+        if conv_type == ConvType.QUANTUM_GENERATED and generator is None:
+            raise ValueError(
+                "generator must be provided when conv_type is QUANTUM_GENERATED"
+            )
+
         self.act_fn = act_fn
 
-        self.conv = nnx.Conv(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=(kernel_size,),
-            padding="VALID",
-            rngs=rngs,
-        )
+        conv_kwargs = {
+            "in_features": in_features,
+            "out_features": n_filters,
+            "kernel_size": kernel_size,
+            "padding": "VALID",
+            "rngs": rngs,
+        }
 
-        self.dropout = nnx.Dropout(dropout_rate, deterministic=False)
+        if conv_type == ConvType.QUANTUM_GENERATED:
+            conv_kwargs["generator"] = generator
+
+        self.conv = _conv_layer_factory(conv_type, **conv_kwargs)
+        self.dropout = nnx.Dropout(dropout_rate)
 
         # GaussianBlock to output mean and variance
         self.gauss = GaussianBlock(n_filters, 1, rngs=rngs)
 
     def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        """Forward pass through the MC Dropout CNN.
+        """Forward pass through the CNN.
 
         Args:
-            x (jax.Array): Input with shape (batch, window_size, 1).
+            x (jax.Array): Input with shape (batch, window_size, in_features).
                            Accepts variable-length windows.
-            rngs (nnx.Rngs, optional): RNGs for dropout sampling.
+            rngs (nnx.Rngs): RNGs for dropout sampling and weight sampling if applicable.
+
         Returns:
             jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
         """
         # Conv1D with activation and dropout
-        x = self.conv(x)
+        x = self.conv(x, rngs=rngs)
         x = self.act_fn(x)
         x = self.dropout(x, rngs=rngs)
 
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
+        # Global Average Pooling: (batch, window_size, n_filters) -> (batch, n_filters)
         x = jnp.mean(x, axis=-2)
 
         # GaussianBlock: (batch, n_filters) -> (batch, 2)
@@ -174,107 +140,56 @@ class MCDropoutCNN(nnx.Module):
     def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
         """Draw ``n_samples`` Monte Carlo predictions for a single input window.
 
-        Each sample uses an independent dropout mask (MC Dropout) plus a draw from
-        the predicted output Gaussian.
-
         Args:
             key: PRNG key.
-            X: Input with shape ``(1, window_size, 1)``.
+            X: Input with shape ``(1, window_size, in_features)``.
             n_samples: Number of Monte Carlo samples.
-
-        Returns:
-            Samples with shape ``(n_samples, 1)``.
-        """
-        samples = []
-        for _ in range(n_samples):
-            key, _ = jax.random.split(key)
-            mu, var = self(X, rngs=nnx.Rngs(dropout=key)).squeeze()
-            samples.append(mu + jnp.sqrt(var) * jax.random.normal(key, shape=(1,)))
-        return jnp.array(samples).reshape(-1, 1)
-
-
-class BayesianCNN(nnx.Module):
-    def __init__(
-        self,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Bayesian 1D CNN for time-series RUL prediction with uncertainty.
-
-        Architecture: BayesConv1D -> Activation -> Global Average Pooling ->
-        GaussianBlock. Bayesian version of :class:`HeteroscedasticCNN`,
-        trainable with ELBO loss (Bayes by Backprop). Accepts variable-length
-        input windows.
-
-        Args:
-            n_filters: Number of convolutional filters. Defaults to 4.
-            kernel_size: Size of the convolutional kernel. Defaults to 5.
-            act_fn: Activation function. Defaults to ``nnx.gelu``.
-            rngs: RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.act_fn = act_fn
-
-        self.conv = StandardBayesConv1D(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=kernel_size,
-            padding="VALID",
-            rngs=rngs,
-        )
-        # GaussianBlock to output mean and variance
-        self.gauss = GaussianBlock(n_filters, 1, rngs=rngs)
-
-    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        """Forward pass through the Bayesian CNN.
-
-        Args:
-            x: Input with shape ``(batch, window_size, 1)``.
-                Accepts variable-length windows.
-            rngs: RNGs for weight sampling. The ``params`` stream is used
-                to draw a key for the Bayesian convolution layer.
-
-        Returns:
-            Concatenated ``[mu, var_positive]`` with shape ``(batch, 2)``.
-        """
-        # Bayesian Conv1D with activation
-        x = self.conv(x, rngs=rngs)
-        x = self.act_fn(x)
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=-2)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gauss(x)
-
-    def kl_divergence(self) -> jax.Array:
-        """Total KL divergence across all Bayesian layers."""
-        return self.conv.kl_divergence()
-
-    def conv_mean_posterior_variance(self) -> jax.Array:
-        return self.conv.mean_posterior_variance()
-
-    def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
-        """Draw ``n_samples`` Monte Carlo predictions for a single input window.
-
-        Samples the Bayesian weights and the output Gaussian noise.
-
-        Args:
-            key: PRNG key.
-            X: Input with shape ``(1, window_size, 1)``.
-            n_samples: Number of Monte Carlo samples.
-
-        Returns:
-            Samples with shape ``(n_samples, 1)``.
         """
         splits = jax.random.split(key, num=2 * n_samples)
         keys_weights = splits[:n_samples]
         keys_noise = splits[n_samples:]
         return _mc_sample(self, X, keys_weights, keys_noise)
+
+
+class CNNForELBO(nnx.Module):
+    @staticmethod
+    def _validate_cnn(cnn: CNN) -> None:
+        if not hasattr(cnn.conv, "kl_divergence"):
+            raise ValueError("The provided CNN does not have a kl_divergence method. ")
+        if not hasattr(cnn.conv, "mean_posterior_variance"):
+            raise ValueError(
+                "The provided CNN does not have a mean_posterior_variance method."
+            )
+
+    def __init__(self, cnn: CNN) -> None:
+        """Wrapper around CNN to expose KL divergence for Bayesian layers.
+
+        Args:
+            cnn (CNN): An instance of the CNN class.
+        """
+        self._validate_cnn(cnn)
+        self.cnn = cnn
+
+    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
+        return self.cnn(x, rngs=rngs)
+
+    def kl_divergence(self) -> jax.Array:
+        """Total KL divergence across all Bayesian layers in the CNN."""
+        return self.cnn.conv.kl_divergence()
+
+    def conv_mean_posterior_variance(self) -> jax.Array:
+        """Mean posterior variance of the convolutional layer in the CNN."""
+        return self.cnn.conv.mean_posterior_variance()
+
+    def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
+        """Draw ``n_samples`` Monte Carlo predictions for a single input window.
+
+        Args:
+            key: PRNG key.
+            X: Input with shape ``(1, window_size, in_features)``.
+            n_samples: Number of Monte Carlo samples.
+        """
+        return self.cnn.mc_sample(key, X, n_samples)
 
 
 class WeightGenerator(nnx.Module):
@@ -367,83 +282,3 @@ class WeightGenerator(nnx.Module):
         return w_conv.reshape(
             self.w_conv_shape
         )  # (kernel_size, in_features, out_features)
-
-
-class QuantumVICNN(nnx.Module):
-    def __init__(
-        self,
-        n_filters: int,
-        kernel_size: int,
-        generator: ConvWeightGenerator,
-        act_fn: nnx.Module = nnx.gelu,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Quantum-aided variational-inference 1D CNN for RUL prediction.
-
-        Architecture: GeneratorConv1D -> Activation -> Global Average Pooling ->
-        GaussianBlock. The convolution weights are produced by a quantum weight
-        generator, giving a variational posterior over the kernel. Accepts
-        variable-length input windows.
-
-        Args:
-            n_filters: Number of convolutional filters. Defaults to 4.
-            kernel_size: Size of the convolutional kernel. Defaults to 5.
-            generator: Weight generator producing the convolution kernel.
-            act_fn: Activation function. Defaults to ``nnx.gelu``.
-            rngs: RNGs for the flax internal modules.
-        """
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        self.act_fn = act_fn
-
-        self.conv = GeneratorConv1D(
-            in_features=1,
-            out_features=n_filters,
-            kernel_size=kernel_size,
-            padding="VALID",
-            generator=generator,
-            rngs=rngs,
-        )
-        # GaussianBlock to output mean and variance
-        self.gauss = GaussianBlock(n_filters, 1, rngs=rngs)
-
-    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        """Forward pass through the quantum-aided VI CNN.
-
-        Args:
-            x: Input with shape ``(batch, window_size, 1)``.
-                Accepts variable-length windows.
-            rngs: RNGs for weight sampling. The ``default`` stream is used
-                to draw a key for the quantum convolution layer.
-
-        Returns:
-            Concatenated ``[mu, var_positive]`` with shape ``(batch, 2)``.
-        """
-        # Quantum-generated Conv1D with activation
-        x = self.conv(x, rngs=rngs)
-        x = self.act_fn(x)
-
-        # Global Average Pooling: (batch, length, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=-2)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gauss(x)
-
-    def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
-        """Draw ``n_samples`` Monte Carlo predictions for a single input window.
-
-        Samples the quantum-generated weights and the output Gaussian noise.
-
-        Args:
-            key: PRNG key.
-            X: Input with shape ``(1, window_size, 1)``.
-            n_samples: Number of Monte Carlo samples.
-
-        Returns:
-            Samples with shape ``(n_samples, 1)``.
-        """
-        splits = jax.random.split(key, num=2 * n_samples)
-        keys_weights = splits[:n_samples]
-        keys_noise = splits[n_samples:]
-        return _mc_sample(self, X, keys_weights, keys_noise)

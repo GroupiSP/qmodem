@@ -3,30 +3,24 @@ from __future__ import annotations
 import dataclasses
 import functools
 import pathlib
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 import grain
 import jax
 import mlflow
 import pandas as pd
-import sklearn.preprocessing as skpp
 
 from qmodem.data import (
-    DataFrameSource,
+    ArrayDataSource,
     DataPipeline,
-    DataSource,
-    add_feature_dimension_to_y,
-    get_time_windows_and_join,
-    normalize_ruls,
-    to_jax,
+    ScalingMode,
 )
 
 
 @dataclasses.dataclass
 class PreparedData:
-    train: DataFrameSource
-    val: DataFrameSource
-    scaler: skpp.MinMaxScaler
+    train: ArrayDataSource
+    val: ArrayDataSource
 
 
 def _split_train_val(
@@ -41,7 +35,7 @@ def _split_train_val(
 
 def _train_dataloader_builder(
     sampler_seed: int,
-    ds_train: DataSource,
+    ds_train: ArrayDataSource,
     batch_size: int,
     drop_remainder: bool,
 ) -> grain.DataLoader:
@@ -81,7 +75,7 @@ def dataloader_builders(
         It returns a single batch containing the entire validation set, which is assumed
         to be small enough to fit in memory.
         """
-        return [(data.val.X, data.val.y)]
+        return [(data.val.features, data.val.targets)]
 
     return train_builder, val_builder
 
@@ -89,9 +83,7 @@ def dataloader_builders(
 def prepare_data(
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
-    window_size: int,
-    stride: int,
-    normalize_rul: bool,
+    pipeline: DataPipeline,
 ) -> PreparedData:
     data_gen_run = mlflow.get_run(data_gen_run_id)
     train_df, val_df = _split_train_val(
@@ -99,36 +91,16 @@ def prepare_data(
         n_histories_train=int(data_gen_run.data.params["n_histories_train"]),
     )
 
-    scaler = skpp.MinMaxScaler(feature_range=(0, 1))
-    common_steps = [
-        functools.partial(
-            get_time_windows_and_join,
-            window_size=window_size,
-            stride=stride,
-        ),
-        add_feature_dimension_to_y,
-    ]
-    train_pipeline = DataPipeline(
-        [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.fit_transform)
-            if normalize_rul
-            else lambda data: data,
-            to_jax,
-        ]
-    )
-    val_pipeline = DataPipeline(
-        [
-            *common_steps,
-            functools.partial(normalize_ruls, transform_fn=scaler.transform)
-            if normalize_rul
-            else lambda data: data,
-            to_jax,
-        ]
-    )
+    # TODO Pass pipeline as an argument, rather than creating them here.
+    # Apply the pipeline to the training data, then set the mode to TRANSFORM for the validation data.
+    # This ensures that the scalers are fitted on the training data only.
+    pipeline.set_mode(ScalingMode.FIT_TRANSFORM)
+    X_train, y_train = pipeline(train_df)
+
+    pipeline.set_mode(ScalingMode.TRANSFORM)
+    X_val, y_val = pipeline(val_df)
 
     return PreparedData(
-        train=DataFrameSource(df=train_df, pipeline=train_pipeline),
-        val=DataFrameSource(df=val_df, pipeline=val_pipeline),
-        scaler=scaler,
+        train=ArrayDataSource(features=X_train, targets=y_train),
+        val=ArrayDataSource(features=X_val, targets=y_val),
     )

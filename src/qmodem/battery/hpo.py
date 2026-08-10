@@ -3,13 +3,14 @@ from __future__ import annotations
 import dataclasses
 import pathlib
 
-import flax.nnx as nnx
 import jax
+import jax.numpy as jnp
 import mlflow
 import numpy as np
 import pandas as pd
-import sklearn.preprocessing as skpp
+from flax import nnx
 
+from qmodem.battery.tracking import mlflow_load_scaler
 from qmodem.metrics import point_crps
 
 
@@ -21,11 +22,11 @@ class HPOHyperparameters:
     seed_hp_sampler: int = 123
     num_validation_histories: int = 5
     rul_grid_crps_start: float = 0.0
-    rul_grid_crps_end: float = 12_000.0
-    rul_grid_crps_resolution: int = 60
+    rul_grid_crps_end: float = 5_000.0
+    rul_grid_crps_resolution: float = 50.0
     num_mc_samples: int = 100
     num_hp_trials: int = 100
-    eval_window_size: int = 20
+    eval_window_size: int = 250  # Number of time steps to use for evaluation of the model on validation histories
 
 
 def pick_history_ids(num: int, seed: int, all_ids: list[int]) -> list[int]:
@@ -38,24 +39,28 @@ def _load_validation_history(path: pathlib.Path, id: int) -> pd.DataFrame:
     return df[df["run_id"] == id].sort_values("time")
 
 
-def _get_eval_window(history: pd.DataFrame, eval_window_size: int) -> np.ndarray:
-    return history.iloc[:eval_window_size]["voltage"].to_numpy()
+def _get_eval_window(
+    history: pd.DataFrame, features: list[str], eval_window_size: int
+) -> np.ndarray:
+    return history.iloc[:eval_window_size][features].to_numpy(dtype=np.float32)
 
 
 def _get_true_rul_after_eval_window(
     history: pd.DataFrame, eval_window_size: int
 ) -> float:
-    t = history.iloc[eval_window_size]["time"]
-    t_eod = history.iloc[-1]["time"]
-    return t_eod - t
+    return np.float32(history.iloc[eval_window_size]["rul"])
 
 
-def _scale_ruls(ruls: jax.Array) -> float:
+def _scale_window(window: np.ndarray) -> np.ndarray:
     run_id = mlflow.active_run().info.run_id
-    scaler: skpp.MinMaxScaler = mlflow.sklearn.load_model(
-        f"runs:/{run_id}/sklearn_scaler"
-    )
-    return scaler.inverse_transform(ruls)
+    x_scaler = mlflow_load_scaler(f"runs:/{run_id}/x_scaler")
+    return x_scaler.inverse_transform(window)
+
+
+def _scale_ruls(ruls: np.ndarray) -> np.ndarray:
+    run_id = mlflow.active_run().info.run_id
+    y_scaler = mlflow_load_scaler(f"runs:/{run_id}/y_scaler")
+    return y_scaler.inverse_transform(ruls)
 
 
 def _build_rul_grid(start: float, end: float, resolution: int) -> np.ndarray:
@@ -67,6 +72,7 @@ def score_avg_val_crps(
     hp: HPOHyperparameters,
     raw_data_dir: pathlib.Path,
     validation_history_ids: list[int],
+    features: list[str] = ["voltage"],
 ) -> float:
     """Scores the model based on the point-CRPS metric computed for a few validation
     histories."""
@@ -79,7 +85,8 @@ def score_avg_val_crps(
         all_ids=validation_history_ids,
     ):
         history = _load_validation_history(raw_data_dir / "train.csv", history_id)
-        X_w = _get_eval_window(history, hp.eval_window_size)
+        X_w = _get_eval_window(history, features, hp.eval_window_size)
+        X_w = _scale_window(X_w)
         rul_true = _get_true_rul_after_eval_window(history, hp.eval_window_size)
         rul_grid = _build_rul_grid(
             start=hp.rul_grid_crps_start,
@@ -88,8 +95,10 @@ def score_avg_val_crps(
         )
 
         key, subkey = jax.random.split(key)
-        samples_pred = model.mc_sample(subkey, X_w.reshape(1, -1, 1), hp.num_mc_samples)
-        samples_pred = _scale_ruls(samples_pred)
+        samples_pred = model.mc_sample(
+            subkey, jnp.array(X_w).reshape(1, -1, len(features)), hp.num_mc_samples
+        )
+        samples_pred = _scale_ruls(np.array(samples_pred, dtype=np.float32))
 
         crps_history = point_crps(rul_true, samples_pred, rul_grid)
         mlflow.log_metric(f"crps_history_{history_id}", crps_history)

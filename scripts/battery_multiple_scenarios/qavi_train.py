@@ -6,7 +6,7 @@ import pathlib
 import flax.nnx as nnx
 from dotenv import load_dotenv
 
-from qmodem.battery.models import Discriminator, QuantumVICNN, WeightGenerator
+from qmodem.battery.models import CNN, ConvType, Discriminator, WeightGenerator
 from qmodem.battery.train import QAVITrainHyperparameters, run_adversarial_training
 from qmodem.battery.train_steps import make_qavi_steps
 from qmodem.tracking import MLFlowSetup
@@ -17,10 +17,16 @@ def main() -> None:
     load_dotenv(override=True)
 
     log_stream = setup_script_logging()
+    hp = QAVITrainHyperparameters(
+        conv_kernel_size=10,
+        conv_n_filters=24,
+        window_size=10,
+        beta_nll=0.374,
+        dropout_rate=0.1,
+        pqc_n_layers=2,
+    )
 
-    hp = QAVITrainHyperparameters(pqc_n_layers=2)
-
-    mlflow_setup = MLFlowSetup(run_name="qavi_multiple_dummy")
+    mlflow_setup = MLFlowSetup(run_name="qavi")
 
     weight_generator = WeightGenerator(
         n_qubits=hp.pqc_n_qubits,
@@ -29,13 +35,16 @@ def main() -> None:
         in_features=1,
         out_features=hp.conv_n_filters,
     )
-    model = QuantumVICNN(
+    model = CNN(
+        conv_type=ConvType.QUANTUM_GENERATED,
+        in_features=1,
         n_filters=hp.conv_n_filters,
         kernel_size=hp.conv_kernel_size,
         generator=weight_generator,
         act_fn=getattr(nnx, hp.activation_function),
         rngs=nnx.Rngs(hp.net_init_seed),
     )
+
     discriminator = Discriminator(
         input_dim=hp.window_size + 1,
         hidden=hp.discriminator_hidden_size,

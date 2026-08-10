@@ -4,9 +4,9 @@ import dataclasses
 import io
 import pathlib
 import tempfile
+from collections.abc import Sequence
 from typing import Protocol
 
-import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -15,18 +15,19 @@ import numpy as np
 import orbax.checkpoint as ocp
 import pandas as pd
 import simbat as sb
-import sklearn.preprocessing as skpp
+from flax import nnx
 
 from qmodem.battery.data_generation import (
     load_simulation_config,
     run_discharges_from_intermediate_socs,
 )
 from qmodem.battery.scoring import (
-    DischargeData,
     EvalTimeStamp,
     TestCaseResults,
     bar_plot_metrics_per_test_case,
 )
+from qmodem.battery.tracking import mlflow_load_scaler
+from qmodem.data import DataScaler
 from qmodem.tracking import MLFlowSetup, track_mlflow
 
 
@@ -72,7 +73,7 @@ class Hyperparameters:
     test_grid_crps_num: int = 100
 
 
-def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeData:
+def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> pd.DataFrame:
     """Return the discharge data for a given test case ID from the test CSV file.
 
     Args:
@@ -80,17 +81,10 @@ def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> DischargeD
         test_case_id (int): ID of the test case to retrieve.
 
     Returns:
-        DischargeData: Discharge data for the specified test case.
+        pd.DataFrame: Discharge data for the specified test case.
     """
     df_test = pd.read_csv(test_path)
-    df_test_case_i = df_test[df_test["run_id"] == test_case_id]
-    time = df_test_case_i["time"].values
-    return DischargeData(
-        time=time,
-        soc=df_test_case_i["soc"].values,
-        voltage=df_test_case_i["voltage"].values,
-        rul=time[-1] - time,
-    )
+    return df_test[df_test["run_id"] == test_case_id]
 
 
 def restore_model_state(model: nnx.Module, train_run_id: str) -> None:
@@ -114,8 +108,10 @@ def evaluate_test_case(
     model: MCSampler,
     *,
     test_case_id: int,
-    test_data: DischargeData,
-    scaler: skpp.MinMaxScaler,
+    test_data: pd.DataFrame,
+    features: Sequence[str],
+    x_scaler: DataScaler,
+    y_scaler: DataScaler,
     config: sb.SimulationConfig,
     hp: Hyperparameters,
     window_size: int,
@@ -127,7 +123,8 @@ def evaluate_test_case(
         model: The model implementing :class:`MCSampler`.
         test_case_id: Identifier of the test case (used to label the result).
         test_data: Discharge data of the test case.
-        scaler: Fitted scaler used to map predictions back to RUL units.
+        x_scaler: Fitted scaler for the input features.
+        y_scaler: Fitted scaler for the target RUL values.
         config: Base simulation config (loaded from the data-generation run).
         hp: Evaluation hyperparameters.
         window_size: Voltage window length used by the model (from the training run).
@@ -136,6 +133,9 @@ def evaluate_test_case(
     Returns:
         The per-test-case results and the advanced PRNG key.
     """
+    # Order the test data by time to ensure correct evaluation.
+    test_data = test_data.sort_values("time").reset_index(drop=True)
+
     soc0_idxs = np.linspace(
         0, len(test_data.time) - 1, num=hp.test_n_soc0s, dtype=np.int32
     )
@@ -164,26 +164,31 @@ def evaluate_test_case(
 
     i = 1
     for sr in sims_iterator:
-        if soc0_idxs[i] < int(window_size):
+        if soc0_idxs[i] < window_size:
             time_window_start_idx = 0
         else:
-            time_window_start_idx = soc0_idxs[i] - int(window_size)
-        previous_voltage_window = test_data.voltage[
+            time_window_start_idx = soc0_idxs[i] - window_size
+        previous_window = test_data[
+            features
+        ][
             time_window_start_idx : soc0_idxs[
                 i
             ]  # time-window ends one step before the RUL timestamp
         ]
-        X = jnp.array(previous_voltage_window.reshape(1, -1, 1))
+        previous_window = x_scaler.transform(previous_window)
+        X = jnp.array(
+            previous_window.reshape(1, -1, len(features))
+        )  # shape (1, window_size, n_features)
 
         key, subkey = jax.random.split(key)
-        samples_pred = model.mc_sample(subkey, X, hp.test_n_mc_samples)
+        samples_pred = np.array(model.mc_sample(subkey, X, hp.test_n_mc_samples))
 
         eval_time_stamps.append(
             EvalTimeStamp(
                 time=test_data.time[soc0_idxs[i]],
                 target=test_data.rul[soc0_idxs[i]],
                 samples_true=sr.times_eod - sr.times[0],
-                samples_pred=scaler.inverse_transform(samples_pred),
+                samples_pred=y_scaler.inverse_transform(samples_pred),
             )
         )
         i += 1
@@ -257,7 +262,8 @@ def run_evaluation(
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
-    train_mode: bool = True,
+    features: Sequence[str] = ["voltage"],
+    train_mode: bool = False,
     n_test_cases: int = 10,
 ) -> None:
     """Run the full test-time evaluation and log results to MLflow.
@@ -272,15 +278,16 @@ def run_evaluation(
         log_stream: In-memory log stream logged as an artifact at the end.
         train_mode: If True, put the model in train mode (e.g. to enable MC dropout);
             otherwise eval mode.
+        features: List of feature names to use as input to the model.
         n_test_cases: Number of test cases to evaluate.
     """
+    # TODO Move mlflow ctxt manager at application level
     with track_mlflow(setup=mlflow_setup) as run:
         run_params_training = run.data.params
 
-        # Load the scaler fitted on the training data.
-        scaler: skpp.MinMaxScaler = mlflow.sklearn.load_model(
-            f"runs:/{mlflow_setup.run_id}/sklearn_scaler"
-        )
+        # Load the scalers fitted on the training data.
+        x_scaler = mlflow_load_scaler(f"runs:/{mlflow_setup.run_id}/x_scaler")
+        y_scaler = mlflow_load_scaler(f"runs:/{mlflow_setup.run_id}/y_scaler")
 
         restore_model_state(model, mlflow_setup.run_id)
 
@@ -306,7 +313,9 @@ def run_evaluation(
                 model,
                 test_case_id=test_case_id,
                 test_data=test_data,
-                scaler=scaler,
+                features=features,
+                x_scaler=x_scaler,
+                y_scaler=y_scaler,
                 config=config,
                 hp=hp,
                 window_size=window_size,

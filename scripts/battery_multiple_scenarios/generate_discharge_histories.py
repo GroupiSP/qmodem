@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from qmodem.battery.data_generation import (
     Hyperparameters,
+    add_rul_series,
     bernoulli_policy_choice,
     gaussian_noise,
     log_simulation_config,
@@ -22,12 +23,12 @@ from qmodem.battery.policies import VariableDischargeCurrentPolicy, plot_current
 from qmodem.tracking import MLFlowSetup, track_dataframe, track_mlflow
 
 constant_cruise_policy = VariableDischargeCurrentPolicy(
-    current_values=[-4.0, -1.0],
-    time_values=[0.0, 600.0],
+    current_values=[-5.0, -2.5],
+    time_values=[0.0, 100.0],
 )
 variable_cruise_policy = VariableDischargeCurrentPolicy(
-    current_values=[-4.0, -1.0, -2.0, -1.0],
-    time_values=[0.0, 600.0, 1800.0, 4000.0],
+    current_values=[-5.0, -2.5, -4.0, -2.5],
+    time_values=[0.0, 100.0, 900.0, 2600.0],
 )
 
 
@@ -63,7 +64,7 @@ def main() -> None:
     RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
 
     # MLFlow setup
-    tracking_setup = MLFlowSetup(run_name="generate_dummy_multiple")
+    tracking_setup = MLFlowSetup(run_name="generate_histories")
 
     with track_mlflow(tracking_setup):
         train_rng = np.random.default_rng(seed=hp.train_seed)
@@ -78,6 +79,9 @@ def main() -> None:
         test_config = make_simulator_config(test_rng, hp)
         test_df = write_histories(test_config, n_histories=hp.n_histories_test)
 
+        train_df = add_rul_series(train_df)
+        test_df = add_rul_series(test_df)
+
         # Log the test simulation config so it can be reloaded at evaluation time.
         log_simulation_config(test_config)
 
@@ -89,10 +93,14 @@ def main() -> None:
 
         fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(12, 5))
 
-        plot_current_profile(ax=axs[0], policy=constant_cruise_policy)
+        plot_current_profile(
+            ax=axs[0], policy=constant_cruise_policy, t_grid=np.linspace(0, 4000, 100)
+        )
         axs[0].set_title("Constant Cruise Policy")
 
-        plot_current_profile(ax=axs[1], policy=variable_cruise_policy)
+        plot_current_profile(
+            ax=axs[1], policy=variable_cruise_policy, t_grid=np.linspace(0, 4000, 100)
+        )
         axs[1].set_title("Variable Cruise Policy")
         mlflow.log_figure(fig, artifact_file="current_profiles.png")
 

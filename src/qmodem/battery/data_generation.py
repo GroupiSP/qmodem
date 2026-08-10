@@ -4,8 +4,9 @@ import dataclasses
 import pathlib
 import pickle
 import tempfile
+from collections.abc import Iterable, Iterator, Mapping
 from enum import StrEnum, auto
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 
 import mlflow
 import numpy as np
@@ -29,14 +30,13 @@ class Hyperparameters:
         default_factory=lambda: {"r0": 0.1},
     )
     battery_nominal_capacity: float = 10080.0  # in Coulombs
-    dt: float = 60.0
+    dt: float = 5.0  # in seconds
     v_cutoff: float = 2.5  # in Volts
-    n_histories_train: int = 50
-    n_histories_val: int = 20
+    n_histories_train: int = 10
+    n_histories_val: int = 5
     n_histories_test: int = 10
-    process_noise_std: float = 5e-3
+    process_noise_std: float = 2e-3
     measurement_noise_std: float = 5e-3
-    soc_range_train_val: tuple[float, float] = (0.05, 1.0)  # TODO is this still used?
     train_seed: int = 42
     test_seed: int = 123
 
@@ -97,15 +97,19 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
         columns=["rul_probability", "eod_reached_sim_0"], inplace=True
     )  # Drop the RUL probability column
     df.rename(
-        columns={"time": "time", "soc_sim_0": "soc", "voltage_sim_0": "voltage"},
+        columns={
+            "time": "time",
+            "load_sim_0": "load",
+            "soc_sim_0": "soc",
+            "voltage_sim_0": "voltage",
+        },
         inplace=True,
     )
     df.insert(0, "run_id", run_id)  # Add a run_id column for tracking
-    return None
 
 
 def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFrame:
-    out_df = pd.DataFrame(columns=["run_id", "time", "soc", "voltage"])
+    out_df = pd.DataFrame(columns=["run_id", "time", "load", "soc", "voltage"])
 
     for i in range(n_histories):
         result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
@@ -117,6 +121,26 @@ def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFra
         out_df = pd.concat([out_df, df], ignore_index=True)
 
     return out_df
+
+
+def add_rul_series(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a RUL series to the dataframe.
+
+    Args:
+        df: A dataframe with columns "run_id" and "time".
+
+    Returns:
+        A new dataframe with an additional column "rul" containing the remaining
+        useful life for each time step.
+    """
+    df = df.copy()
+    df["rul"] = 0.0  # Initialize the RUL column
+
+    for run_id, group in df.groupby("run_id"):
+        max_time = group["time"].max()
+        df.loc[group.index, "rul"] = max_time - group["time"]
+
+    return df
 
 
 def run_discharges_from_intermediate_socs(
