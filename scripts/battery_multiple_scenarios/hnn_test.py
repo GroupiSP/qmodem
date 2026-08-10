@@ -24,7 +24,7 @@ def main() -> None:
 
     model = CNN(
         conv_type=ConvType.DETERMINISTIC,
-        in_features=1,
+        in_features=2,
         n_filters=int(run_parameters["conv_n_filters"]),
         kernel_size=int(run_parameters["conv_kernel_size"]),
         dropout_rate=float(run_parameters["dropout_rate"]),
@@ -39,6 +39,7 @@ def main() -> None:
         raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
         data_gen_run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
         log_stream=log_stream,
+        features=["load", "voltage"],
         train_mode=False,  # Deterministic network: aleatoric uncertainty only.
     )
 

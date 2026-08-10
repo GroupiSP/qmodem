@@ -30,17 +30,19 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = TrainHyperparameters(
-        conv_kernel_size=3,
-        conv_n_filters=37,
-        window_size=13,
-        beta_nll=0.0207,
-        learning_rate=0.008,
-        dropout_rate=0.68,
+        window_size=300,
+        conv_kernel_size=31,
+        conv_n_filters=25,
+        beta_nll=0.02,
+        learning_rate=0.00013,
+        dropout_rate=0.2,
+        early_stopping_patience=50,
+        normalize_rul=True,
     )
 
     mlflow_setup = MLFlowSetup(run_name="hnn")
 
-    x_scaler = IdentityScaler()
+    x_scaler = skpp.StandardScaler()
     y_scaler = (
         skpp.MinMaxScaler(feature_range=(0, 1))
         if hp.normalize_rul
@@ -49,23 +51,24 @@ def main() -> None:
 
     pipeline = DataPipeline(
         [
+            ScalingStep(scaler=x_scaler, features=["load", "voltage"]),
+            ScalingStep(scaler=y_scaler, features=["rul"]),
             functools.partial(
                 get_time_windows_and_join,
                 window_size=hp.window_size,
                 stride=hp.stride,
-                features=["voltage"],
+                features=["load", "voltage"],
             ),
             add_feature_dimension_to_y,
-            ScalingStep(x_scaler=x_scaler, y_scaler=y_scaler),
             to_jax,
         ]
     )
 
     model = CNN(
         conv_type=ConvType.DETERMINISTIC,
-        in_features=1,
+        in_features=2,
         n_filters=hp.conv_n_filters,
-        kernel_size=hp.conv_kernel_size,
+        kernel_size=hp.conv_kernel_size,  # Integer kernel size means 1D convolution, tuple means 2D convolution
         dropout_rate=hp.dropout_rate,
         act_fn=getattr(nnx, hp.activation_function),
         rngs=nnx.Rngs(hp.net_init_seed),
