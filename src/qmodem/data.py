@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import pathlib
+import typing
 from collections.abc import Callable, Sequence
 from enum import StrEnum, auto
-from typing import Protocol, SupportsIndex
+from typing import Any, Protocol, SupportsIndex
 
 import jax
 import jax.numpy as jnp
@@ -99,31 +100,27 @@ class DataSource(Protocol):
 
 
 class DataScaler(Protocol):
-    def fit(self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike) -> None: ...
-    def fit_transform(
-        self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike
-    ) -> tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]: ...
-    def transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike: ...
-    def inverse_transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike: ...
+    def fit(self, x: pd.DataFrame, y: Any) -> None: ...
+    def fit_transform(self, x: pd.DataFrame, y: Any) -> pd.DataFrame: ...
+    def transform(self, x: pd.DataFrame) -> pd.DataFrame: ...
+    def inverse_transform(self, x: pd.DataFrame) -> pd.DataFrame: ...
 
 
 class IdentityScaler:
     """A scaler that performs no scaling, returning the input as-is."""
 
-    def fit(self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike) -> None:
+    def fit(self, x: pd.DataFrame, y: Any) -> None:
         """No-op for fitting the scaler."""
 
-    def fit_transform(
-        self, x: jaxtyping.ArrayLike, y: jaxtyping.ArrayLike = None
-    ) -> tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]:
+    def fit_transform(self, x: pd.DataFrame, y: Any = None) -> pd.DataFrame:
         """Returns the input arrays as-is without any scaling."""
         return x
 
-    def transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike:
+    def transform(self, x: pd.DataFrame) -> pd.DataFrame:
         """Returns the input array as-is without any scaling."""
         return x
 
-    def inverse_transform(self, x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike:
+    def inverse_transform(self, x: pd.DataFrame) -> pd.DataFrame:
         """Returns the input array as-is without any scaling."""
         return x
 
@@ -153,22 +150,21 @@ class ScalingMode(StrEnum):
 
 
 class ScalingStep:
-    """A data processing step that scales features and targets using provided scalers.
-
-    Meant to be used in a data pipeline.
-    """
-
-    @staticmethod
-    def _identity_transform(x: jaxtyping.ArrayLike) -> jaxtyping.ArrayLike:
-        return x
-
     def __init__(
         self,
-        x_scaler: DataScaler = IdentityScaler(),
-        y_scaler: DataScaler = IdentityScaler(),
+        scaler: DataScaler | None = None,
+        features: str | Sequence[str] | None = None,
     ) -> None:
-        self.x_scaler = x_scaler
-        self.y_scaler = y_scaler
+        """A data processing step that scales features and targets using provided
+        scalers. Meant to be used in a data pipeline.
+
+        Args:
+            scaler: A scaler object that implements the DataScaler protocol. If None, an IdentityScaler is used.
+            features: A string or list of strings specifying the feature names to be scaled. If None, scaling is applied
+                to all features of the dataset
+        """
+        self.scaler = scaler if scaler is not None else IdentityScaler()
+        self.features = features
         self._mode = ScalingMode.FIT_TRANSFORM
 
     @property
@@ -181,24 +177,25 @@ class ScalingStep:
             raise TypeError(f"mode must be an instance of ScalingMode, got {value}")
         self._mode = value
 
-    def _fit_transform(self, x, y):
-        x_scaled = self.x_scaler.fit_transform(x)
-        y_scaled = self.y_scaler.fit_transform(y)
-        return x_scaled, y_scaled
+    def _fit_transform(self, x: pd.DataFrame, y: Any = None) -> pd.DataFrame:
+        features = self.features if self.features is not None else x.columns
+        x = x.copy()
+        x[features] = self.scaler.fit_transform(x[features], y)
+        return x
 
-    def _transform(self, x, y):
-        return self.x_scaler.transform(x), self.y_scaler.transform(y)
+    def _transform(self, x: pd.DataFrame) -> pd.DataFrame:
+        features = self.features if self.features is not None else x.columns
+        x = x.copy()
+        x[features] = self.scaler.transform(x[features])
+        return x
 
-    _dispatch = {
+    _dispatch: typing.ClassVar = {
         ScalingMode.FIT_TRANSFORM: _fit_transform,
         ScalingMode.TRANSFORM: _transform,
     }
 
-    def __call__(
-        self, data: tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]
-    ) -> tuple[jaxtyping.ArrayLike, jaxtyping.ArrayLike]:
-        x, y = data
-        return self._dispatch[self._mode](self, x, y)
+    def __call__(self, x: pd.DataFrame) -> pd.DataFrame:
+        return self._dispatch[self._mode](self, x)
 
 
 class DataPipeline:
@@ -241,7 +238,7 @@ def get_time_windows_and_join(
     for unit_id in unit_ids:
         unit_df = df[df["run_id"] == unit_id].sort_values("time")
         feature_array = unit_df[features].values
-        ruls = unit_df["time"].iloc[-1] - unit_df["time"].values
+        ruls = unit_df["rul"].values
 
         fw_i, rul_i = _make_windows(feature_array, ruls, window_size, stride)
         feature_windows.extend(fw_i)
