@@ -73,7 +73,7 @@ def log_general(
     num_model_params: int,
     hyperparameters: dict[str, Any],
     scalers: ScalersDescription,
-    log_stream: io.StringIO,
+    log_stream: io.StringIO | None = None,
 ) -> None:
     mlflow.log_param("n_params", num_model_params)
     mlflow.log_params(hyperparameters)
@@ -86,4 +86,5 @@ def log_general(
             predict_method=predict_method,
         )
 
-    mlflow.log_text(log_stream.getvalue(), "training_log.txt")
+    if log_stream is not None:
+        mlflow.log_text(log_stream.getvalue(), "training_log.txt")
