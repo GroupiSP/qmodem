@@ -66,7 +66,8 @@ class Hyperparameters:
 
     test_rng_seed: int = 123
     test_n_soc0s: int = 20
-    test_n_mc_samples: int = 200
+    test_n_mc_samples_simulator: int = 100
+    test_n_mc_samples_model: int = 200
     test_grid_crps_start: float = 2_000.0
     test_grid_crps_end: float = 10_000.0
     # TODO: Specify the step, rather than the number of CRPS grid points.
@@ -147,7 +148,9 @@ def evaluate_test_case(
     overrides = [
         {"soc_0": test_data.soc[idx], "t_0": test_data.time[idx]} for idx in soc0_idxs
     ]
-    sims_iterator = run_discharges_from_intermediate_socs(config, overrides)
+    sims_iterator = run_discharges_from_intermediate_socs(
+        config, overrides, n_sim=hp.test_n_mc_samples_simulator
+    )
 
     eval_time_stamps = []
 
@@ -181,7 +184,7 @@ def evaluate_test_case(
         )  # shape (1, window_size, n_features)
 
         key, subkey = jax.random.split(key)
-        samples_pred = np.array(model.mc_sample(subkey, X, hp.test_n_mc_samples))
+        samples_pred = np.array(model.mc_sample(subkey, X, hp.test_n_mc_samples_model))
 
         eval_time_stamps.append(
             EvalTimeStamp(
