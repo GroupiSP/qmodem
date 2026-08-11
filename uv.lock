@@ -3265,7 +3265,7 @@ wheels = [
 [[package]]
 name = "simbat"
 version = "0.1.0"
-source = { git = "https://github.com/GroupiSP/simbat.git#1a557b87868bcd6e0949edad3191cde89aaa1678" }
+source = { git = "https://github.com/GroupiSP/simbat.git#48ff9874ecf8edcddb1bf6f666374cd6e8951736" }
 dependencies = [
     { name = "ipykernel" },
     { name = "matplotlib" },
