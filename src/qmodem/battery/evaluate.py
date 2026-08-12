@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import io
 import pathlib
 import tempfile
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Protocol
 
 import jax
@@ -22,9 +21,7 @@ from qmodem.battery.scoring import (
     TestCaseResults,
     bar_plot_metrics_per_test_case,
 )
-from qmodem.battery.tracking import mlflow_load_scaler
 from qmodem.data import DataScaler
-from qmodem.tracking import MLFlowSetup, track_mlflow
 
 
 class MCSampler(Protocol):
@@ -252,12 +249,12 @@ def run_evaluation(
     model: MCSampler,
     test_data: pd.DataFrame,
     test_rul_samples: TestRULSamples,
+    x_scaler: DataScaler,
+    y_scaler: DataScaler,
+    window_size: int,
     hp: Hyperparameters,
-    mlflow_setup: MLFlowSetup,
-    log_stream: io.StringIO,
     features: Sequence[str] = ["voltage"],
-    train_mode: bool = False,
-) -> None:
+) -> list[TestCaseResults]:
     """Run the full test-time evaluation and log results to MLflow.
 
     Args:
@@ -272,47 +269,30 @@ def run_evaluation(
             otherwise eval mode.
         features: List of feature names to use as input to the model.
         n_test_cases: Number of test cases to evaluate.
+
+    Returns:
+        List of per-test-case results.
     """
-    # TODO Move mlflow ctxt manager at application level
-    with track_mlflow(setup=mlflow_setup) as run:
-        run_params_training = run.data.params
+    # Random PRNG key for sampling the model.
+    key = jax.random.key(hp.test_rng_seed)
 
-        # Load the scalers fitted on the training data.
-        x_scaler = mlflow_load_scaler(f"runs:/{mlflow_setup.run_id}/x_scaler")
-        y_scaler = mlflow_load_scaler(f"runs:/{mlflow_setup.run_id}/y_scaler")
+    n_test_cases = test_data.run_id.nunique()
+    test_case_results = []
 
-        restore_model_state(model, mlflow_setup.run_id)
+    for test_case_id in range(n_test_cases):
+        test_case_data = get_test_case_data(test_data, test_case_id=test_case_id)
+        test_case_result, key = evaluate_test_case(
+            model,
+            test_case_rul_samples=test_rul_samples[f"test_case_{test_case_id}"],
+            test_case_id=test_case_id,
+            test_data=test_case_data,
+            features=features,
+            x_scaler=x_scaler,
+            y_scaler=y_scaler,
+            hp=hp,
+            window_size=window_size,
+            key=key,
+        )
+        test_case_results.append(test_case_result)
 
-        window_size = int(run_params_training["window_size"])
-
-        # Random PRNG key for sampling the model.
-        key = jax.random.key(hp.test_rng_seed)
-
-        if train_mode:
-            model.train()
-        else:
-            model.eval()
-
-        n_test_cases = test_data.run_id.nunique()
-        test_case_results = []
-
-        for test_case_id in range(n_test_cases):
-            test_case_data = get_test_case_data(test_data, test_case_id=test_case_id)
-            test_case_result, key = evaluate_test_case(
-                model,
-                test_case_rul_samples=test_rul_samples[f"test_case_{test_case_id}"],
-                test_case_id=test_case_id,
-                test_data=test_case_data,
-                features=features,
-                x_scaler=x_scaler,
-                y_scaler=y_scaler,
-                hp=hp,
-                window_size=window_size,
-                key=key,
-            )
-            test_case_results.append(test_case_result)
-
-        # Log parameters and metrics with MLflow.
-        mlflow.log_params(asdict(hp))
-        log_evaluation_metrics(test_case_results, hp)
-        mlflow.log_text(log_stream.getvalue(), artifact_file="test_log.txt")
+    return test_case_results

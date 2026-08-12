@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+from dataclasses import asdict
 
+import mlflow
 import numpy as np
 import pandas as pd
 import simbat as sb
@@ -10,9 +12,20 @@ from dotenv import load_dotenv
 from flax import nnx
 
 from qmodem.battery.data_generation import load_simulation_config
-from qmodem.battery.evaluate import Hyperparameters, TestRULSamples, run_evaluation
+from qmodem.battery.evaluate import (
+    Hyperparameters,
+    TestRULSamples,
+    log_evaluation_metrics,
+    restore_model_state,
+    run_evaluation,
+)
 from qmodem.battery.models import CNN, ConvType
-from qmodem.tracking import get_run_parameters, retrieve_mlflow_setup_train
+from qmodem.battery.tracking import mlflow_load_scaler
+from qmodem.tracking import (
+    get_run_parameters,
+    retrieve_mlflow_setup_train,
+    track_mlflow,
+)
 from qmodem.utils import setup_script_logging
 
 
@@ -137,17 +150,32 @@ def main() -> None:
         rngs=nnx.Rngs(0),
     )  # RNGs won't be used for inference, so the seed is arbitrary.
 
-    # Main evaluation function
-    run_evaluation(
-        model=model,
-        hp=hp,
-        test_data=test_data,
-        test_rul_samples=test_rul_samples,
-        mlflow_setup=mlflow_setup,
-        log_stream=log_stream,
-        features=["load", "voltage"],
-        train_mode=False,  # Deterministic network: aleatoric uncertainty only.
-    )
+    with track_mlflow(setup=mlflow_setup) as run:
+        # Load the scalers fitted on the training data.
+        x_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/x_scaler")
+        y_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/y_scaler")
+
+        restore_model_state(model, mlflow_setup.run_id)
+        # TODO For MCD figure out a way to redirect the eval mode to the train mode
+        model.eval()
+
+        window_size = int(run.data.params["window_size"])
+
+        results = run_evaluation(
+            model=model,
+            test_data=test_data,
+            test_rul_samples=test_rul_samples,
+            x_scaler=x_scaler,
+            y_scaler=y_scaler,
+            window_size=window_size,
+            hp=hp,
+            features=["load", "voltage"],
+        )
+
+        # Log parameters and metrics with MLflow.
+        mlflow.log_params(asdict(hp))
+        log_evaluation_metrics(results, hp)
+        mlflow.log_text(log_stream.getvalue(), artifact_file="test_log.txt")
 
 
 if __name__ == "__main__":
