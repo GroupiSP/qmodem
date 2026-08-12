@@ -8,7 +8,6 @@ from typing import Protocol
 
 import jax
 import jax.numpy as jnp
-import jaxtyping as jtp
 import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
@@ -16,6 +15,7 @@ import orbax.checkpoint as ocp
 import pandas as pd
 from flax import nnx
 
+from qmodem.battery.data_generation import TestCaseRULSamples, TestRULSamples
 from qmodem.battery.scoring import (
     EvalTimeStamp,
     TestCaseResults,
@@ -39,11 +39,6 @@ class MCSampler(Protocol):
     def train(self) -> None: ...
 
     def eval(self) -> None: ...
-
-
-type TestCaseRULSamples = jtp.Float[np.ndarray, "n_checkpoints n_mc_samples"]
-# Keys follow  the pattern "test_case_{test_case_id}"
-type TestRULSamples = dict[str, TestCaseRULSamples]
 
 
 @dataclass(frozen=True)

@@ -7,8 +7,9 @@ import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum, auto
-from typing import Any
+from typing import Any, Protocol
 
+import jaxtyping as jtp
 import mlflow
 import numpy as np
 import pandas as pd
@@ -21,6 +22,27 @@ class VOCModel(StrEnum):
 
 class ECMModel(StrEnum):
     THEVENIN_ZERO_ORDER = auto()
+
+
+type TestCaseRULSamples = jtp.Float[np.ndarray, "n_checkpoints n_mc_samples"]
+# Keys follow  the pattern "test_case_{test_case_id}"
+type TestRULSamples = dict[str, TestCaseRULSamples]
+
+
+class EventFunction(Protocol):
+    def __call__(self, t0: float, soc0: float) -> bool: ...
+
+
+class SimulatorUpdater(Protocol):
+    def __call__(
+        self,
+        base_config: sb.SimulationConfig,
+        idx: int,
+        soc0: float,
+        t0: float,
+        tc_data: pd.DataFrame,
+        event_fn: EventFunction,
+    ) -> sb.SimulationConfig: ...
 
 
 @dataclass(frozen=True)
@@ -170,3 +192,88 @@ def run_discharges_from_intermediate_socs(
     for override in overrides:
         cfg = dataclasses.replace(config, **override)
         yield sb.simulate_constant_capacity_simple(n_sim=n_sim, config=cfg)
+
+
+def sim_updater_two_scenarios(
+    base_config: sb.SimulationConfig,
+    idx: int,
+    soc0: float,
+    t0: float,
+    tc_data: pd.DataFrame,
+    event_fn: EventFunction,
+) -> sb.SimulationConfig:
+    _to_update = ["soc_0", "t_0", "current_policies", "policy_choice_distribution"]
+
+    def dirac_policy_choice_distribution() -> int:
+        return 0
+
+    # Get the policy at the given index
+    policy_id = tc_data.loc[idx, "policy_id"]
+
+    # Update to a deterministic policy if the event has happened
+    if event_fn(t0, soc0):
+        policy_choice_distribution = dirac_policy_choice_distribution
+        current_policies = [base_config.current_policies[policy_id]]
+    else:
+        policy_choice_distribution = base_config.policy_choice_distribution
+        current_policies = base_config.current_policies
+
+    return sb.SimulationConfig(
+        policy_choice_distribution=policy_choice_distribution,
+        current_policies=current_policies,
+        soc_0=soc0,
+        t_0=t0,
+        **{k: v for k, v in base_config.__dict__.items() if k not in _to_update},
+    )
+
+
+def reconstruct_true_rul_distribution(
+    test_data: pd.DataFrame,
+    simulator_base_config: sb.SimulationConfig,
+    n_soc0s: int,
+    n_mc_samples: int,
+    simulator_updater: SimulatorUpdater,
+    event_fn: EventFunction,
+) -> TestRULSamples:
+    # Count the number of unique test cases; create the output data structure
+    n_tcs = test_data["run_id"].nunique()
+    out = dict.fromkeys([f"test_case_{i}" for i in range(n_tcs)], None)
+
+    # Loop over the test cases
+    for tc_i in range(n_tcs):
+        # Define an empty array to hold the RUL samples for this test case
+        rul_samples = np.empty((n_soc0s, n_mc_samples), dtype=np.float32)
+
+        # Extract the test case data and sort it by time
+        tc_data = test_data[test_data["run_id"] == tc_i]
+        tc_data = tc_data.sort_values(by="time", ascending=True).reset_index(drop=True)
+
+        # Define the interemediate checkpoints and corresponding SOCs and times
+        checkpoints = np.linspace(0, len(tc_data) - 1, num=n_soc0s, dtype=np.int32)
+        soc0s = tc_data.loc[checkpoints, "soc"].to_numpy()
+        t0s = tc_data.loc[checkpoints, "time"].to_numpy()
+
+        # Loop over the checkpoints
+        for i, (checkpoint, soc0, t0) in enumerate(zip(checkpoints, soc0s, t0s)):
+            # Update the config with SOC, t_0, policies and policy choice distribution
+            updated_config = simulator_updater(
+                base_config=simulator_base_config,
+                idx=checkpoint,
+                soc0=soc0,
+                t0=t0,
+                tc_data=tc_data,
+                event_fn=event_fn,
+            )
+
+            # Simulate
+            result = sb.simulate_constant_capacity_simple(
+                n_sim=n_mc_samples, config=updated_config
+            )
+
+            # Update the checkpoint array
+            rul_samples[i, :] = result.times_eod - t0
+
+        # Update test case entry
+        out[f"test_case_{tc_i}"] = rul_samples
+
+    return out
