@@ -5,6 +5,7 @@ import pathlib
 import pickle
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any
 
@@ -22,7 +23,7 @@ class ECMModel(StrEnum):
     THEVENIN_ZERO_ORDER = auto()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Hyperparameters:
     voc_model: VOCModel = VOCModel.BUSTOS_BAEZA
     ecm_model: ECMModel = ECMModel.THEVENIN_ZERO_ORDER
@@ -93,11 +94,14 @@ def load_simulation_config(
 
 
 def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
+    """Modifies the datafram in order to result in the following schema:
+    run_id, policy_id, time, load, soc, voltage"""
     df.drop(
         columns=["rul_probability", "eod_reached_sim_0"], inplace=True
     )  # Drop the RUL probability column
     df.rename(
         columns={
+            "policy_id_0": "policy_id",
             "time": "time",
             "load_sim_0": "load",
             "soc_sim_0": "soc",
@@ -109,7 +113,10 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
 
 
 def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFrame:
-    out_df = pd.DataFrame(columns=["run_id", "time", "load", "soc", "voltage"])
+    """Runs MC simulations and gathers the results into a single dataframe."""
+    out_df = pd.DataFrame(
+        columns=["run_id", "policy_id", "time", "load", "soc", "voltage"]
+    )
 
     for i in range(n_histories):
         result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
