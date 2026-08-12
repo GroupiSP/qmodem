@@ -36,5 +36,8 @@ recursive = true
 black = true
 style = "google"
 
+[tool.ruff.lint]
+ignore = ["F722"]
+
 [tool.uv.sources]
 simbat = { git = "https://github.com/GroupiSP/simbat.git" }

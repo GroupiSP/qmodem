@@ -1,26 +1,22 @@
 from __future__ import annotations
 
-import dataclasses
 import io
 import pathlib
 import tempfile
 from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from typing import Protocol
 
 import jax
 import jax.numpy as jnp
+import jaxtyping as jtp
 import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
 import orbax.checkpoint as ocp
 import pandas as pd
-import simbat as sb
 from flax import nnx
 
-from qmodem.battery.data_generation import (
-    load_simulation_config,
-    run_discharges_from_intermediate_socs,
-)
 from qmodem.battery.scoring import (
     EvalTimeStamp,
     TestCaseResults,
@@ -48,7 +44,12 @@ class MCSampler(Protocol):
     def eval(self) -> None: ...
 
 
-@dataclasses.dataclass(frozen=True)
+type TestCaseRULSamples = jtp.Float[np.ndarray, "n_checkpoints n_mc_samples"]
+# Keys follow  the pattern "test_case_{test_case_id}"
+type TestRULSamples = dict[str, TestCaseRULSamples]
+
+
+@dataclass(frozen=True)
 class Hyperparameters:
     """The `test_` prefix is used to distinguish these hyperparameters from the ones
     used for training.
@@ -106,13 +107,12 @@ def restore_model_state(model: nnx.Module, train_run_id: str) -> None:
 
 def evaluate_test_case(
     model: MCSampler,
-    *,
+    test_case_rul_samples: TestCaseRULSamples,
     test_case_id: int,
     test_data: pd.DataFrame,
     features: Sequence[str],
     x_scaler: DataScaler,
     y_scaler: DataScaler,
-    config: sb.SimulationConfig,
     hp: Hyperparameters,
     window_size: int,
     key: jax.Array,
@@ -121,6 +121,7 @@ def evaluate_test_case(
 
     Args:
         model: The model implementing :class:`MCSampler`.
+        test_case_rul_samples: RUL samples of the test case.
         test_case_id: Identifier of the test case (used to label the result).
         test_data: Discharge data of the test case.
         x_scaler: Fitted scaler for the input features.
@@ -140,32 +141,21 @@ def evaluate_test_case(
         0, len(test_data.time) - 1, num=hp.test_n_soc0s, dtype=np.int32
     )
 
-    # Simulate the "true" future from each intermediate starting state. Both soc_0 and
-    # t_0 are injected: t_0 is required for time-dependent policies (multi-scenario) and
-    # harmless for constant policies since the RUL (times_eod - times[0]) is
-    # offset-invariant. Measurement noise is kept identical to data generation.
-    overrides = [
-        {"soc_0": test_data.soc[idx], "t_0": test_data.time[idx]} for idx in soc0_idxs
-    ]
-    sims_iterator = run_discharges_from_intermediate_socs(
-        config, overrides, n_sim=hp.test_n_mc_samples_simulator
-    )
-
     eval_time_stamps = []
 
     # First timestamp is treated separately, since there is no prediction for it.
-    sr_0 = next(sims_iterator)
     eval_time_stamps.append(
         EvalTimeStamp(
             time=test_data.time[soc0_idxs[0]],
             target=test_data.rul[soc0_idxs[0]],
-            samples_true=sr_0.times_eod - sr_0.times[0],
+            samples_true=test_case_rul_samples[
+                0, :
+            ],  # RUL samples for the first timestamp
             samples_pred=np.array([]),  # No prediction for the first timestamp
         )
     )
 
-    i = 1
-    for sr in sims_iterator:
+    for i in range(1, len(soc0_idxs)):
         if soc0_idxs[i] < window_size:
             time_window_start_idx = 0
         else:
@@ -189,11 +179,12 @@ def evaluate_test_case(
             EvalTimeStamp(
                 time=test_data.time[soc0_idxs[i]],
                 target=test_data.rul[soc0_idxs[i]],
-                samples_true=sr.times_eod - sr.times[0],
+                samples_true=test_case_rul_samples[
+                    i, :
+                ],  # RUL samples for the current timestamp
                 samples_pred=y_scaler.inverse_transform(samples_pred),
             )
         )
-        i += 1
 
     return (
         TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps),
@@ -259,14 +250,14 @@ def log_evaluation_metrics(
 def run_evaluation(
     *,
     model: MCSampler,
+    test_data: pd.DataFrame,
+    test_rul_samples: TestRULSamples,
     hp: Hyperparameters,
     mlflow_setup: MLFlowSetup,
-    raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     log_stream: io.StringIO,
     features: Sequence[str] = ["voltage"],
     train_mode: bool = False,
-    n_test_cases: int = 10,
 ) -> None:
     """Run the full test-time evaluation and log results to MLflow.
 
@@ -293,9 +284,6 @@ def run_evaluation(
 
         restore_model_state(model, mlflow_setup.run_id)
 
-        # Load the simulation config used to generate the test cases.
-        config = load_simulation_config(data_gen_run_id)
-
         window_size = int(run_params_training["window_size"])
 
         # Random PRNG key for sampling the model.
@@ -306,19 +294,19 @@ def run_evaluation(
         else:
             model.eval()
 
+        n_test_cases = test_data.run_id.nunique()
         test_case_results = []
-        test_dataframe = pd.read_csv(raw_data_dir / "test.csv")
 
         for test_case_id in range(n_test_cases):
-            test_data = get_test_case_data(test_dataframe, test_case_id=test_case_id)
+            test_case_data = get_test_case_data(test_data, test_case_id=test_case_id)
             test_case_result, key = evaluate_test_case(
                 model,
+                test_case_rul_samples=test_rul_samples[f"test_case_{test_case_id}"],
                 test_case_id=test_case_id,
-                test_data=test_data,
+                test_data=test_case_data,
                 features=features,
                 x_scaler=x_scaler,
                 y_scaler=y_scaler,
-                config=config,
                 hp=hp,
                 window_size=window_size,
                 key=key,
@@ -326,6 +314,6 @@ def run_evaluation(
             test_case_results.append(test_case_result)
 
         # Log parameters and metrics with MLflow.
-        mlflow.log_params(dataclasses.asdict(hp))
+        mlflow.log_params(asdict(hp))
         log_evaluation_metrics(test_case_results, hp)
         mlflow.log_text(log_stream.getvalue(), artifact_file="test_log.txt")
