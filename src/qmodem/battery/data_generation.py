@@ -5,6 +5,7 @@ import pathlib
 import pickle
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any
 
@@ -22,7 +23,7 @@ class ECMModel(StrEnum):
     THEVENIN_ZERO_ORDER = auto()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Hyperparameters:
     voc_model: VOCModel = VOCModel.BUSTOS_BAEZA
     ecm_model: ECMModel = ECMModel.THEVENIN_ZERO_ORDER
