@@ -105,33 +105,33 @@ def evaluate_test_case(
     features: Sequence[str],
     x_scaler: DataScaler,
     y_scaler: DataScaler,
-    hp: Hyperparameters,
     window_size: int,
+    n_soc0s: int,
+    n_mc_samples: int,
     key: jax.Array,
-) -> tuple[TestCaseResults, jax.Array]:
-    """Evaluate a single test case over ``hp.test_n_soc0s`` intermediate starting SoCs.
+) -> TestCaseResults:
+    """Evaluate the model on a single test case and return the results.
 
     Args:
-        model: The model implementing :class:`MCSampler`.
-        test_case_rul_samples: RUL samples of the test case.
-        test_case_id: Identifier of the test case (used to label the result).
-        test_data: Discharge data of the test case.
-        x_scaler: Fitted scaler for the input features.
-        y_scaler: Fitted scaler for the target RUL values.
-        config: Base simulation config (loaded from the data-generation run).
-        hp: Evaluation hyperparameters.
-        window_size: Voltage window length used by the model (from the training run).
-        key: PRNG key; advanced and returned so it can be threaded across test cases.
+        model: Model implementing :class:`MCSampler`, already constructed by the caller.
+        test_case_rul_samples: True RUL samples for the test case.
+        test_case_id: ID of the test case.
+        test_data: DataFrame containing the test data for the test case.
+        features: List of feature names to use as input to the model.
+        x_scaler: Scaler for the input features.
+        y_scaler: Scaler for the RUL predictions.
+        window_size: Size of the input window for the model.
+        n_soc0s: Number of intermediate starting SoCs to evaluate.
+        n_mc_samples: Number of Monte Carlo samples to draw per intermediate SoC.
+        key: PRNG key for sampling.
 
     Returns:
-        The per-test-case results and the advanced PRNG key.
+        TestCaseResults: Results of the evaluation for the test case.
     """
     # Order the test data by time to ensure correct evaluation.
     test_data = test_data.sort_values("time").reset_index(drop=True)
 
-    soc0_idxs = np.linspace(
-        0, len(test_data.time) - 1, num=hp.test_n_soc0s, dtype=np.int32
-    )
+    soc0_idxs = np.linspace(0, len(test_data.time) - 1, num=n_soc0s, dtype=np.int32)
 
     eval_time_stamps = []
 
@@ -164,8 +164,8 @@ def evaluate_test_case(
             previous_window.reshape(1, -1, len(features))
         )  # shape (1, window_size, n_features)
 
-        key, subkey = jax.random.split(key)
-        samples_pred = np.array(model.mc_sample(subkey, X, hp.test_n_mc_samples_model))
+        _, subkey = jax.random.split(key)
+        samples_pred = np.array(model.mc_sample(subkey, X, n_mc_samples))
 
         eval_time_stamps.append(
             EvalTimeStamp(
@@ -178,10 +178,7 @@ def evaluate_test_case(
             )
         )
 
-    return (
-        TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps),
-        key,
-    )
+    return TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps)
 
 
 def log_evaluation_metrics(
@@ -247,36 +244,36 @@ def run_evaluation(
     x_scaler: DataScaler,
     y_scaler: DataScaler,
     window_size: int,
-    hp: Hyperparameters,
+    n_soc0s: int,
+    n_mc_samples: int,
     features: Sequence[str] = ["voltage"],
+    key: jax.Array,
 ) -> list[TestCaseResults]:
-    """Run the full test-time evaluation and log results to MLflow.
+    """Run the evaluation of the model on the test data and return the results.
 
     Args:
         model: Model implementing :class:`MCSampler`, already constructed by the caller.
-        hp: Evaluation hyperparameters.
-        mlflow_setup: MLflow setup for the evaluation run.
-        raw_data_dir: Directory containing ``test.csv``.
-        data_gen_run_id: MLflow run ID of the data-generation run holding the pickled
-            simulation config.
-        log_stream: In-memory log stream logged as an artifact at the end.
-        train_mode: If True, put the model in train mode (e.g. to enable MC dropout);
-            otherwise eval mode.
+        test_data: DataFrame containing the test data.
+        test_rul_samples: True RUL samples for the test cases.
+        x_scaler: Scaler for the input features.
+        y_scaler: Scaler for the RUL predictions.
+        window_size: Size of the input window for the model.
+        n_soc0s: Number of intermediate starting SoCs to evaluate per test case.
+        n_mc_samples: Number of Monte Carlo samples to draw per intermediate SoC.
         features: List of feature names to use as input to the model.
-        n_test_cases: Number of test cases to evaluate.
+        key: PRNG key for sampling.
 
     Returns:
-        List of per-test-case results.
+        List of TestCaseResults for each test case.
     """
-    # Random PRNG key for sampling the model.
-    key = jax.random.key(hp.test_rng_seed)
-
     n_test_cases = test_data.run_id.nunique()
     test_case_results = []
 
     for test_case_id in range(n_test_cases):
         test_case_data = get_test_case_data(test_data, test_case_id=test_case_id)
-        test_case_result, key = evaluate_test_case(
+
+        _, subkey = jax.random.split(key)
+        test_case_result = evaluate_test_case(
             model,
             test_case_rul_samples=test_rul_samples[f"test_case_{test_case_id}"],
             test_case_id=test_case_id,
@@ -284,9 +281,10 @@ def run_evaluation(
             features=features,
             x_scaler=x_scaler,
             y_scaler=y_scaler,
-            hp=hp,
+            n_soc0s=n_soc0s,
+            n_mc_samples=n_mc_samples,
             window_size=window_size,
-            key=key,
+            key=subkey,
         )
         test_case_results.append(test_case_result)
 

@@ -4,6 +4,7 @@ import os
 import pathlib
 from dataclasses import asdict
 
+import jax
 import mlflow
 import pandas as pd
 from dotenv import load_dotenv
@@ -79,6 +80,7 @@ def main() -> None:
 
         window_size = int(run.data.params["window_size"])
 
+        base_key = jax.random.key(hp.test_rng_seed)
         results = run_evaluation(
             model=model,
             test_data=test_data,
@@ -86,8 +88,8 @@ def main() -> None:
             x_scaler=x_scaler,
             y_scaler=y_scaler,
             window_size=window_size,
-            hp=hp,
             features=["load", "voltage"],
+            base_key=base_key,
         )
 
         # Log parameters and metrics with MLflow.
