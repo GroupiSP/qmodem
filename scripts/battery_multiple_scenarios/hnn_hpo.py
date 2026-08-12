@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-import io
 import logging
 import os
 import pathlib
 
+import jax
 import mlflow
 import numpy as np
 import optuna
@@ -14,7 +14,17 @@ import sklearn.preprocessing as skpp
 from dotenv import load_dotenv
 from flax import nnx
 
-from qmodem.battery.hpo import HPOHyperparameters, score_avg_val_crps
+from qmodem.battery.data_generation import (
+    load_simulation_config,
+    reconstruct_true_rul_distribution,
+    sim_updater_two_scenarios,
+)
+from qmodem.battery.evaluate import run_evaluation
+from qmodem.battery.hpo import (
+    HPOHyperparameters,
+    get_average_crps,
+    get_validation_data,
+)
 from qmodem.battery.models import CNN, ConvType
 from qmodem.battery.tracking import log_general
 from qmodem.battery.train import TrainHyperparameters, run_training
@@ -30,22 +40,34 @@ from qmodem.tracking import MLFlowSetup, track_mlflow
 from qmodem.utils import count_parameters, setup_script_logging
 
 
-def objective_factory(hp_hpo: HPOHyperparameters, log_stream: io.StringIO) -> float:
+def objective_factory(hp_hpo: HPOHyperparameters) -> float:
     def objective(trial: optuna.Trial) -> float:
         # TODO Move hyperparameters of the HPO to `hpo.py`
-        window_size = trial.suggest_int("window_size", 50, 350, step=25)
+        window_size = trial.suggest_int(
+            "window_size", hp_hpo.window_size_min, hp_hpo.window_size_max, step=25
+        )
         max_kernel_size = (window_size - 1) // 3
         conv_kernel_size = trial.suggest_int(
-            "conv_kernel_size", 5, min(50, max_kernel_size)
+            "conv_kernel_size",
+            hp_hpo.kernel_size_min,
+            min(hp_hpo.kernel_size_ceil, max_kernel_size),
         )
 
         hp_train = TrainHyperparameters(
             conv_kernel_size=conv_kernel_size,
-            conv_n_filters=trial.suggest_int("conv_n_filters", 4, 40),
+            conv_n_filters=trial.suggest_int(
+                "conv_n_filters", hp_hpo.conv_n_filters_min, hp_hpo.conv_n_filters_max
+            ),
             window_size=window_size,
-            beta_nll=trial.suggest_float("beta_nll", 0.0, 1.0),
-            learning_rate=trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
-            dropout_rate=trial.suggest_float("dropout_rate", 0.0, 0.9),
+            beta_nll=trial.suggest_float(
+                "beta_nll", hp_hpo.beta_nll_min, hp_hpo.beta_nll_max
+            ),
+            learning_rate=trial.suggest_float(
+                "learning_rate", hp_hpo.lr_min, hp_hpo.lr_max, log=True
+            ),
+            dropout_rate=trial.suggest_float(
+                "dropout_rate", hp_hpo.dropout_rate_min, hp_hpo.dropout_rate_max
+            ),
         )
 
         x_scaler = skpp.StandardScaler()
@@ -108,13 +130,50 @@ def objective_factory(hp_hpo: HPOHyperparameters, log_stream: io.StringIO) -> fl
                 },
             )
 
-            return score_avg_val_crps(
-                model=model,
-                hp=hp_hpo,
-                raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-                validation_history_ids=list(range(10, 15)),
-                features=["load", "voltage"],
+            # Start evaluation
+            model.eval()
+
+            # Load the test raw data
+            raw_data_dir = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
+            validation_data = get_validation_data(
+                raw_data_dir / "train.csv", list(range(10, 15))
             )
+
+            simulator_base_config = load_simulation_config(
+                run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
+            )
+
+            true_rul_samples = reconstruct_true_rul_distribution(
+                test_data=validation_data,
+                simulator_base_config=simulator_base_config,
+                n_soc0s=hp_hpo.num_soc0s_eval,
+                n_mc_samples=hp_hpo.num_mc_samples,
+                simulator_updater=sim_updater_two_scenarios,
+                event_fn=lambda t0, soc0: t0 > 900.0,
+            )
+
+            key = jax.random.key(hp_hpo.seed)
+
+            validation_case_results = run_evaluation(
+                model=model,
+                test_data=validation_data,
+                test_rul_samples=true_rul_samples,
+                x_scaler=x_scaler,
+                y_scaler=y_scaler,
+                window_size=window_size,
+                n_soc0s=hp_hpo.num_soc0s_eval,
+                n_mc_samples=hp_hpo.num_mc_samples,
+                features=["load", "voltage"],
+                key=key,
+            )
+
+            rul_grid = np.arange(
+                hp_hpo.rul_grid_crps_start,
+                hp_hpo.rul_grid_crps_end,
+                hp_hpo.rul_grid_crps_resolution,
+            )
+
+            return get_average_crps(validation_case_results, rul_grid)
 
     return objective
 
@@ -132,7 +191,7 @@ def main() -> None:
 
     with track_mlflow(mlflow_setup):
         study.optimize(
-            func=objective_factory(hp, log_stream),
+            func=objective_factory(hp),
             n_trials=hp.num_hp_trials,
         )
 
