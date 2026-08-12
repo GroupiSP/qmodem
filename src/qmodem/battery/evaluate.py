@@ -74,17 +74,16 @@ class Hyperparameters:
     test_grid_crps_num: int = 100
 
 
-def get_test_case_data(test_path: pathlib.Path, test_case_id: int) -> pd.DataFrame:
+def get_test_case_data(df_test: pd.DataFrame, test_case_id: int) -> pd.DataFrame:
     """Return the discharge data for a given test case ID from the test CSV file.
 
     Args:
-        test_path (pathlib.Path): Path to the test CSV file.
+        df_test (pd.DataFrame): DataFrame containing the test data.
         test_case_id (int): ID of the test case to retrieve.
 
     Returns:
         pd.DataFrame: Discharge data for the specified test case.
     """
-    df_test = pd.read_csv(test_path)
     return df_test[df_test["run_id"] == test_case_id]
 
 
@@ -308,10 +307,10 @@ def run_evaluation(
             model.eval()
 
         test_case_results = []
+        test_dataframe = pd.read_csv(raw_data_dir / "test.csv")
+
         for test_case_id in range(n_test_cases):
-            test_data = get_test_case_data(
-                raw_data_dir / "test.csv", test_case_id=test_case_id
-            )
+            test_data = get_test_case_data(test_dataframe, test_case_id=test_case_id)
             test_case_result, key = evaluate_test_case(
                 model,
                 test_case_id=test_case_id,
