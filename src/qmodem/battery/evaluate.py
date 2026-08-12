@@ -254,7 +254,6 @@ def run_evaluation(
     test_rul_samples: TestRULSamples,
     hp: Hyperparameters,
     mlflow_setup: MLFlowSetup,
-    data_gen_run_id: str,
     log_stream: io.StringIO,
     features: Sequence[str] = ["voltage"],
     train_mode: bool = False,

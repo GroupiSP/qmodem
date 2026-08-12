@@ -144,7 +144,6 @@ def main() -> None:
         test_data=test_data,
         test_rul_samples=test_rul_samples,
         mlflow_setup=mlflow_setup,
-        data_gen_run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
         log_stream=log_stream,
         features=["load", "voltage"],
         train_mode=False,  # Deterministic network: aleatoric uncertainty only.
