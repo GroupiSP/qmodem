@@ -236,11 +236,11 @@ def reconstruct_true_rul_distribution(
     event_fn: EventFunction,
 ) -> TestRULSamples:
     # Count the number of unique test cases; create the output data structure
-    n_tcs = test_data["run_id"].nunique()
-    out = dict.fromkeys([f"test_case_{i}" for i in range(n_tcs)], None)
+    tc_run_ids = test_data["run_id"].unique()
+    out = dict.fromkeys([f"test_case_{i}" for i in tc_run_ids], None)
 
     # Loop over the test cases
-    for tc_i in range(n_tcs):
+    for tc_i in tc_run_ids:
         # Define an empty array to hold the RUL samples for this test case
         rul_samples = np.empty((n_soc0s, n_mc_samples), dtype=np.float32)
 

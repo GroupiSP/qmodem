@@ -266,10 +266,10 @@ def run_evaluation(
     Returns:
         List of TestCaseResults for each test case.
     """
-    n_test_cases = test_data.run_id.nunique()
+    test_case_ids = test_data["run_id"].unique()
     test_case_results = []
 
-    for test_case_id in range(n_test_cases):
+    for test_case_id in test_case_ids:
         test_case_data = get_test_case_data(test_data, test_case_id=test_case_id)
 
         _, subkey = jax.random.split(key)

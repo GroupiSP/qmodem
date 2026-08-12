@@ -20,7 +20,7 @@ class HPOHyperparameters:
     rul_grid_crps_end: float = 5_000.0
     rul_grid_crps_resolution: float = 50.0
     num_mc_samples: int = 100
-    num_hp_trials: int = 100
+    num_hp_trials: int = 25
     num_soc0s_eval: int = 20
     window_size_min: int = 10
     window_size_max: int = 100

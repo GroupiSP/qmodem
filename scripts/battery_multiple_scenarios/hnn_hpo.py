@@ -44,7 +44,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> float:
     def objective(trial: optuna.Trial) -> float:
         # TODO Move hyperparameters of the HPO to `hpo.py`
         window_size = trial.suggest_int(
-            "window_size", hp_hpo.window_size_min, hp_hpo.window_size_max, step=25
+            "window_size", hp_hpo.window_size_min, hp_hpo.window_size_max, step=5
         )
         max_kernel_size = (window_size - 1) // 3
         conv_kernel_size = trial.suggest_int(
@@ -152,7 +152,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> float:
                 event_fn=lambda t0, soc0: t0 > 900.0,
             )
 
-            key = jax.random.key(hp_hpo.seed)
+            key = jax.random.key(hp_hpo.seed_objective)
 
             validation_case_results = run_evaluation(
                 model=model,
