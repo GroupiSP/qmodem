@@ -6,7 +6,7 @@ import pathlib
 import flax.nnx as nnx
 from dotenv import load_dotenv
 
-from qmodem.battery.evaluate import Hyperparameters, run_evaluation
+from qmodem.battery.evaluate import TestHyperparameters, run_evaluation
 from qmodem.battery.models import BayesianCNN
 from qmodem.tracking import get_run_parameters, retrieve_mlflow_setup_train
 from qmodem.utils import setup_script_logging
@@ -17,7 +17,7 @@ def main() -> None:
 
     log_stream = setup_script_logging()
 
-    hp = Hyperparameters()
+    hp = TestHyperparameters()
 
     mlflow_setup = retrieve_mlflow_setup_train()
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)

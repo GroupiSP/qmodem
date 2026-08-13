@@ -42,7 +42,7 @@ class MCSampler(Protocol):
 
 
 @dataclass(frozen=True)
-class Hyperparameters:
+class TestHyperparameters:
     """The `test_` prefix is used to distinguish these hyperparameters from the ones
     used for training.
 
@@ -182,7 +182,7 @@ def evaluate_test_case(
 
 
 def log_evaluation_metrics(
-    test_case_results: list[TestCaseResults], hp: Hyperparameters
+    test_case_results: list[TestCaseResults], hp: TestHyperparameters
 ) -> None:
     """Log the standard evaluation metrics and figures to the active MLflow run."""
     # Metric 1: plot RUL predictions with CI over time.

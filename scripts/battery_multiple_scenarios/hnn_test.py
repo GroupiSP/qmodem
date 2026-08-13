@@ -16,7 +16,7 @@ from qmodem.battery.data_generation import (
     sim_updater_two_scenarios,
 )
 from qmodem.battery.evaluate import (
-    Hyperparameters,
+    TestHyperparameters,
     log_evaluation_metrics,
     restore_model_state,
     run_evaluation,
@@ -36,7 +36,7 @@ def main() -> None:
 
     log_stream = setup_script_logging()
 
-    hp = Hyperparameters()
+    hp = TestHyperparameters()
 
     mlflow_setup = retrieve_mlflow_setup_train()
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
