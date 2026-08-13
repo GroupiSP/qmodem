@@ -40,6 +40,8 @@ from qmodem.data import (
 from qmodem.tracking import MLFlowSetup, track_mlflow
 from qmodem.utils import count_parameters, setup_script_logging
 
+logger = logging.getLogger(__name__)
+
 
 def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], float]:
     def objective(trial: optuna.Trial) -> float:
@@ -200,13 +202,13 @@ def main() -> None:
             n_trials=hp.num_hp_trials,
         )
 
-        logging.info("Best trial:")
+        logger.info("Best trial:")
         best_trial = study.best_trial
 
-        logging.info(f"Value: {best_trial.value}")
-        logging.info("Params: ")
+        logger.info(f"Value: {best_trial.value}")
+        logger.info("Params: ")
         for key, value in best_trial.params.items():
-            logging.info(f"{key}: {value}")
+            logger.info(f"{key}: {value}")
 
         mlflow.log_param("best_trial_id", best_trial.number)
         mlflow.log_params(best_trial.params)  # log best trial params to the parent run
