@@ -30,17 +30,18 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = TrainHyperparameters(
+        method="mcd",
         window_size=10,
         conv_kernel_size=3,
-        conv_n_filters=29,
-        beta_nll=0.14,
-        learning_rate=0.00052,
-        dropout_rate=0.315,
+        conv_n_filters=35,
+        beta_nll=0.29,
+        learning_rate=0.004,
+        dropout_rate=0.384,
         early_stopping_patience=50,
         normalize_rul=True,
     )
 
-    mlflow_setup = MLFlowSetup(run_name="hnn")
+    mlflow_setup = MLFlowSetup(run_name="mcd")
 
     x_scaler = skpp.StandardScaler()
     y_scaler = (
@@ -71,6 +72,7 @@ def main() -> None:
         kernel_size=hp.conv_kernel_size,  # Integer kernel size means 1D convolution, tuple means 2D convolution
         dropout_rate=hp.dropout_rate,
         act_fn=getattr(nnx, hp.activation_function),
+        mcd=hp.method == "mcd",
         rngs=nnx.Rngs(hp.net_init_seed),
     )
 

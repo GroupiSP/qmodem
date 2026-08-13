@@ -57,6 +57,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
         )
 
         hp_train = TrainHyperparameters(
+            method="mcd",
             conv_kernel_size=conv_kernel_size,
             conv_n_filters=trial.suggest_int(
                 "conv_n_filters", hp_hpo.conv_n_filters_min, hp_hpo.conv_n_filters_max
@@ -102,7 +103,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
             kernel_size=hp_train.conv_kernel_size,
             dropout_rate=hp_train.dropout_rate,
             act_fn=getattr(nnx, hp_train.activation_function),
-            mcd=True,
+            mcd=hp_train.method == "mcd",
             rngs=nnx.Rngs(hp_train.net_init_seed),
         )
 

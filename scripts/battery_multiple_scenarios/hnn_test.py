@@ -66,6 +66,7 @@ def main() -> None:
         kernel_size=int(run_parameters["conv_kernel_size"]),
         dropout_rate=float(run_parameters["dropout_rate"]),
         act_fn=getattr(nnx, run_parameters["activation_function"]),
+        mcd=run_parameters["method"] == "mcd",
         rngs=nnx.Rngs(0),
     )  # RNGs won't be used for inference, so the seed is arbitrary.
 
@@ -76,8 +77,7 @@ def main() -> None:
 
         restore_model_state(model, run.info.run_id)
 
-        # TODO For MCD figure out a way to redirect the eval mode to the train mode
-        model.eval()
+        model.eval()  # NOTE MCD is overwritten to redirect the eval mode to train mode for stochastic predictions
 
         window_size = int(run.data.params["window_size"])
 
