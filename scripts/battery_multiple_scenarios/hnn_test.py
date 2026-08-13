@@ -74,7 +74,8 @@ def main() -> None:
         x_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/x_scaler")
         y_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/y_scaler")
 
-        restore_model_state(model, mlflow_setup.run_id)
+        restore_model_state(model, run.info.run_id)
+
         # TODO For MCD figure out a way to redirect the eval mode to the train mode
         model.eval()
 
@@ -88,8 +89,10 @@ def main() -> None:
             x_scaler=x_scaler,
             y_scaler=y_scaler,
             window_size=window_size,
+            n_soc0s=hp.test_n_soc0s,
+            n_mc_samples=hp.test_n_mc_samples_model,
             features=["load", "voltage"],
-            base_key=base_key,
+            key=base_key,
         )
 
         # Log parameters and metrics with MLflow.

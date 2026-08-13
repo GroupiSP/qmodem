@@ -5,6 +5,7 @@ import functools
 import logging
 import os
 import pathlib
+from typing import Callable
 
 import jax
 import mlflow
@@ -40,7 +41,7 @@ from qmodem.tracking import MLFlowSetup, track_mlflow
 from qmodem.utils import count_parameters, setup_script_logging
 
 
-def objective_factory(hp_hpo: HPOHyperparameters) -> float:
+def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], float]:
     def objective(trial: optuna.Trial) -> float:
         # TODO Move hyperparameters of the HPO to `hpo.py`
         window_size = trial.suggest_int(
@@ -173,7 +174,10 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> float:
                 hp_hpo.rul_grid_crps_resolution,
             )
 
-            return get_average_crps(validation_case_results, rul_grid)
+            avg_crps = get_average_crps(validation_case_results, rul_grid)
+
+            mlflow.log_metric("avg_crps", avg_crps)
+            return avg_crps
 
     return objective
 

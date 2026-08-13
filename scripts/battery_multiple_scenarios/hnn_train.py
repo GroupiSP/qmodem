@@ -30,12 +30,12 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = TrainHyperparameters(
-        window_size=300,
-        conv_kernel_size=31,
-        conv_n_filters=25,
-        beta_nll=0.02,
-        learning_rate=0.00013,
-        dropout_rate=0.2,
+        window_size=10,
+        conv_kernel_size=3,
+        conv_n_filters=29,
+        beta_nll=0.14,
+        learning_rate=0.00052,
+        dropout_rate=0.315,
         early_stopping_patience=50,
         normalize_rul=True,
     )
