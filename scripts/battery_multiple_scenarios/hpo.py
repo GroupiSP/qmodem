@@ -5,7 +5,7 @@ import functools
 import logging
 import os
 import pathlib
-from typing import Callable
+from collections.abc import Callable
 
 import jax
 import mlflow
@@ -100,6 +100,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
             kernel_size=hp_train.conv_kernel_size,
             dropout_rate=hp_train.dropout_rate,
             act_fn=getattr(nnx, hp_train.activation_function),
+            mcd=True,
             rngs=nnx.Rngs(hp_train.net_init_seed),
         )
 
@@ -188,7 +189,7 @@ def main() -> None:
     log_stream = setup_script_logging()
     hp = HPOHyperparameters()
 
-    mlflow_setup = MLFlowSetup(run_name="hnn_hpo")
+    mlflow_setup = MLFlowSetup(run_name="mcd_hpo")
 
     hp_sampler = optuna.samplers.TPESampler(seed=hp.seed_hp_sampler)
     study = optuna.create_study(sampler=hp_sampler, direction="minimize")
