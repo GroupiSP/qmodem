@@ -33,7 +33,7 @@ def main() -> None:
         window_size=10,
         conv_kernel_size=3,
         conv_n_filters=29,
-        beta_nll=0.0023,
+        beta_nll=0.002,
         learning_rate=0.0001,
         dropout_rate=0.0384,
         early_stopping_patience=50,

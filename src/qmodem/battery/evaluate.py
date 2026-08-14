@@ -60,11 +60,11 @@ class TestHyperparameters:
     test_rng_seed: int = 123
     test_n_soc0s: int = 20
     test_n_mc_samples_simulator: int = 100
-    test_n_mc_samples_model: int = 200
-    test_grid_crps_start: float = 2_000.0
-    test_grid_crps_end: float = 10_000.0
+    test_n_mc_samples_model: int = 100
+    test_grid_crps_start: float = 0.0
+    test_grid_crps_end: float = 5_000.0
     # TODO: Specify the step, rather than the number of CRPS grid points.
-    test_grid_crps_num: int = 100
+    test_grid_crps_resolution: int = 50
 
 
 def get_test_case_data(df_test: pd.DataFrame, test_case_id: int) -> pd.DataFrame:
@@ -218,8 +218,8 @@ def log_evaluation_metrics(
     )
 
     # Metric 5: average CRPS over a common grid.
-    rul_grid_crps = np.linspace(
-        hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_num
+    rul_grid_crps = np.arange(
+        hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_resolution
     )
     mlflow.log_metric(
         "crps_average",
