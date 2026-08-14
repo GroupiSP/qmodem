@@ -8,20 +8,19 @@ import jax
 import mlflow
 import pandas as pd
 from dotenv import load_dotenv
-from flax import nnx
 
 from qmodem.battery.data_generation import (
     load_simulation_config,
     reconstruct_true_rul_distribution,
     sim_updater_two_scenarios,
 )
+from qmodem.battery.dispatch import ModelBuildParameters, build_model
 from qmodem.battery.evaluate import (
-    Hyperparameters,
+    TestHyperparameters,
     log_evaluation_metrics,
     restore_model_state,
     run_evaluation,
 )
-from qmodem.battery.models import CNN, ConvType
 from qmodem.battery.tracking import mlflow_load_scaler
 from qmodem.tracking import (
     get_run_parameters,
@@ -36,9 +35,10 @@ def main() -> None:
 
     log_stream = setup_script_logging()
 
-    hp = Hyperparameters()
+    hp = TestHyperparameters()
 
     mlflow_setup = retrieve_mlflow_setup_train()
+    # TODO Already setup mlflow here in order to retrieve the run information when the training run has been successfully loaded.
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
 
     # Load the test raw data
@@ -59,15 +59,7 @@ def main() -> None:
     )
 
     # Build a fresh model identical to the one used for training
-    model = CNN(
-        conv_type=ConvType.DETERMINISTIC,
-        in_features=2,
-        n_filters=int(run_parameters["conv_n_filters"]),
-        kernel_size=int(run_parameters["conv_kernel_size"]),
-        dropout_rate=float(run_parameters["dropout_rate"]),
-        act_fn=getattr(nnx, run_parameters["activation_function"]),
-        rngs=nnx.Rngs(0),
-    )  # RNGs won't be used for inference, so the seed is arbitrary.
+    model = build_model(ModelBuildParameters(**run_parameters))
 
     with track_mlflow(setup=mlflow_setup) as run:
         # Load the scalers fitted on the training data.
@@ -76,8 +68,7 @@ def main() -> None:
 
         restore_model_state(model, run.info.run_id)
 
-        # TODO For MCD figure out a way to redirect the eval mode to the train mode
-        model.eval()
+        model.eval()  # NOTE MCD is overwritten to redirect the eval mode to train mode for stochastic predictions
 
         window_size = int(run.data.params["window_size"])
 

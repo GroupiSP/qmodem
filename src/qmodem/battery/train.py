@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import dataclasses
 import pathlib
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import optax
@@ -39,8 +40,16 @@ from .train_steps import (
 )
 
 
-@dataclasses.dataclass
-class BaseTrainHyperparameters:
+class Method(StrEnum):
+    HNN = "hnn"
+    MCD = "mcd"
+    BNN = "bnn"
+    QAVI = "qavi"
+
+
+@dataclass
+class TrainHyperparameters:
+    method: str = "hnn"
     conv_kernel_size: int = 5
     conv_n_filters: int = 4
     batch_size: int = 32
@@ -57,16 +66,8 @@ class BaseTrainHyperparameters:
     n_samples_predictive_mean_variance: int = 100
     activation_function: str = "gelu"
     dropout_rate: float = 0.1
-
-
-@dataclasses.dataclass
-class TrainHyperparameters(BaseTrainHyperparameters):
     learning_rate: float = 1e-2
     scheduler_alpha: float = 0.1
-
-
-@dataclasses.dataclass
-class QAVITrainHyperparameters(BaseTrainHyperparameters):
     pqc_n_qubits: int = 5
     pqc_n_layers: int = 1
     discriminator_hidden_size: int = 64
@@ -75,6 +76,26 @@ class QAVITrainHyperparameters(BaseTrainHyperparameters):
     learning_rate_generator: float = 1e-3
     learning_rate_discriminator: float = 1e-3
     adversarial_loss_weight: float = 0.1
+
+    def _set_qavi_attrs_to_none(self) -> None:
+        self.pqc_n_qubits = None
+        self.pqc_n_layers = None
+        self.discriminator_hidden_size = None
+        self.discriminator_act_fn = None
+        self.discriminator_init_seed = None
+        self.learning_rate_generator = None
+        self.learning_rate_discriminator = None
+        self.adversarial_loss_weight = None
+
+    def _set_non_qavi_attrs_to_none(self) -> None:
+        self.learning_rate = None
+        self.scheduler_alpha = None
+
+    def __post_init__(self) -> None:
+        if self.method == Method.QAVI:
+            self._set_non_qavi_attrs_to_none()
+        else:
+            self._set_qavi_attrs_to_none()
 
 
 @contextmanager
@@ -152,7 +173,7 @@ def run_adversarial_training(
     *,
     model: nnx.Module,
     discriminator: nnx.Module,
-    hp: QAVITrainHyperparameters,
+    hp: TrainHyperparameters,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     data_pipeline: DataPipeline,

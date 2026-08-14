@@ -6,8 +6,8 @@ import pathlib
 import flax.nnx as nnx
 from dotenv import load_dotenv
 
-from qmodem.battery.evaluate import Hyperparameters, run_evaluation
-from qmodem.battery.models import CNN, CNNForELBO, ConvType
+from qmodem.battery.evaluate import TestHyperparameters, run_evaluation
+from qmodem.battery.models import CNN, ConvType, WeightGenerator
 from qmodem.tracking import get_run_parameters, retrieve_mlflow_setup_train
 from qmodem.utils import setup_script_logging
 
@@ -17,21 +17,28 @@ def main() -> None:
 
     log_stream = setup_script_logging()
 
-    hp = Hyperparameters()
+    hp = TestHyperparameters()
 
     mlflow_setup = retrieve_mlflow_setup_train()
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
 
-    cnn = CNN(
-        conv_type=ConvType.BAYESIAN,
+    w_gen = WeightGenerator(
+        n_qubits=int(run_parameters["pqc_n_qubits"]),
+        n_layers=int(run_parameters["pqc_n_layers"]),
+        kernel_size=int(run_parameters["conv_kernel_size"]),
+        in_features=1,
+        out_features=int(run_parameters["conv_n_filters"]),
+    )
+    model = CNN(
+        conv_type=ConvType.QUANTUM_GENERATED,
         in_features=1,
         n_filters=int(run_parameters["conv_n_filters"]),
         kernel_size=int(run_parameters["conv_kernel_size"]),
         dropout_rate=float(run_parameters["dropout_rate"]),
+        generator=w_gen,
         act_fn=getattr(nnx, run_parameters["activation_function"]),
         rngs=nnx.Rngs(0),
     )  # RNGs won't be used for inference, so the seed is arbitrary.
-    model = CNNForELBO(cnn)
 
     run_evaluation(
         model=model,
@@ -40,7 +47,7 @@ def main() -> None:
         raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
         data_gen_run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
         log_stream=log_stream,
-        train_mode=False,  # Only used for MCD
+        train_mode=False,  # Only relevant for MC Dropout
     )
 
 

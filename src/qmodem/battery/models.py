@@ -73,6 +73,7 @@ class CNN(nnx.Module):
         dropout_rate: float = 0.1,
         act_fn: nnx.Module = nnx.gelu,
         generator: ConvWeightGenerator | None = None,
+        mcd: bool = False,
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -88,7 +89,9 @@ class CNN(nnx.Module):
             kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
             dropout_rate (float, optional): Dropout rate. Defaults to 0.1.
             act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
-            generator (ConvWeightGenerator | None, optional): Weight generator for quantum-generated convolution. Required if conv_type is QUANTUM_GENERATED, ignored otherwise.
+            generator (ConvWeightGenerator | None, optional): Weight generator for quantum-generated convolution.
+                Required if conv_type is QUANTUM_GENERATED, ignored otherwise.
+            mcd (bool, optional): Whether to use Monte Carlo Dropout. Defaults to False.
             rngs (nnx.Rngs): RNGs for the flax internal modules.
         """
         if conv_type == ConvType.QUANTUM_GENERATED and generator is None:
@@ -97,6 +100,7 @@ class CNN(nnx.Module):
             )
 
         self.act_fn = act_fn
+        self.mcd = mcd
 
         conv_kwargs = {
             "in_features": in_features,
@@ -149,6 +153,34 @@ class CNN(nnx.Module):
         keys_weights = splits[:n_samples]
         keys_noise = splits[n_samples:]
         return _mc_sample(self, X, keys_weights, keys_noise)
+
+    def train(self, **attributes) -> CNN:
+        """Set the module to training mode.
+
+        Args:
+            **attributes: Additional attributes to set.
+
+        Returns:
+            The module itself.
+        """
+        return super().train(**attributes)
+
+    def eval(self, **attributes) -> CNN:
+        """Set the module to evaluation mode, unless Monte Carlo Dropout is enabled, in
+        which case the model remains in training mode to allow Monte Carlo sampling of
+        the activations.
+
+        Args:
+            **attributes: Additional attributes to set.
+
+        Returns:
+            The module itself.
+        """
+        if self.mcd:
+            # If Monte Carlo Dropout is enabled, keep the module in training mode during evaluation
+            return super().train(**attributes)
+
+        return super().eval(**attributes)
 
 
 class CNNForELBO(nnx.Module):

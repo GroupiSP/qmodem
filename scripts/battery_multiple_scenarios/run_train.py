@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import dataclasses
 import functools
 import os
 import pathlib
+from dataclasses import asdict
 
 import numpy as np
 import sklearn.preprocessing as skpp
 from dotenv import load_dotenv
-from flax import nnx
 
-from qmodem.battery.models import CNN, ConvType
+from qmodem.battery.dispatch import ModelBuildParameters, build_model
 from qmodem.battery.tracking import log_general
 from qmodem.battery.train import TrainHyperparameters, run_training
 from qmodem.data import (
@@ -30,17 +29,18 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = TrainHyperparameters(
+        method="bnn",
         window_size=10,
         conv_kernel_size=3,
         conv_n_filters=29,
-        beta_nll=0.14,
-        learning_rate=0.00052,
-        dropout_rate=0.315,
+        beta_nll=0.0023,
+        learning_rate=0.0001,
+        dropout_rate=0.0384,
         early_stopping_patience=50,
         normalize_rul=True,
     )
 
-    mlflow_setup = MLFlowSetup(run_name="hnn")
+    mlflow_setup = MLFlowSetup(run_name="bnn")
 
     x_scaler = skpp.StandardScaler()
     y_scaler = (
@@ -64,15 +64,7 @@ def main() -> None:
         ]
     )
 
-    model = CNN(
-        conv_type=ConvType.DETERMINISTIC,
-        in_features=2,
-        n_filters=hp.conv_n_filters,
-        kernel_size=hp.conv_kernel_size,  # Integer kernel size means 1D convolution, tuple means 2D convolution
-        dropout_rate=hp.dropout_rate,
-        act_fn=getattr(nnx, hp.activation_function),
-        rngs=nnx.Rngs(hp.net_init_seed),
-    )
+    model = build_model(ModelBuildParameters(**asdict(hp)))
 
     with track_mlflow(mlflow_setup):
         write_setup_to_file()
@@ -87,7 +79,7 @@ def main() -> None:
 
         log_general(
             num_model_params=count_parameters(model),
-            hyperparameters=dataclasses.asdict(hp),
+            hyperparameters=asdict(hp),
             scalers={
                 "x_scaler": (
                     x_scaler,

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import dataclasses
 import functools
 import logging
 import os
 import pathlib
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import asdict
 
 import jax
 import mlflow
@@ -13,20 +13,19 @@ import numpy as np
 import optuna
 import sklearn.preprocessing as skpp
 from dotenv import load_dotenv
-from flax import nnx
 
 from qmodem.battery.data_generation import (
     load_simulation_config,
     reconstruct_true_rul_distribution,
     sim_updater_two_scenarios,
 )
+from qmodem.battery.dispatch import ModelBuildParameters, build_model
 from qmodem.battery.evaluate import run_evaluation
 from qmodem.battery.hpo import (
     HPOHyperparameters,
     get_average_crps,
     get_validation_data,
 )
-from qmodem.battery.models import CNN, ConvType
 from qmodem.battery.tracking import log_general
 from qmodem.battery.train import TrainHyperparameters, run_training
 from qmodem.data import (
@@ -39,6 +38,8 @@ from qmodem.data import (
 )
 from qmodem.tracking import MLFlowSetup, track_mlflow
 from qmodem.utils import count_parameters, setup_script_logging
+
+logger = logging.getLogger(__name__)
 
 
 def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], float]:
@@ -55,6 +56,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
         )
 
         hp_train = TrainHyperparameters(
+            method="bnn",
             conv_kernel_size=conv_kernel_size,
             conv_n_filters=trial.suggest_int(
                 "conv_n_filters", hp_hpo.conv_n_filters_min, hp_hpo.conv_n_filters_max
@@ -93,15 +95,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
             ]
         )
 
-        model = CNN(
-            conv_type=ConvType.DETERMINISTIC,
-            in_features=2,
-            n_filters=hp_train.conv_n_filters,
-            kernel_size=hp_train.conv_kernel_size,
-            dropout_rate=hp_train.dropout_rate,
-            act_fn=getattr(nnx, hp_train.activation_function),
-            rngs=nnx.Rngs(hp_train.net_init_seed),
-        )
+        model = build_model(ModelBuildParameters(**asdict(hp_train)))
 
         with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
             mlflow.log_params(trial.params)
@@ -116,7 +110,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
 
             log_general(
                 num_model_params=count_parameters(model),
-                hyperparameters=dataclasses.asdict(hp_train),
+                hyperparameters=asdict(hp_train),
                 scalers={
                     "x_scaler": (
                         x_scaler,
@@ -188,7 +182,7 @@ def main() -> None:
     log_stream = setup_script_logging()
     hp = HPOHyperparameters()
 
-    mlflow_setup = MLFlowSetup(run_name="hnn_hpo")
+    mlflow_setup = MLFlowSetup(run_name="bnn_hpo")
 
     hp_sampler = optuna.samplers.TPESampler(seed=hp.seed_hp_sampler)
     study = optuna.create_study(sampler=hp_sampler, direction="minimize")
@@ -199,13 +193,13 @@ def main() -> None:
             n_trials=hp.num_hp_trials,
         )
 
-        logging.info("Best trial:")
+        logger.info("Best trial:")
         best_trial = study.best_trial
 
-        logging.info(f"Value: {best_trial.value}")
-        logging.info("Params: ")
+        logger.info(f"Value: {best_trial.value}")
+        logger.info("Params: ")
         for key, value in best_trial.params.items():
-            logging.info(f"{key}: {value}")
+            logger.info(f"{key}: {value}")
 
         mlflow.log_param("best_trial_id", best_trial.number)
         mlflow.log_params(best_trial.params)  # log best trial params to the parent run
