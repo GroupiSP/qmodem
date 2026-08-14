@@ -224,7 +224,7 @@ class CNNForELBO(nnx.Module):
         return self.cnn.mc_sample(key, X, n_samples)
 
 
-class WeightGenerator(nnx.Module):
+class ContinuousWeightsGenerator(nnx.Module):
     def __init__(
         self,
         n_qubits: int,
