@@ -60,7 +60,7 @@ def build_model(parameters: ModelBuildParameters) -> CNN:
                 mcd=False,
                 rngs=nnx.Rngs(parameters.net_init_seed),
             )
-        case _:
+        case Method.QAVI:
             raise ValueError(
-                f"Unknown method: {parameters.method}. If you are using QAVI, please run adversarial training instead."
+                "QAVI is not supported in this function. Please run adversarial training instead."
             )
