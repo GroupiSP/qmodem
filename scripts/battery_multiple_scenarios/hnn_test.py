@@ -38,6 +38,7 @@ def main() -> None:
     hp = TestHyperparameters()
 
     mlflow_setup = retrieve_mlflow_setup_train()
+    # TODO Already setup mlflow here in order to retrieve the run information when the training run has been successfully loaded.
     run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
 
     # Load the test raw data

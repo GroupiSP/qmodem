@@ -29,18 +29,18 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = TrainHyperparameters(
-        method="mcd",
+        method="bnn",
         window_size=10,
         conv_kernel_size=3,
-        conv_n_filters=35,
-        beta_nll=0.29,
-        learning_rate=0.004,
-        dropout_rate=0.384,
+        conv_n_filters=29,
+        beta_nll=0.0023,
+        learning_rate=0.0001,
+        dropout_rate=0.0384,
         early_stopping_patience=50,
         normalize_rul=True,
     )
 
-    mlflow_setup = MLFlowSetup(run_name="mcd")
+    mlflow_setup = MLFlowSetup(run_name="bnn")
 
     x_scaler = skpp.StandardScaler()
     y_scaler = (

@@ -56,7 +56,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
         )
 
         hp_train = TrainHyperparameters(
-            method="mcd",
+            method="bnn",
             conv_kernel_size=conv_kernel_size,
             conv_n_filters=trial.suggest_int(
                 "conv_n_filters", hp_hpo.conv_n_filters_min, hp_hpo.conv_n_filters_max
@@ -182,7 +182,7 @@ def main() -> None:
     log_stream = setup_script_logging()
     hp = HPOHyperparameters()
 
-    mlflow_setup = MLFlowSetup(run_name="mcd_hpo")
+    mlflow_setup = MLFlowSetup(run_name="bnn_hpo")
 
     hp_sampler = optuna.samplers.TPESampler(seed=hp.seed_hp_sampler)
     study = optuna.create_study(sampler=hp_sampler, direction="minimize")
