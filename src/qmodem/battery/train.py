@@ -66,16 +66,16 @@ class TrainHyperparameters:
     n_samples_predictive_mean_variance: int = 100
     activation_function: str = "gelu"
     dropout_rate: float = 0.1
-    learning_rate: float = 1e-2
-    scheduler_alpha: float = 0.1
-    pqc_n_qubits: int = 5
-    pqc_n_layers: int = 1
-    discriminator_hidden_size: int = 64
-    discriminator_act_fn: str = "leaky_relu"
-    discriminator_init_seed: int = 43
-    learning_rate_generator: float = 1e-3
-    learning_rate_discriminator: float = 1e-3
-    adversarial_loss_weight: float = 0.1
+    learning_rate: float | None = 1e-2
+    scheduler_alpha: float | None = 0.1
+    pqc_n_qubits: int | None = 5
+    pqc_n_layers: int | None = 1
+    discriminator_hidden_size: int | None = 64
+    discriminator_act_fn: str | None = "leaky_relu"
+    discriminator_init_seed: int | None = 43
+    learning_rate_generator: float | None = 1e-3
+    learning_rate_discriminator: float | None = 1e-3
+    adversarial_loss_weight: float | None = 0.1
 
     def _set_qavi_attrs_to_none(self) -> None:
         self.pqc_n_qubits = None
