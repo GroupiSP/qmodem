@@ -42,3 +42,7 @@ ignore = ["F722"]
 
 [tool.uv.sources]
 simbat = { git = "https://github.com/GroupiSP/simbat.git" }
+
+[tool.pyright]
+typeCheckingMode = "basic"
+reportUnusedVariable = false
