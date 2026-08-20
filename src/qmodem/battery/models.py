@@ -24,12 +24,32 @@ from qmodem.module import (
 
 class Discriminator(nnx.Module):
     def __init__(self, input_dim: int, hidden: int = 64, *, rngs: nnx.Rngs) -> None:
+        """Discriminator network for adversarial training. The input is expected to have
+        shape (batch, window_size, channels+1), where the extra channel is meant to be
+        the output value (y, RUL).
+
+        The nework outputs a single value corresponding to the probability of the input being real (1) or fake (0).
+
+        Args:
+            input_dim (int): Input dimension (window_size * channels + 1).
+            hidden (int, optional): Number of hidden units. Defaults to 64.
+            rngs (nnx.Rngs): RNGs for the flax internal modules.
+        """
         self.l1 = nnx.Linear(input_dim, hidden, rngs=rngs)
         self.l2 = nnx.Linear(hidden, hidden, rngs=rngs)
         self.l3 = nnx.Linear(hidden, 1, rngs=rngs)
 
     def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        x = x.squeeze(-1)
+        """Forward pass through the discriminator.
+
+        Args:
+            x (jax.Array): Input with shape (batch, window_size, channels).
+            rngs (nnx.Rngs): RNGs for the flax internal modules.
+
+        Returns:
+            jax.Array: Output
+        """
+        x = x.reshape((x.shape[0], -1))  # Flatten the time and channels
         x = nnx.leaky_relu(self.l1(x), negative_slope=0.2)
         x = nnx.leaky_relu(self.l2(x), negative_slope=0.2)
         return nnx.sigmoid(self.l3(x))
