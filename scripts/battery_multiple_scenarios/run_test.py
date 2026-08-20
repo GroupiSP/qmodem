@@ -38,37 +38,37 @@ def main() -> None:
     hp = TestHyperparameters()
 
     mlflow_setup = retrieve_mlflow_setup_train()
-    # TODO Already setup mlflow here in order to retrieve the run information when the training run has been successfully loaded.
-    run_parameters = get_run_parameters(mlflow_setup.run_id, mlflow_setup.backend_store)
-
-    # Load the test raw data
-    raw_data_dir = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
-    test_data = pd.read_csv(raw_data_dir / "test.csv")
-
-    # Reconstruct the true RUL distribution for each test case
-    simulator_base_config = load_simulation_config(
-        run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
-    )
-    test_rul_samples = reconstruct_true_rul_distribution(
-        test_data=test_data,
-        simulator_base_config=simulator_base_config,
-        n_soc0s=hp.test_n_soc0s,
-        n_mc_samples=hp.test_n_mc_samples_simulator,
-        simulator_updater=sim_updater_two_scenarios,
-        event_fn=lambda t0, soc0: t0 > 900.0,
-    )
-
-    # Build a fresh model identical to the one used for training
-    model = build_model(ModelBuildParameters(**run_parameters))
 
     with track_mlflow(setup=mlflow_setup) as run:
+        run_parameters = get_run_parameters(run.info.run_id, mlflow_setup.backend_store)
+
+        # Load the test raw data
+        raw_data_dir = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
+        test_data = pd.read_csv(raw_data_dir / "test.csv")
+
+        # Reconstruct the true RUL distribution for each test case
+        simulator_base_config = load_simulation_config(
+            run_id=os.environ["DATA_GEN_RUN_ID_MULTI"],
+        )
+        test_rul_samples = reconstruct_true_rul_distribution(
+            test_data=test_data,
+            simulator_base_config=simulator_base_config,
+            n_soc0s=hp.test_n_soc0s,
+            n_mc_samples=hp.test_n_mc_samples_simulator,
+            simulator_updater=sim_updater_two_scenarios,
+            event_fn=lambda t0, soc0: t0 > 900.0,
+        )
+
+        # Build a fresh model identical to the one used for training
+        model = build_model(ModelBuildParameters(**run_parameters))
+
         # Load the scalers fitted on the training data.
         x_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/x_scaler")
         y_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/y_scaler")
 
         restore_model_state(model, run.info.run_id)
 
-        model.eval()  # NOTE MCD is overwritten to redirect the eval mode to train mode for stochastic predictions
+        model.eval()  # NOTE: MCD is overwritten to redirect the eval mode to train mode for stochastic predictions
 
         window_size = int(run.data.params["window_size"])
 
