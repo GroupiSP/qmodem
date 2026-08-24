@@ -5,11 +5,15 @@ from typing import Protocol
 import jax
 import numpy as np
 import pennylane as qp
+from pennylane.measurements import ExpectationMP
 
-from .pennylane_typing import Device, ExpectationMP, SampleMP
+from .pennylane_typing import Device, SampleMP
 
 
 class CircuitFactory(Protocol):
+    @property
+    def n_qubits(self) -> int: ...
+
     @property
     def params_example(self) -> np.ndarray: ...
 
@@ -54,7 +58,8 @@ class ContinuousCircuitFactory:
                     qp.RZ(params[layer, q, 1], wires=q)
                 for q in range(self.n_qubits):
                     qp.CNOT(wires=[q, (q + 1) % self.n_qubits])
-            return [qp.expval(qp.PauliZ(i)) for i in range(self.n_qubits)]
+            expvals = [qp.expval(qp.PauliZ(i)) for i in range(self.n_qubits)]
+            return expvals
 
         return circuit
 
