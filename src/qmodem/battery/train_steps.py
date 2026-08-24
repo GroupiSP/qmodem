@@ -4,9 +4,9 @@ import dataclasses
 from collections.abc import Callable
 from typing import Protocol
 
-import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
+from flax import nnx
 
 from qmodem.module import model_fwd, nll_batched
 from qmodem.train import StepFn
@@ -117,8 +117,9 @@ def make_qavi_steps(
                 + means
             )
 
+            xs_flat = xs.reshape((batch_size, -1))
             probabilities_fake = discriminator(
-                jnp.concatenate([xs, predictions[:, None, None]], axis=1),
+                jnp.concatenate([xs_flat, predictions[:, None]], axis=1),
                 nnx.Rngs(params=discriminator_key),
             )
             adversarial_error = -jnp.log(
@@ -160,12 +161,13 @@ def make_qavi_steps(
                 + means
             )
 
+            xs_flat = xs.reshape((batch_size, -1))
             rngs = nnx.Rngs(params=discriminator_key)
             probabilities_real = discriminator(
-                jnp.concatenate([xs, targets[:, None, None]], axis=1), rngs
+                jnp.concatenate([xs_flat, targets[:, None]], axis=1), rngs
             )
             probabilities_fake = discriminator(
-                jnp.concatenate([xs, predictions[:, None, None]], axis=1), rngs
+                jnp.concatenate([xs_flat, predictions[:, None]], axis=1), rngs
             )
             error = -jnp.log(probabilities_real + epsilon) - jnp.log(
                 1 - probabilities_fake + epsilon
