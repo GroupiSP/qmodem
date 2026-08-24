@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import pathlib
-from collections.abc import Generator, Iterable
-from contextlib import contextmanager
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -11,7 +10,6 @@ import optax
 from flax import nnx
 
 from qmodem.data import DataPipeline
-from qmodem.tracking import MLFlowSetup
 from qmodem.train import (
     LogReporter,
     mlflow_track_losses,
@@ -98,18 +96,6 @@ class TrainHyperparameters:
             self._set_qavi_attrs_to_none()
 
 
-@contextmanager
-def _null_context(setup: MLFlowSetup) -> Generator[None, None, None]:
-    """A context manager that does nothing.
-
-    This is useful when the MLFlowSetup is defined at a higher level than training, for
-    example when doing hyperparameter optimization, where we do not want to create an
-    independent MLFlow run/experiment for each training run, but rather spawn nested
-    training runs under the same parent run.
-    """
-    yield
-
-
 def run_training(
     *,
     model: nnx.Module,
@@ -185,7 +171,7 @@ def run_adversarial_training(
     data = prepare_data(
         raw_data_dir,
         data_gen_run_id,
-        data_pipeline=data_pipeline,
+        pipeline=data_pipeline,
     )
     train_dataloader_builder, val_dataloader_builder = dataloader_builders(
         data,
