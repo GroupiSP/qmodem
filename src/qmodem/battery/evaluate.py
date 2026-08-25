@@ -3,7 +3,6 @@ from __future__ import annotations
 import pathlib
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Protocol
 
 import jax
@@ -14,6 +13,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 import pandas as pd
 from flax import nnx
+from pydantic import BaseModel, ConfigDict
 
 from qmodem.battery.data_generation import TestCaseRULSamples, TestRULSamples
 from qmodem.battery.scoring import (
@@ -41,8 +41,7 @@ class MCSampler(Protocol):
     def eval(self) -> None: ...
 
 
-@dataclass(frozen=True)
-class TestHyperparameters:
+class TestHyperparameters(BaseModel):
     """The `test_` prefix is used to distinguish these hyperparameters from the ones
     used for training.
 
@@ -56,6 +55,8 @@ class TestHyperparameters:
             it is assumed that all particles reached the end of life.
         test_grid_crps_num: Number of points in the RUL grid for CRPS computation.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     test_rng_seed: int = 123
     test_n_soc0s: int = 20

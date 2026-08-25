@@ -47,3 +47,4 @@ mlruns/
 
 # Last training run data
 .last_trained.json
+/chats

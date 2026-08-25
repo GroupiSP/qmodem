@@ -3,7 +3,6 @@ from __future__ import annotations
 import functools
 import os
 import pathlib
-from dataclasses import asdict
 
 import numpy as np
 import sklearn.preprocessing as skpp
@@ -64,7 +63,7 @@ def main() -> None:
         ]
     )
 
-    model = build_model(ModelBuildParameters(**asdict(hp)))
+    model = build_model(ModelBuildParameters.model_validate(hp, from_attributes=True))
 
     with track_mlflow(mlflow_setup):
         write_setup_to_file()
@@ -79,7 +78,7 @@ def main() -> None:
 
         log_general(
             num_model_params=count_parameters(model),
-            hyperparameters=asdict(hp),
+            hyperparameters=hp.model_dump(),
             scalers={
                 "x_scaler": (
                     x_scaler,

@@ -26,6 +26,7 @@ def build_model(parameters: ModelBuildParameters) -> CNN:
     Note: this function is only meant for models that are trained in a fully supervised manner.
     If you are using QAVI, train it adversarially in its own script.
     """
+    # TODO: Add in_features to the model build parameters
     match parameters.method:
         case Method.HNN:
             return CNN(

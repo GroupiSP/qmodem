@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import pathlib
-from collections.abc import Generator, Iterable
-from contextlib import contextmanager
-from dataclasses import dataclass
+from collections.abc import Iterable
 from enum import StrEnum
+from typing import Literal, TypeVar
 
 import jax
 import optax
 from flax import nnx
+from pydantic import BaseModel, ConfigDict
 
 from qmodem.data import DataPipeline
-from qmodem.tracking import MLFlowSetup
 from qmodem.train import (
     LogReporter,
     mlflow_track_losses,
@@ -31,6 +30,7 @@ from qmodem.train_adversarial import (
     train_loop as adversarial_train_loop,
 )
 from qmodem.train_base import Callback, EarlyStopper, mlflow_track_model_best_state
+from qmodem.tracking import get_run_parameters
 
 from .data_processing import dataloader_builders, prepare_data
 from .train_steps import (
@@ -47,9 +47,11 @@ class Method(StrEnum):
     QAVI = "qavi"
 
 
-@dataclass
-class TrainHyperparameters:
-    method: str = "hnn"
+class _TrainHyperparametersBase(BaseModel):
+    """Hyperparameters shared by every training method."""
+
+    model_config = ConfigDict(frozen=True)
+
     conv_kernel_size: int = 5
     conv_n_filters: int = 4
     batch_size: int = 32
@@ -66,8 +68,20 @@ class TrainHyperparameters:
     n_samples_predictive_mean_variance: int = 100
     activation_function: str = "gelu"
     dropout_rate: float = 0.1
+
+
+class TrainHyperparameters(_TrainHyperparametersBase):
+    """Hyperparameters for standard supervised training (HNN, MCD, BNN)."""
+
+    method: Literal[Method.HNN, Method.MCD, Method.BNN] = Method.HNN
     learning_rate: float = 1e-2
     scheduler_alpha: float = 0.1
+
+
+class QAVITrainHyperparameters(_TrainHyperparametersBase):
+    """Hyperparameters for adversarial (QAVI) training."""
+
+    method: Literal[Method.QAVI] = Method.QAVI
     pqc_n_qubits: int = 5
     pqc_n_layers: int = 1
     discriminator_hidden_size: int = 64
@@ -77,37 +91,35 @@ class TrainHyperparameters:
     learning_rate_discriminator: float = 1e-3
     adversarial_loss_weight: float = 0.1
 
-    def _set_qavi_attrs_to_none(self) -> None:
-        self.pqc_n_qubits = None
-        self.pqc_n_layers = None
-        self.discriminator_hidden_size = None
-        self.discriminator_act_fn = None
-        self.discriminator_init_seed = None
-        self.learning_rate_generator = None
-        self.learning_rate_discriminator = None
-        self.adversarial_loss_weight = None
 
-    def _set_non_qavi_attrs_to_none(self) -> None:
-        self.learning_rate = None
-        self.scheduler_alpha = None
-
-    def __post_init__(self) -> None:
-        if self.method == Method.QAVI:
-            self._set_non_qavi_attrs_to_none()
-        else:
-            self._set_qavi_attrs_to_none()
+TrainHpT = TypeVar("TrainHpT", bound=_TrainHyperparametersBase)
 
 
-@contextmanager
-def _null_context(setup: MLFlowSetup) -> Generator[None, None, None]:
-    """A context manager that does nothing.
+def load_train_hyperparameters_from_mlflow(
+    model_cls: type[TrainHpT], run_id: str, backend_store: str
+) -> TrainHpT:
+    """Reload and validate a training hyperparameter set from a training run's logged
+    MLflow params.
 
-    This is useful when the MLFlowSetup is defined at a higher level than training, for
-    example when doing hyperparameter optimization, where we do not want to create an
-    independent MLFlow run/experiment for each training run, but rather spawn nested
-    training runs under the same parent run.
+    MLflow always returns logged params as strings; pydantic's lax validation
+    coerces them back to the declared int/float/bool types.
+
+    Args:
+        model_cls: Concrete hyperparameter model to validate against
+            (``TrainHyperparameters`` or ``QAVITrainHyperparameters``).
+        run_id: The ID of the MLflow training run to reload parameters from.
+        backend_store: SQLAlchemy URI for the MLflow backend store.
+
+    Returns:
+        A validated instance of ``model_cls`` populated from the run's logged
+        params.
+
+    Raises:
+        pydantic.ValidationError: If the logged params do not match the
+            schema of ``model_cls``.
     """
-    yield
+    raw_params = get_run_parameters(run_id, backend_store)
+    return model_cls.model_validate(raw_params)
 
 
 def run_training(
@@ -173,7 +185,7 @@ def run_adversarial_training(
     *,
     model: nnx.Module,
     discriminator: nnx.Module,
-    hp: TrainHyperparameters,
+    hp: QAVITrainHyperparameters,
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     data_pipeline: DataPipeline,
@@ -185,7 +197,7 @@ def run_adversarial_training(
     data = prepare_data(
         raw_data_dir,
         data_gen_run_id,
-        data_pipeline=data_pipeline,
+        pipeline=data_pipeline,
     )
     train_dataloader_builder, val_dataloader_builder = dataloader_builders(
         data,

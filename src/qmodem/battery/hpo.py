@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import dataclasses
 import pathlib
 from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel
 
 from qmodem.battery.scoring import TestCaseResults
 
 
-@dataclasses.dataclass
-class HPOHyperparameters:
+class HPOHyperparameters(BaseModel):
     """Hyperparameters for the HPO."""
 
     seed_objective: int = 42
