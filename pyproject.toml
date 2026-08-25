@@ -26,6 +26,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "docformatter>=1.7.7",
+    "hypothesis>=6.140.4",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
     "ruff>=0.14.9",

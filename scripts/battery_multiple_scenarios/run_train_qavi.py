@@ -3,7 +3,6 @@ from __future__ import annotations
 import functools
 import os
 import pathlib
-from dataclasses import asdict
 
 import numpy as np
 import pennylane as qp
@@ -18,7 +17,7 @@ from qmodem.battery.models import (
     Discriminator,
 )
 from qmodem.battery.tracking import log_general
-from qmodem.battery.train import TrainHyperparameters, run_adversarial_training
+from qmodem.battery.train import QAVITrainHyperparameters, run_adversarial_training
 from qmodem.battery.train_steps import make_qavi_steps
 from qmodem.data import (
     DataPipeline,
@@ -37,8 +36,7 @@ def main() -> None:
     load_dotenv(override=True)
 
     log_stream = setup_script_logging()
-    hp = TrainHyperparameters(
-        method="qavi",
+    hp = QAVITrainHyperparameters(
         conv_kernel_size=3,
         conv_n_filters=4,
         window_size=10,
@@ -123,7 +121,7 @@ def main() -> None:
 
         log_general(
             num_model_params=count_parameters(model),
-            hyperparameters=asdict(hp),
+            hyperparameters=hp.model_dump(),
             scalers={
                 "x_scaler": (
                     x_scaler,

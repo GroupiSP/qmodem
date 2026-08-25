@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-from dataclasses import asdict
 
 import jax
 import mlflow
@@ -22,8 +21,11 @@ from qmodem.battery.evaluate import (
     run_evaluation,
 )
 from qmodem.battery.tracking import mlflow_load_scaler
+from qmodem.battery.train import (
+    TrainHyperparameters,
+    load_train_hyperparameters_from_mlflow,
+)
 from qmodem.tracking import (
-    get_run_parameters,
     retrieve_mlflow_setup_train,
     track_mlflow,
 )
@@ -40,7 +42,9 @@ def main() -> None:
     mlflow_setup = retrieve_mlflow_setup_train()
 
     with track_mlflow(setup=mlflow_setup) as run:
-        run_parameters = get_run_parameters(run.info.run_id, mlflow_setup.backend_store)
+        train_hp = load_train_hyperparameters_from_mlflow(
+            TrainHyperparameters, run.info.run_id, mlflow_setup.backend_store
+        )
 
         # Load the test raw data
         raw_data_dir = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
@@ -60,7 +64,9 @@ def main() -> None:
         )
 
         # Build a fresh model identical to the one used for training
-        model = build_model(ModelBuildParameters(**run_parameters))
+        model = build_model(
+            ModelBuildParameters.model_validate(train_hp, from_attributes=True)
+        )
 
         # Load the scalers fitted on the training data.
         x_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/x_scaler")
@@ -70,8 +76,6 @@ def main() -> None:
 
         model.eval()  # NOTE: MCD is overwritten to redirect the eval mode to train mode for stochastic predictions
 
-        window_size = int(run.data.params["window_size"])
-
         base_key = jax.random.key(hp.test_rng_seed)
         results = run_evaluation(
             model=model,
@@ -79,7 +83,7 @@ def main() -> None:
             test_rul_samples=test_rul_samples,
             x_scaler=x_scaler,
             y_scaler=y_scaler,
-            window_size=window_size,
+            window_size=train_hp.window_size,
             n_soc0s=hp.test_n_soc0s,
             n_mc_samples=hp.test_n_mc_samples_model,
             features=["load", "voltage"],
@@ -87,7 +91,7 @@ def main() -> None:
         )
 
         # Log parameters and metrics with MLflow.
-        mlflow.log_params(asdict(hp))
+        mlflow.log_params(hp.model_dump())
         log_evaluation_metrics(results, hp)
         mlflow.log_text(log_stream.getvalue(), artifact_file="test_log.txt")
 

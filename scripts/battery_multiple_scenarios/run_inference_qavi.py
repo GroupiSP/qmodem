@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-from dataclasses import asdict
 
 import jax
 import mlflow
@@ -24,9 +23,12 @@ from qmodem.battery.evaluate import (
 )
 from qmodem.battery.models import CNN, ContinuousWeightsGenerator, ConvType
 from qmodem.battery.tracking import mlflow_load_scaler
+from qmodem.battery.train import (
+    QAVITrainHyperparameters,
+    load_train_hyperparameters_from_mlflow,
+)
 from qmodem.quantum_circuits import ContinuousCircuitFactory
 from qmodem.tracking import (
-    get_run_parameters,
     retrieve_mlflow_setup_train,
     track_mlflow,
 )
@@ -43,9 +45,8 @@ def main() -> None:
     mlflow_setup = retrieve_mlflow_setup_train()
 
     with track_mlflow(setup=mlflow_setup) as run:
-        run_parameters = get_run_parameters(
-            run.info.run_id,
-            mlflow_setup.backend_store,
+        train_hp = load_train_hyperparameters_from_mlflow(
+            QAVITrainHyperparameters, run.info.run_id, mlflow_setup.backend_store
         )
 
         # Load the test raw data
@@ -66,26 +67,26 @@ def main() -> None:
         )
 
         circuit_factory = ContinuousCircuitFactory(
-            n_qubits=run_parameters["pqc_n_qubits"],
-            n_layers=run_parameters["pqc_n_layers"],
+            n_qubits=train_hp.pqc_n_qubits,
+            n_layers=train_hp.pqc_n_layers,
         )
-        device = qp.device("default.qubit", wires=run_parameters["pqc_n_qubits"])
+        device = qp.device("default.qubit", wires=train_hp.pqc_n_qubits)
 
         weight_generator = ContinuousWeightsGenerator(
             circuit_factory=circuit_factory,
             device=device,
-            kernel_size=run_parameters["conv_kernel_size"],
+            kernel_size=train_hp.conv_kernel_size,
             in_features=2,
-            out_features=run_parameters["conv_n_filters"],
+            out_features=train_hp.conv_n_filters,
         )
         model = CNN(
             conv_type=ConvType.QUANTUM_GENERATED,
             in_features=2,
-            n_filters=int(run_parameters["conv_n_filters"]),
-            kernel_size=int(run_parameters["conv_kernel_size"]),
-            dropout_rate=float(run_parameters["dropout_rate"]),
+            n_filters=train_hp.conv_n_filters,
+            kernel_size=train_hp.conv_kernel_size,
+            dropout_rate=train_hp.dropout_rate,
             generator=weight_generator,
-            act_fn=getattr(nnx, run_parameters["activation_function"]),
+            act_fn=getattr(nnx, train_hp.activation_function),
             rngs=nnx.Rngs(0),
         )  # RNGs won't be used for inference, so the seed is arbitrary.
 
@@ -104,7 +105,7 @@ def main() -> None:
             test_rul_samples=test_rul_samples,
             x_scaler=x_scaler,
             y_scaler=y_scaler,
-            window_size=run_parameters["window_size"],
+            window_size=train_hp.window_size,
             n_soc0s=hp.test_n_soc0s,
             n_mc_samples=hp.test_n_mc_samples_model,
             features=["load", "voltage"],
@@ -112,7 +113,7 @@ def main() -> None:
         )
 
         # Log parameters and metrics with MLflow.
-        mlflow.log_params(asdict(hp))
+        mlflow.log_params(hp.model_dump())
         log_evaluation_metrics(results, hp)
         mlflow.log_text(log_stream.getvalue(), artifact_file="test_log.txt")
 

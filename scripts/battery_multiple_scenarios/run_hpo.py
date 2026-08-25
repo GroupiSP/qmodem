@@ -5,7 +5,6 @@ import logging
 import os
 import pathlib
 from collections.abc import Callable
-from dataclasses import asdict
 
 import jax
 import mlflow
@@ -95,7 +94,9 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
             ]
         )
 
-        model = build_model(ModelBuildParameters(**asdict(hp_train)))
+        model = build_model(
+            ModelBuildParameters.model_validate(hp_train, from_attributes=True)
+        )
 
         with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
             mlflow.log_params(trial.params)
@@ -110,7 +111,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
 
             log_general(
                 num_model_params=count_parameters(model),
-                hyperparameters=asdict(hp_train),
+                hyperparameters=hp_train.model_dump(),
                 scalers={
                     "x_scaler": (
                         x_scaler,
