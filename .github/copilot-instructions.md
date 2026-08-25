@@ -76,9 +76,10 @@ Adversarial training currently serves only the QAVI method.
   `generate-all` creates both single- and multi-scenario histories before training.
 
 ## Code Testing
-Code testing needs updating and it is not maintained at the moment. In particular, some tests follow the functional convention while others are organized by classes.
 
-When adding new tests or updating old ones, pytest and the *functional* covnention should be used.
+Code testing does not have a consistent convention at the moment, since some tests are organized by classes and some are standalone functions.
+
+When adding new tests or updating old ones, pytest and the *functional* convention should be used.
 
 ## Commands
 
@@ -94,20 +95,6 @@ uv run pre-commit run --all-files
 The CI workflows run `uv run pytest` and `uv run pre-commit run --all-files`.
 Pre-commit includes trailing-whitespace, EOF, YAML, large-file checks, Ruff
 check-with-fixes, Ruff format, and docformatter configured from `pyproject.toml`.
-
-Useful experiment targets are defined in `Makefile`:
-
-```bash
-make generate-all
-make battery-hnn       # or battery-mcd, battery-bnn, battery-qavi
-make battery-multiple-hnn  # corresponding multi-scenario targets exist for each method
-make battery-all
-make clean             # removes generated data and MLflow runs
-```
-
-The battery targets run a training script followed immediately by its test script.
-The scripts are the source of truth for experiment configuration; avoid duplicating
-their setup in library code.
 
 ## Repository-specific conventions
 
