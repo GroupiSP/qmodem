@@ -8,7 +8,7 @@ from flax import nnx
 from qmodem.module import mc_sample
 
 _NUM_SAMPLES = 5
-_BATCH_SIZE = 4
+_BATCH_SIZE = 1
 _WINDOW_SIZE = 8
 _IN_FEATURES = 3
 
@@ -17,7 +17,7 @@ _IN_FEATURES = 3
 def x_mock() -> jax.Array:
     # Shape (batch, window_size, in_features)
     return jax.random.normal(
-        jax.random.key(0), (_BATCH_SIZE, _WINDOW_SIZE, _IN_FEATURES)
+        jax.random.key(0), (_BATCH_SIZE, _WINDOW_SIZE, _IN_FEATURES), dtype=jnp.float32
     )
 
 
@@ -41,7 +41,7 @@ def model_call_mock():
     def call(x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         batch = x.shape[0]
         mu = jnp.mean(x, axis=(-2, -1), keepdims=False).reshape(batch, 1)
-        var = jnp.full((batch, 1), 0.01)
+        var = jnp.full((batch, 1), 0.01, dtype=x.dtype)
         return jnp.concatenate([mu, var], axis=-1)
 
     return call
