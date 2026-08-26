@@ -5,17 +5,10 @@ import os
 import pathlib
 
 import numpy as np
-import pennylane as qp
 import sklearn.preprocessing as skpp
 from dotenv import load_dotenv
-from flax import nnx
 
-from qmodem.battery.models import (
-    CNN,
-    ContinuousWeightsGenerator,
-    ConvType,
-    Discriminator,
-)
+from qmodem.battery.dispatch import build_discriminator, build_qavi_model
 from qmodem.battery.tracking import log_general
 from qmodem.battery.train import QAVITrainHyperparameters, run_adversarial_training
 from qmodem.battery.train_steps import make_qavi_steps
@@ -27,7 +20,6 @@ from qmodem.data import (
     get_time_windows_and_join,
     to_jax,
 )
-from qmodem.quantum_circuits import ContinuousCircuitFactory
 from qmodem.tracking import MLFlowSetup, track_mlflow, write_setup_to_file
 from qmodem.utils import count_parameters, setup_script_logging
 
@@ -45,7 +37,6 @@ def main() -> None:
         pqc_n_qubits=6,
         pqc_n_layers=2,
     )
-    # TODO: Add in_features to hyperparameters
 
     mlflow_setup = MLFlowSetup(run_name="qavi")
 
@@ -71,34 +62,9 @@ def main() -> None:
         ]
     )
 
-    circuit_factory = ContinuousCircuitFactory(
-        n_qubits=hp.pqc_n_qubits, n_layers=hp.pqc_n_layers
-    )
+    model = build_qavi_model(hp)
+    discriminator = build_discriminator(hp)
 
-    device = qp.device("default.qubit", wires=hp.pqc_n_qubits)
-
-    weight_generator = ContinuousWeightsGenerator(
-        circuit_factory=circuit_factory,
-        device=device,
-        kernel_size=hp.conv_kernel_size,
-        in_features=2,
-        out_features=hp.conv_n_filters,
-    )
-    model = CNN(
-        conv_type=ConvType.QUANTUM_GENERATED,
-        in_features=2,
-        n_filters=hp.conv_n_filters,
-        kernel_size=hp.conv_kernel_size,
-        generator=weight_generator,
-        act_fn=getattr(nnx, hp.activation_function),
-        rngs=nnx.Rngs(hp.net_init_seed),
-    )
-
-    discriminator = Discriminator(
-        input_dim=2 * hp.window_size + 1,  # 2 channels (current and voltage) + 1 RUL
-        hidden=hp.discriminator_hidden_size,
-        rngs=nnx.Rngs(hp.discriminator_init_seed),
-    )
     generator_step, discriminator_step, eval_step = make_qavi_steps(
         beta=hp.beta_nll,
         adversarial_loss_weight=hp.adversarial_loss_weight,

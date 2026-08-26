@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pennylane as qp
 from flax import nnx
 from pydantic import BaseModel, ConfigDict
 
-from .models import CNN, ConvType
-from .train import Method
+from qmodem.quantum_circuits import ContinuousCircuitFactory
+
+from .models import CNN, ContinuousWeightsGenerator, ConvType, Discriminator
+from .train import Method, QAVITrainHyperparameters
 
 
 class ModelBuildParameters(BaseModel):
@@ -65,3 +68,52 @@ def build_model(parameters: ModelBuildParameters) -> CNN:
             raise ValueError(
                 "QAVI is not supported in this function. Please run adversarial training instead."
             )
+
+
+def build_qavi_model(hp: QAVITrainHyperparameters) -> CNN:
+    """Builds and returns the quantum-generated CNN for QAVI training.
+
+    Args:
+        hp: QAVI training hyperparameters.
+
+    Returns:
+        A ``CNN`` instance with a quantum-generated convolutional layer.
+    """
+    # TODO: Add in_features to hyperparameters
+    circuit_factory = ContinuousCircuitFactory(
+        n_qubits=hp.pqc_n_qubits, n_layers=hp.pqc_n_layers
+    )
+    device = qp.device("default.qubit", wires=hp.pqc_n_qubits)
+    weight_generator = ContinuousWeightsGenerator(
+        circuit_factory=circuit_factory,
+        device=device,
+        kernel_size=hp.conv_kernel_size,
+        in_features=2,
+        out_features=hp.conv_n_filters,
+    )
+    return CNN(
+        conv_type=ConvType.QUANTUM_GENERATED,
+        in_features=2,
+        n_filters=hp.conv_n_filters,
+        kernel_size=hp.conv_kernel_size,
+        dropout_rate=hp.dropout_rate,
+        generator=weight_generator,
+        act_fn=getattr(nnx, hp.activation_function),
+        rngs=nnx.Rngs(hp.net_init_seed),
+    )
+
+
+def build_discriminator(hp: QAVITrainHyperparameters) -> Discriminator:
+    """Builds and returns the discriminator for QAVI adversarial training.
+
+    Args:
+        hp: QAVI training hyperparameters.
+
+    Returns:
+        A ``Discriminator`` instance sized for the window and feature dimensions.
+    """
+    return Discriminator(
+        input_dim=2 * hp.window_size + 1,  # 2 channels (load, voltage) + 1 RUL
+        hidden=hp.discriminator_hidden_size,
+        rngs=nnx.Rngs(hp.discriminator_init_seed),
+    )

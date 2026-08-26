@@ -6,28 +6,25 @@ import pathlib
 import jax
 import mlflow
 import pandas as pd
-import pennylane as qp
 from dotenv import load_dotenv
-from flax import nnx
 
 from qmodem.battery.data_generation import (
     load_simulation_config,
     reconstruct_true_rul_distribution,
     sim_updater_two_scenarios,
 )
+from qmodem.battery.dispatch import build_qavi_model
 from qmodem.battery.evaluate import (
     TestHyperparameters,
     log_evaluation_metrics,
     restore_model_state,
     run_evaluation,
 )
-from qmodem.battery.models import CNN, ContinuousWeightsGenerator, ConvType
 from qmodem.battery.tracking import mlflow_load_scaler
 from qmodem.battery.train import (
     QAVITrainHyperparameters,
     load_train_hyperparameters_from_mlflow,
 )
-from qmodem.quantum_circuits import ContinuousCircuitFactory
 from qmodem.tracking import (
     retrieve_mlflow_setup_train,
     track_mlflow,
@@ -66,29 +63,7 @@ def main() -> None:
             event_fn=lambda t0, soc0: t0 > 900.0,
         )
 
-        circuit_factory = ContinuousCircuitFactory(
-            n_qubits=train_hp.pqc_n_qubits,
-            n_layers=train_hp.pqc_n_layers,
-        )
-        device = qp.device("default.qubit", wires=train_hp.pqc_n_qubits)
-
-        weight_generator = ContinuousWeightsGenerator(
-            circuit_factory=circuit_factory,
-            device=device,
-            kernel_size=train_hp.conv_kernel_size,
-            in_features=2,
-            out_features=train_hp.conv_n_filters,
-        )
-        model = CNN(
-            conv_type=ConvType.QUANTUM_GENERATED,
-            in_features=2,
-            n_filters=train_hp.conv_n_filters,
-            kernel_size=train_hp.conv_kernel_size,
-            dropout_rate=train_hp.dropout_rate,
-            generator=weight_generator,
-            act_fn=getattr(nnx, train_hp.activation_function),
-            rngs=nnx.Rngs(0),
-        )  # RNGs won't be used for inference, so the seed is arbitrary.
+        model = build_qavi_model(train_hp)
 
         # Load the scalers fitted on the training data.
         x_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/x_scaler")

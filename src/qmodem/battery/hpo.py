@@ -35,6 +35,28 @@ class HPOHyperparameters(BaseModel):
     dropout_rate_max: float = 0.9
 
 
+class QAVIHPOHyperparameters(HPOHyperparameters):
+    """Hyperparameters for QAVI HPO, extending the base HPO hyperparameters.
+
+    Adds bounds for QAVI-specific search dimensions: number of qubits, number of
+    PQC layers, generator and discriminator learning rates, and adversarial loss
+    weight.
+    """
+
+    lr_min: float = 1e-4
+    lr_max: float = 1e-1
+    pqc_n_qubits_min: int = 3
+    pqc_n_qubits_max: int = 8
+    pqc_n_layers_min: int = 1
+    pqc_n_layers_max: int = 6
+    lr_generator_min: float = 1e-4
+    lr_generator_max: float = 1e-1
+    lr_discriminator_min: float = 1e-4
+    lr_discriminator_max: float = 1e-1
+    adversarial_loss_weight_min: float = 0.0
+    adversarial_loss_weight_max: float = 1.0
+
+
 def get_validation_data(path: pathlib.Path, ids: Sequence[int]) -> pd.DataFrame:
     """Returns the validation data from the training data."""
     df = pd.read_csv(path)
