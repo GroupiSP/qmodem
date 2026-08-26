@@ -43,8 +43,6 @@ class QAVIHPOHyperparameters(HPOHyperparameters):
     weight.
     """
 
-    lr_min: float = 1e-4
-    lr_max: float = 1e-1
     pqc_n_qubits_min: int = 3
     pqc_n_qubits_max: int = 8
     pqc_n_layers_min: int = 1
