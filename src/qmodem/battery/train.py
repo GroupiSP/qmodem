@@ -11,6 +11,7 @@ from flax import nnx
 from pydantic import BaseModel, ConfigDict
 
 from qmodem.data import DataPipeline
+from qmodem.tracking import get_run_parameters
 from qmodem.train import (
     LogReporter,
     mlflow_track_losses,
@@ -30,7 +31,6 @@ from qmodem.train_adversarial import (
     train_loop as adversarial_train_loop,
 )
 from qmodem.train_base import Callback, EarlyStopper, mlflow_track_model_best_state
-from qmodem.tracking import get_run_parameters
 
 from .data_processing import dataloader_builders, prepare_data
 from .train_steps import (
