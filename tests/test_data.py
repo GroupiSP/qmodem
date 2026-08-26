@@ -21,7 +21,7 @@ def _make_run_df(
     rows = []
     for run_id, N_t in run_lengths.items():
         for t in range(N_t):
-            row: dict = {"run_id": run_id, "time": float(t)}
+            row: dict = {"run_id": run_id, "time": float(t), "rul": float(N_t - 1 - t)}
             for col in feature_cols:
                 row[col] = float(t)
             rows.append(row)
