@@ -34,6 +34,24 @@ class HPOHyperparameters(BaseModel):
     dropout_rate_min: float = 0.0
     dropout_rate_max: float = 0.9
 
+    @model_validator(mode="after")
+    def validate_search_bounds(self) -> HPOHyperparameters:
+        """Validates that lower search-space bounds are strictly less than upper bounds."""
+        bounds = (
+            ("window_size", self.window_size_min, self.window_size_max),
+            ("kernel_size", self.kernel_size_min, self.kernel_size_ceil),
+            ("conv_n_filters", self.conv_n_filters_min, self.conv_n_filters_max),
+            ("beta_nll", self.beta_nll_min, self.beta_nll_max),
+            ("lr", self.lr_min, self.lr_max),
+            ("dropout_rate", self.dropout_rate_min, self.dropout_rate_max),
+        )
+        for name, lower, upper in bounds:
+            if lower >= upper:
+                raise ValueError(
+                    f"Invalid bounds for '{name}': lower bound ({lower}) must be strictly less than upper bound ({upper})."
+                )
+        return self
+
 
 class QAVIHPOHyperparameters(HPOHyperparameters):
     """Hyperparameters for QAVI HPO, extending the base HPO hyperparameters.
@@ -55,14 +73,9 @@ class QAVIHPOHyperparameters(HPOHyperparameters):
     adversarial_loss_weight_max: float = 1.0
 
     @model_validator(mode="after")
-    def validate_search_bounds(self) -> QAVIHPOHyperparameters:
+    def validate_qavi_search_bounds(self) -> QAVIHPOHyperparameters:
         """Validates that lower search-space bounds are strictly less than upper bounds."""
         bounds = (
-            ("window_size", self.window_size_min, self.window_size_max),
-            ("kernel_size", self.kernel_size_min, self.kernel_size_ceil),
-            ("conv_n_filters", self.conv_n_filters_min, self.conv_n_filters_max),
-            ("beta_nll", self.beta_nll_min, self.beta_nll_max),
-            ("dropout_rate", self.dropout_rate_min, self.dropout_rate_max),
             ("pqc_n_qubits", self.pqc_n_qubits_min, self.pqc_n_qubits_max),
             ("pqc_n_layers", self.pqc_n_layers_min, self.pqc_n_layers_max),
             ("lr_generator", self.lr_generator_min, self.lr_generator_max),

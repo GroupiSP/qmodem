@@ -117,7 +117,11 @@ def build_discriminator(hp: QAVITrainHyperparameters) -> Discriminator:
     if hp.discriminator_act_fn == "leaky_relu":
         discriminator_act_fn = functools.partial(nnx.leaky_relu, negative_slope=0.2)
     else:
-        discriminator_act_fn = getattr(nnx, hp.discriminator_act_fn)
+        discriminator_act_fn = getattr(nnx, hp.discriminator_act_fn, None)
+        if discriminator_act_fn is None:
+            raise ValueError(
+                f"Unsupported discriminator activation function: {hp.discriminator_act_fn}"
+            )
 
     return Discriminator(
         input_dim=2 * hp.window_size + 1,  # 2 channels (load, voltage) + 1 RUL

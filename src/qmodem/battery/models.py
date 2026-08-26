@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+from collections.abc import Callable
 from enum import StrEnum, auto
 
 import jax
@@ -32,7 +33,7 @@ class Discriminator(nnx.Module):
         self,
         input_dim: int,
         hidden: int = 64,
-        act_fn: nnx.Module | None = None,
+        act_fn: Callable[[jax.Array], jax.Array] | None = None,
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -45,6 +46,8 @@ class Discriminator(nnx.Module):
         Args:
             input_dim (int): Input dimension (window_size * channels + 1).
             hidden (int, optional): Number of hidden units. Defaults to 64.
+            act_fn (Callable[[jax.Array], jax.Array] | None, optional): Activation function for hidden layers.
+                If ``None``, uses ``leaky_relu`` with ``negative_slope=0.2``.
             rngs (nnx.Rngs): RNGs for the flax internal modules.
         """
         self.l1 = nnx.Linear(input_dim, hidden, rngs=rngs)
