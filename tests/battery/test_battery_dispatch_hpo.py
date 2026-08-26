@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from pydantic import ValidationError
 
 from qmodem.battery.dispatch import (
     ModelBuildParameters,
@@ -75,6 +76,14 @@ def test_qavi_hpo_bounds_are_consistent(
     assert hp.pqc_n_layers_min < hp.pqc_n_layers_max
 
 
+def test_qavi_hpo_invalid_bounds_raise_validation_error() -> None:
+    with pytest.raises(ValidationError, match="Invalid bounds for 'lr_generator'"):
+        QAVIHPOHyperparameters(
+            lr_generator_min=1e-2,
+            lr_generator_max=1e-2,
+        )
+
+
 # ---------------------------------------------------------------------------
 # dispatch factory tests
 # ---------------------------------------------------------------------------
@@ -110,6 +119,15 @@ def test_build_discriminator_returns_discriminator_with_correct_input_dim() -> N
     expected_input_dim = 2 * hp.window_size + 1
     assert discriminator.l1.in_features == expected_input_dim
     assert discriminator.l1.out_features == hp.discriminator_hidden_size
+
+
+def test_build_discriminator_uses_configured_activation() -> None:
+    hp = QAVITrainHyperparameters(discriminator_act_fn="relu")
+
+    discriminator = build_discriminator(hp)
+
+    assert discriminator.act_fn is not None
+    assert discriminator.act_fn.__name__ == "relu"
 
 
 def test_build_model_raises_for_qavi_method() -> None:

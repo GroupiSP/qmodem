@@ -60,10 +60,13 @@ def objective_factory(
             "window_size", hp_hpo.window_size_min, hp_hpo.window_size_max, step=5
         )
         max_kernel_size = (window_size - 1) // 3
+        kernel_size_upper = max(
+            hp_hpo.kernel_size_min, min(hp_hpo.kernel_size_ceil, max_kernel_size)
+        )
         conv_kernel_size = trial.suggest_int(
             "conv_kernel_size",
             hp_hpo.kernel_size_min,
-            min(hp_hpo.kernel_size_ceil, max_kernel_size),
+            kernel_size_upper,
         )
 
         hp_train = QAVITrainHyperparameters(
@@ -155,7 +158,7 @@ def objective_factory(
                     "x_scaler": (
                         x_scaler,
                         "transform",
-                        np.ones(shape=(hp_train.window_size, 1), dtype=np.float32),
+                        np.ones(shape=(hp_train.window_size, 2), dtype=np.float32),
                     ),
                     "y_scaler": (
                         y_scaler,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from enum import StrEnum, auto
 
 import jax
@@ -27,7 +28,14 @@ from qmodem.quantum_circuits import (
 
 
 class Discriminator(nnx.Module):
-    def __init__(self, input_dim: int, hidden: int = 64, *, rngs: nnx.Rngs) -> None:
+    def __init__(
+        self,
+        input_dim: int,
+        hidden: int = 64,
+        act_fn: nnx.Module | None = None,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
         """Discriminator network for adversarial training. The input is expected to have
         shape (batch, window_size, channels+1), where the extra channel is meant to be
         the output value (y, RUL).
@@ -42,6 +50,7 @@ class Discriminator(nnx.Module):
         self.l1 = nnx.Linear(input_dim, hidden, rngs=rngs)
         self.l2 = nnx.Linear(hidden, hidden, rngs=rngs)
         self.l3 = nnx.Linear(hidden, 1, rngs=rngs)
+        self.act_fn = act_fn or functools.partial(nnx.leaky_relu, negative_slope=0.2)
 
     def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """Forward pass through the discriminator.
@@ -54,8 +63,8 @@ class Discriminator(nnx.Module):
             jax.Array: Output
         """
         x = x.reshape((x.shape[0], -1))  # Flatten the time and channels
-        x = nnx.leaky_relu(self.l1(x), negative_slope=0.2)
-        x = nnx.leaky_relu(self.l2(x), negative_slope=0.2)
+        x = self.act_fn(self.l1(x))
+        x = self.act_fn(self.l2(x))
         return nnx.sigmoid(self.l3(x))
 
 
