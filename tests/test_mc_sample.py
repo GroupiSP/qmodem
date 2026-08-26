@@ -8,12 +8,17 @@ from flax import nnx
 from qmodem.module import mc_sample
 
 _NUM_SAMPLES = 5
+_BATCH_SIZE = 4
+_WINDOW_SIZE = 8
+_IN_FEATURES = 3
 
 
 @pytest.fixture
 def x_mock() -> jax.Array:
-    # Shape (1, 1, 1): batch=1, window_size=1, in_features=1
-    return jnp.array([[[1.0]]])
+    # Shape (batch, window_size, in_features)
+    return jax.random.normal(
+        jax.random.key(0), (_BATCH_SIZE, _WINDOW_SIZE, _IN_FEATURES)
+    )
 
 
 @pytest.fixture
@@ -34,8 +39,9 @@ def model_call_mock():
     """Mock model that returns a Gaussian-head output of shape (batch, 2)."""
 
     def call(x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        mu = jnp.mean(x, axis=(-2, -1), keepdims=False).reshape(x.shape[0], 1)
-        var = jnp.full((x.shape[0], 1), 0.01)
+        batch = x.shape[0]
+        mu = jnp.mean(x, axis=(-2, -1), keepdims=False).reshape(batch, 1)
+        var = jnp.full((batch, 1), 0.01)
         return jnp.concatenate([mu, var], axis=-1)
 
     return call
