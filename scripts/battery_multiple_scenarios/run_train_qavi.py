@@ -29,13 +29,16 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = QAVITrainHyperparameters(
-        conv_kernel_size=3,
-        conv_n_filters=4,
-        window_size=10,
-        beta_nll=0.5,
-        dropout_rate=0.1,
-        pqc_n_qubits=6,
+        conv_kernel_size=4,
+        conv_n_filters=24,
+        window_size=20,
+        beta_nll=0.44,
+        dropout_rate=0.0,
+        pqc_n_qubits=4,
         pqc_n_layers=2,
+        adversarial_loss_weight=7.7e-2,
+        learning_rate_generator=6e-4,
+        learning_rate_discriminator=1.5e-4,
     )
 
     mlflow_setup = MLFlowSetup(run_name="qavi")
