@@ -36,7 +36,8 @@ class HPOHyperparameters(BaseModel):
 
     @model_validator(mode="after")
     def validate_search_bounds(self) -> HPOHyperparameters:
-        """Validates that lower search-space bounds are strictly less than upper bounds."""
+        """Validates that lower search-space bounds are strictly less than upper
+        bounds."""
         bounds = (
             ("window_size", self.window_size_min, self.window_size_max),
             ("kernel_size", self.kernel_size_min, self.kernel_size_ceil),
@@ -66,15 +67,16 @@ class QAVIHPOHyperparameters(HPOHyperparameters):
     pqc_n_layers_min: int = 1
     pqc_n_layers_max: int = 6
     lr_generator_min: float = 1e-4
-    lr_generator_max: float = 1e-1
+    lr_generator_max: float = 1e-2
     lr_discriminator_min: float = 1e-4
-    lr_discriminator_max: float = 1e-1
+    lr_discriminator_max: float = 1e-2
     adversarial_loss_weight_min: float = 0.0
     adversarial_loss_weight_max: float = 1.0
 
     @model_validator(mode="after")
     def validate_qavi_search_bounds(self) -> QAVIHPOHyperparameters:
-        """Validates that lower search-space bounds are strictly less than upper bounds."""
+        """Validates that lower search-space bounds are strictly less than upper
+        bounds."""
         bounds = (
             ("pqc_n_qubits", self.pqc_n_qubits_min, self.pqc_n_qubits_max),
             ("pqc_n_layers", self.pqc_n_layers_min, self.pqc_n_layers_max),
