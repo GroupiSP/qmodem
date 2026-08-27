@@ -70,6 +70,7 @@ def objective_factory(
         )
 
         hp_train = QAVITrainHyperparameters(
+            dropout_rate=0.0,  # Regularization given by weight sampling
             conv_kernel_size=conv_kernel_size,
             conv_n_filters=trial.suggest_int(
                 "conv_n_filters", hp_hpo.conv_n_filters_min, hp_hpo.conv_n_filters_max
@@ -77,9 +78,6 @@ def objective_factory(
             window_size=window_size,
             beta_nll=trial.suggest_float(
                 "beta_nll", hp_hpo.beta_nll_min, hp_hpo.beta_nll_max
-            ),
-            dropout_rate=trial.suggest_float(
-                "dropout_rate", hp_hpo.dropout_rate_min, hp_hpo.dropout_rate_max
             ),
             pqc_n_qubits=trial.suggest_int(
                 "pqc_n_qubits", hp_hpo.pqc_n_qubits_min, hp_hpo.pqc_n_qubits_max
