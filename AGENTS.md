@@ -37,3 +37,17 @@ Before presenting the changes for review,
 - Smoke test the files in `scripts/`, except for those that are not maintained per repo instructions.
 - Always run the tests with `pytest` and ensure that all tests pass.
 - Use the mlflow MCP server to run the `scripts/` for a very few epochs and ensure that the losses are decreasing.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (`GroupiSP/qmodem`) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` plus `docs/adr/`. See `docs/agents/domain.md`.
