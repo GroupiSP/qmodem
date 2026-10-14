@@ -20,6 +20,10 @@ _Avoid_: Readout, decoder
 A classical network, external to the regression network, that judges whether an input–target pair is real or produced by the regression network; it exists only to train QAVI.
 _Avoid_: Critic
 
+**Adversarial weight**:
+The per-example trade-off, in QAVI's objective, between fooling the discriminator and fitting the likelihood and prior.
+_Avoid_: GAN weight, adversarial loss weight
+
 **MCD**:
 Monte Carlo dropout: the inference method that keeps dropout active at inference, so each dropout mask is one draw.
 _Avoid_: MC-Dropout, dropout BNN
