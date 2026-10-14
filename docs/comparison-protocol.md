@@ -1,11 +1,11 @@
 # Comparison protocol
 
-The comparison protocol fixes the stages, data, seeds, tuning, metrics and outputs under which HNN, MCD, BBB, pSGLD and QAVI are compared on the battery multiple-scenarios case, so that **the methods differ only in the posterior stage**. It was decided in [Comparison protocol (#96)](https://github.com/GroupiSP/qmodem/issues/96) on the map [Move qmodem onto stagereg and isolate QAVI's epistemic UQ (#89)](https://github.com/GroupiSP/qmodem/issues/89). Vocabulary: [qmodem GLOSSARY](../GLOSSARY.md), [stagereg GLOSSARY](https://github.com/GroupiSP/stagereg/blob/main/GLOSSARY.md).
+The comparison protocol fixes the stages, data, seeds, tuning, metrics and outputs under which HNN, MCD, BBB, pSGLD and Q-AVI are compared on the battery multiple-scenarios case, so that **the methods differ only in the posterior stage**. It was decided in [Comparison protocol (#96)](https://github.com/GroupiSP/qmodem/issues/96) on the map [Move qmodem onto stagereg and isolate QAVI's epistemic UQ (#89)](https://github.com/GroupiSP/qmodem/issues/89). Vocabulary: [qmodem GLOSSARY](../GLOSSARY.md), [stagereg GLOSSARY](https://github.com/GroupiSP/stagereg/blob/main/GLOSSARY.md).
 
 ```
 comparison protocol
-├─ methods     core: HNN · MCD · BBB · pSGLD (conditional) · QAVI
-│              arms: ablation (classical generator) · sensitivity (N_eff)
+├─ methods     core: HNN · MCD · BBB · pSGLD (conditional) · Q-AVI
+│              arms: ablation (C-AVI) · sensitivity (N_eff)
 ├─ backbone    one backbone run per protocol seed, shared; conv layer inferred
 ├─ seeds       R = 5, dataset fixed, keys derived from r, paired by seed
 ├─ posterior   N = #windows; M = 100 draws × 1 aleatoric noise sample
@@ -19,7 +19,7 @@ comparison protocol
 
 ## 1. Question and methods
 
-**Headline question.** Does QAVI's implicit, adversarially fitted posterior give better-calibrated epistemic UQ than explicit-family VI (BBB), sampling (pSGLD) and MCD, on the same backbone? HNN is the reference with no epistemic UQ.
+**Headline question.** Does Q-AVI's implicit, adversarially fitted posterior give better-calibrated epistemic UQ than explicit-family VI (BBB), sampling (pSGLD) and MCD, on the same backbone? HNN is the reference with no epistemic UQ.
 
 | Method | Posterior stage | Status |
 |---|---|---|
@@ -27,8 +27,8 @@ comparison protocol
 | MCD | mean network + elementwise input dropout before the conv | core |
 | BBB | stagereg `BayesByBackprop` on the conv layer | core |
 | pSGLD | stagereg pSGLD on the conv layer | core, **conditional**: dropped with a note if unaffordable at CNN size |
-| QAVI | generator (PQC + postprocessor) on the conv layer, objective as in [#94](https://github.com/GroupiSP/qmodem/issues/94) | core |
-| classical-generator QAVI | as QAVI, PQC replaced by a classical generator | **ablation arm**, only if [#100](https://github.com/GroupiSP/qmodem/issues/100) includes it |
+| Q-AVI | generator (quantum latent map + postprocessor) on the conv layer, objective as in [#94](https://github.com/GroupiSP/qmodem/issues/94) | core |
+| C-AVI | as Q-AVI, quantum latent map replaced by a parameter-matched classical latent map ([#100](https://github.com/GroupiSP/qmodem/issues/100)) | **ablation arm** |
 | any core method under N_eff | as the core method, likelihood scaled by N_eff (§4) | **sensitivity arm**, optional |
 
 Arms are reported against the core methods (one T2-style row each) and never enter T1.
@@ -55,7 +55,7 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
 
 ## 5. Tuning
 
-- **Equal budget**: each method's posterior stage gets the same Optuna budget (number of trials, TPE sampler, sampler seed, objective) on the backbone run of **seed 0**. The selected HPs are **frozen** across all R seeds. MCD's dropout rate and QAVI's λ, S, k and learning rates are all tuned within that budget. QAVI has more HPs, and the equal budget is a deliberate handicap.
+- **Equal budget**: each method's posterior stage gets the same Optuna budget (number of trials, TPE sampler, sampler seed, objective) on the backbone run of **seed 0**. The selected HPs are **frozen** across all R seeds. MCD's dropout rate and Q-AVI's λ, S, k and learning rates are all tuned within that budget. Q-AVI has more HPs, and the equal budget is a deliberate handicap. C-AVI gets its own equal budget over Q-AVI's search space, latent-map width h derived from (q, L) ([#100](https://github.com/GroupiSP/qmodem/issues/100)).
 - **One validation criterion** is shared by every method with a posterior stage, for best-checkpoint selection, early stopping and the HPO objective. Which criterion is decided by [#101](https://github.com/GroupiSP/qmodem/issues/101).
 - The budget size and search spaces are decided per stage in the per-stage HPO ticket.
 
@@ -74,7 +74,7 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
 | Coverage | empirical 2.5/97.5 percentiles of the predictive samples, inclusive; level **0.95** is an explicit protocol parameter |
 | WSU | `core.metrics.wsu` **per trajectory**, t0 passed as origin. The epoch `WeightedSpread` adapter is never used |
 
-All means and intervals are **sample-based** for every method. QAVI has no analytic form, and analytic intervals for the other methods would be an unequal treatment.
+All means and intervals are **sample-based** for every method. Q-AVI has no analytic form, and analytic intervals for the other methods would be an unequal treatment.
 
 **Aggregation.** Each metric is computed per test case, then averaged with an **unweighted mean over test cases** (primary). Per current policy (policy 0 / policy 1 cases), the same mean is reported as secondary columns. Pooled values are not reported.
 
@@ -88,7 +88,7 @@ A seed enters the results only if all of these hold:
 | Completeness | every run is `FINISHED`; every core method has a run for the seed (no ragged seeds) |
 | Frozen HPs | method runs log the HPO-selected params, identical across seeds |
 | Versions | one `stagereg_version` and one qmodem commit across all runs |
-| Posterior health | QAVI: draws not collapsed (spread of conv weights across draws > 0; discriminator accuracy not stuck at 1.0). pSGLD: burn-in respected, ≥ M retained samples. Thresholds are an implementation detail; the values are reported |
+| Posterior health | Q-AVI: draws not collapsed (spread of conv weights across draws > 0; discriminator accuracy not stuck at 1.0). pSGLD: burn-in respected, ≥ M retained samples. Thresholds are an implementation detail; the values are reported |
 
 A failed check **invalidates the seed for all methods**, and the seed is re-run. Methods are never dropped individually.
 
@@ -101,10 +101,10 @@ A failed check **invalidates the seed for all methods**, and the seed is re-run.
 | ID | Content | Answers |
 |---|---|---|
 | **T1** | RMSE, CRPS, coverage@0.95, WSU per method (mean ± std), plus per-policy columns | overall ranking |
-| **T2** | paired Δ vs BBB and vs HNN (bootstrap CI), plus per-policy columns; one row per arm | is QAVI's gain real |
+| **T2** | paired Δ vs BBB and vs HNN (bootstrap CI), plus per-policy columns; one row per arm | is Q-AVI's gain real |
 | **T3** | posterior-stage wall-clock, trainable params, draws/s per method | cost of each method |
 | **F1** | reliability curve: empirical vs nominal coverage at levels 0.5…0.95 | calibration beyond one level |
-| **F2** | epistemic / aleatoric variance decomposition over SoC0, per method, one representative case **per current policy**, event marked | does QAVI add epistemic spread, and where |
+| **F2** | epistemic / aleatoric variance decomposition over SoC0, per method, one representative case **per current policy**, event marked | does Q-AVI add epistemic spread, and where |
 | **F3** | per-test-case CRPS bars, all methods, grouped by policy | is the gain uniform |
 | **F4** | RUL predictive 95% bands vs the simulator reference band, all methods, one representative case **per current policy**, event marked | qualitative picture, incl. the bimodal pre-event reference |
 

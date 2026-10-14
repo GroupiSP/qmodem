@@ -4,24 +4,36 @@ The shared vocabulary of qmodem: quantum-enhanced uncertainty quantification for
 
 ## Inference methods
 
-**QAVI**:
-Quantum adversarial variational inference: the inference method whose approximate posterior over part of the network's weights is implicit, defined by a generator, and fitted adversarially against a discriminator.
-_Avoid_: Quantum BNN, quantum hypernetwork
+**AVI**:
+Adversarial variational inference: the family of inference methods whose approximate posterior over part of the network's weights is implicit, defined by a generator, and fitted adversarially against a discriminator.
+_Avoid_: AVB (fits a weight-space discriminator), CAVI (coordinate-ascent VI)
+
+**Q-AVI**:
+The AVI method whose generator has a quantum latent map.
+_Avoid_: QAVI, Quantum BNN, quantum hypernetwork
+
+**C-AVI**:
+The AVI method whose generator has a classical latent map; the ablation arm that isolates Q-AVI's quantum circuit.
+_Avoid_: CAVI, classical QAVI
 
 **Generator**:
-A parametrized quantum circuit followed by a postprocessor, mapping a random input to one draw of the inferred weights.
+A latent map followed by a postprocessor, mapping a random input to one draw of the inferred weights.
 _Avoid_: Weights generator, hypernetwork
 
+**Latent map**:
+The part of a generator that maps the random input to a bounded feature vector: a parametrized quantum circuit and its measurements (quantum latent map), or a classical network matched to one in output width, input and parameter count (classical latent map).
+_Avoid_: Feature map (in QML, only the data-encoding part of a circuit)
+
 **Postprocessor**:
-The classical map that turns a generator's circuit measurements into weights of the inferred part of the network.
+The classical map that turns a latent map's output into weights of the inferred part of the network.
 _Avoid_: Readout, decoder
 
 **Discriminator**:
-A classical network, external to the regression network, that judges whether an input–target pair is real or produced by the regression network; it exists only to train QAVI.
+A classical network, external to the regression network, that judges whether an input–target pair is real or produced by the regression network; it exists only to train AVI methods.
 _Avoid_: Critic
 
 **Adversarial weight**:
-The per-example trade-off, in QAVI's objective, between fooling the discriminator and fitting the likelihood and prior.
+The per-example trade-off, in an AVI method's objective, between fooling the discriminator and fitting the likelihood and prior.
 _Avoid_: GAN weight, adversarial loss weight
 
 **MCD**:
