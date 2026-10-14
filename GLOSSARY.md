@@ -49,3 +49,15 @@ _Avoid_: Base run, parent run (a parent is an MLflow relation, not a role)
 **Method run**:
 The run that restores a backbone run and adds one inference method's posterior stage (none for HNN), and that holds that method's evaluation.
 _Avoid_: Child run, posterior run, evaluation run
+
+**Protocol seed**:
+The index that fixes one backbone run and the method runs restored from it; methods are compared paired by protocol seed.
+_Avoid_: Repetition, trial (a trial is an HPO term)
+
+**Ablation arm**:
+An optional set of method runs that changes one component of a core method, reported against the core methods and never ranked among them.
+_Avoid_: Variant, baseline
+
+**Sensitivity arm**:
+An optional set of method runs that changes one setting of the posterior problem shared by all methods, reported against the primary setting.
+_Avoid_: Ablation (an ablation changes a method, not the shared problem)
