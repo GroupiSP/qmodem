@@ -10,7 +10,7 @@ comparison protocol
 ├─ seeds       R = 5, dataset fixed, keys derived from r, paired by seed
 ├─ posterior   N = #windows; M = 100 draws × 1 aleatoric noise sample
 ├─ tuning      equal Optuna budget per posterior stage on seed 0, HPs frozen
-│              one shared validation criterion for all posterior stages
+│              one shared validation criterion: validation CRPS, M_val = 100
 ├─ metrics     expected CRPS (grid-free), RMSE, coverage@0.95, WSU per trajectory
 │              sample-based; t0 dropped; mean over test cases (+ per policy)
 ├─ validity    a failed check invalidates the seed for all methods
@@ -56,8 +56,17 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
 ## 5. Tuning
 
 - **Equal budget**: each method's posterior stage gets the same Optuna budget (number of trials, TPE sampler, sampler seed, objective) on the backbone run of **seed 0**. The selected HPs are **frozen** across all R seeds. MCD's dropout rate and Q-AVI's λ, S, k and learning rates are all tuned within that budget. Q-AVI has more HPs, and the equal budget is a deliberate handicap. C-AVI gets its own equal budget over Q-AVI's search space, latent-map width h derived from (q, L) ([#100](https://github.com/GroupiSP/qmodem/issues/100)).
-- **One validation criterion** is shared by every method with a posterior stage, for best-checkpoint selection, early stopping and the HPO objective. Which criterion is decided by [#101](https://github.com/GroupiSP/qmodem/issues/101).
-- The budget size and search spaces are decided per stage in the per-stage HPO ticket.
+- **One validation criterion** is shared by every method with a posterior stage: the **mean sample CRPS** (stagereg `crps`, energy form) of the posterior predictive against the observed validation target ([#101](https://github.com/GroupiSP/qmodem/issues/101)). Validation targets are single observations of held-out histories, so the window mean estimates the same expected CRPS as the test metric. `nll`, RMSE and coverage are logged as diagnostics and never select anything.
+- **Validation draws**: M_val = M = 100 draws × 1 aleatoric noise sample (`num_draws = predictive_sample_count = 100`), with a **fixed draw key** per run. A smaller M_val is ruled out: the plug-in CRPS is biased by E|X − X'| / (2M), which favours narrow predictives. M_val is independent of Q-AVI's training-loss S.
+- **Role of the criterion per method**:
+
+  | Method | Best checkpoint | Early stopping | HPO objective |
+  |---|---|---|---|
+  | MCD, BBB, Q-AVI, C-AVI | ✅ | ✅ | best-epoch validation CRPS |
+  | pSGLD | — (last epoch: a stopper would truncate the chain) | — | validation CRPS of the final retained chain |
+
+- **Patience**: one shared patience for every method that early-stops, generous (≈ 20% of the max-epoch cap) so that it covers Q-AVI's adversarial oscillations, with `min_delta = 0`. It is fixed and never tuned. Method-specific patience is ruled out as unequal treatment.
+- The budget size, search spaces, max-epoch caps and the patience value are decided per stage in the per-stage HPO ticket.
 
 ## 6. Evaluation
 

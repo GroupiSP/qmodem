@@ -66,6 +66,10 @@ _Avoid_: Child run, posterior run, evaluation run
 The index that fixes one backbone run and the method runs restored from it; methods are compared paired by protocol seed.
 _Avoid_: Repetition, trial (a trial is an HPO term)
 
+**Validation criterion**:
+The single score on held-out validation data that selects a posterior stage's best checkpoint, stops it early and serves as its HPO objective, shared by every method of the comparison protocol.
+_Avoid_: Validation loss (training losses differ by method), monitored metric (the stopper's mechanism, not the protocol's choice)
+
 **Ablation arm**:
 An optional set of method runs that changes one component of a core method, reported against the core methods and never ranked among them.
 _Avoid_: Variant, baseline
