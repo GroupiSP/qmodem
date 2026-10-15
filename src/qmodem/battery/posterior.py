@@ -39,6 +39,7 @@ from stagereg.core import (
     NegativeLogLikelihood,
     RootMeanSquaredError,
     SampleContinuousRankedProbabilityScore,
+    TrainingEvent,
 )
 from stagereg.jax import (
     InferenceMethod,
@@ -81,6 +82,10 @@ VALIDATION_METRIC = "crps"
 COST_WALL_CLOCK = "cost/posterior/wall_clock_seconds"
 COST_TRAINABLE_PARAMETERS = "cost/posterior/trainable_parameters"
 COST_DRAWS_PER_SECOND = "cost/posterior/draws_per_second"
+COST_EPOCH_SECONDS = "cost/posterior/epoch_seconds"
+"""Wall-clock seconds of each posterior epoch (step = epoch)."""
+COST_SECONDS_PER_EPOCH = "cost/posterior/seconds_per_epoch"
+"""Mean wall-clock seconds per posterior epoch (step 0)."""
 
 
 class PosteriorStageHyperparameters(BaseModel):
@@ -486,6 +491,57 @@ def draws_per_second(draw: Callable[[], jax.Array], num_draws: int) -> float:
     start = time.perf_counter()
     jax.block_until_ready(draw())
     return num_draws / max(time.perf_counter() - start, 1e-9)
+
+
+@dataclasses.dataclass
+class EpochTimer:
+    """An event sink that times every posterior epoch and logs it.
+
+    An epoch's time runs from the previous epoch's end (or ``start``) to its own
+    ``epoch_end`` event, so it includes the previous epoch's validation.
+
+    Attributes:
+        tracker: Receives ``COST_EPOCH_SECONDS`` at step = epoch.
+        stage: The timed stage's name.
+        seconds: The measured epoch times, in order.
+    """
+
+    tracker: ExperimentTracker
+    stage: str = "posterior"
+    seconds: list[float] = dataclasses.field(default_factory=list)
+    _last: float | None = dataclasses.field(default=None, init=False, repr=False)
+
+    def start(self) -> None:
+        """Start the clock of the first epoch."""
+        self._last = time.perf_counter()
+
+    def on_event(self, event: TrainingEvent) -> None:
+        """Time and log an epoch at its ``epoch_end`` event.
+
+        Args:
+            event: A training event; others are ignored.
+
+        Raises:
+            ValueError: If the timer was not started.
+        """
+        if event.name != "epoch_end" or event.stage != self.stage:
+            return
+        if self._last is None:
+            raise ValueError("call start before training.")
+        now = time.perf_counter()
+        self.seconds.append(now - self._last)
+        self._last = now
+        self.tracker.log_metrics(
+            {COST_EPOCH_SECONDS: self.seconds[-1]}, step=event.step
+        )
+
+    def log_mean(self) -> None:
+        """Log the mean epoch time as ``COST_SECONDS_PER_EPOCH`` at step 0."""
+        if self.seconds:
+            self.tracker.log_metrics(
+                {COST_SECONDS_PER_EPOCH: sum(self.seconds) / len(self.seconds)},
+                step=0,
+            )
 
 
 def log_cost(tracker: ExperimentTracker, cost: PosteriorCost) -> None:

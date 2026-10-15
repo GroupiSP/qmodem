@@ -468,7 +468,8 @@ def predict_case(
     means = _unscale(y_scaler, draws)
     noise_scale = _unscale(y_scaler, draws + std) - means  # affine: a * std
     samples = means + noise_scale * noise
-    no_prediction = np.full((1, parameters.num_samples), np.nan)
+    # A finite posterior (pSGLD) yields its retained draws, not num_samples.
+    no_prediction = np.full((1, samples.shape[0]), np.nan)
     return CasePrediction(
         samples=CaseSamples(
             name=name,
