@@ -20,12 +20,12 @@ from qmodem.battery.evaluate import (
     restore_model_state,
     run_evaluation,
 )
-from qmodem.battery.tracking import mlflow_load_scaler
 from qmodem.battery.train import (
     TrainHyperparameters,
     load_train_hyperparameters_from_mlflow,
 )
 from qmodem.tracking import (
+    load_scaler,
     retrieve_mlflow_setup_train,
     track_mlflow,
 )
@@ -69,8 +69,8 @@ def main() -> None:
         )
 
         # Load the scalers fitted on the training data.
-        x_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/x_scaler")
-        y_scaler = mlflow_load_scaler(f"runs:/{run.info.run_id}/y_scaler")
+        x_scaler = load_scaler(run.info.run_id, "x_scaler")
+        y_scaler = load_scaler(run.info.run_id, "y_scaler")
 
         restore_model_state(model, run.info.run_id)
 

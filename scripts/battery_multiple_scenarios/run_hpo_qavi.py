@@ -25,7 +25,6 @@ from qmodem.battery.hpo import (
     get_average_crps,
     get_validation_data,
 )
-from qmodem.battery.tracking import log_general
 from qmodem.battery.train import QAVITrainHyperparameters, run_adversarial_training
 from qmodem.battery.train_steps import make_qavi_steps
 from qmodem.data import (
@@ -36,7 +35,7 @@ from qmodem.data import (
     get_time_windows_and_join,
     to_jax,
 )
-from qmodem.tracking import MLFlowSetup, track_mlflow
+from qmodem.tracking import MLFlowSetup, ScalerArtifact, log_general, track_mlflow
 from qmodem.utils import count_parameters, setup_script_logging
 
 logger = logging.getLogger(__name__)
@@ -152,18 +151,14 @@ def objective_factory(
             log_general(
                 num_model_params=count_parameters(model),
                 hyperparameters=hp_train.model_dump(),
-                scalers={
-                    "x_scaler": (
-                        x_scaler,
-                        "transform",
-                        np.ones(shape=(hp_train.window_size, 2), dtype=np.float32),
+                scalers=(
+                    ScalerArtifact(
+                        "x_scaler", x_scaler, np.ones(shape=(hp_train.window_size, 2))
                     ),
-                    "y_scaler": (
-                        y_scaler,
-                        "inverse_transform",
-                        np.ones(shape=(1, 1), dtype=np.float32),
+                    ScalerArtifact(
+                        "y_scaler", y_scaler, np.ones(shape=(1, 1)), "inverse_transform"
                     ),
-                },
+                ),
             )
 
             # Start evaluation

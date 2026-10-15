@@ -8,7 +8,7 @@ import pathlib
 import pickle
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -18,10 +18,12 @@ import cloudpickle
 import jax
 import jax.numpy as jnp
 import mlflow
+import numpy as np
 import orbax.checkpoint as ocp
 import pandas as pd
 from matplotlib.figure import Figure
 from mlflow.entities import Metric, Param
+from mlflow.pyfunc import PyFuncModel
 from mlflow.tracking import MlflowClient
 from stagereg.core import (
     CachedCheckpointStore,
@@ -30,6 +32,7 @@ from stagereg.core import (
     flatten_parameters,
 )
 
+from .data import DataScaler
 from .utils import LAST_TRAIN_SETUP_PATH, ROOT_DIR
 
 
@@ -374,6 +377,19 @@ class MLFlowSetup:
 
 @contextmanager
 def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
+    """Run the enclosed block inside an MLflow run described by ``setup``.
+
+    The tracking URI and experiment are set (the experiment is created with the
+    setup's artifact store if needed), the run is started and tagged. The run ends as
+    ``FINISHED``, or as ``FAILED`` if the block raises, so that tag-based run
+    selection never picks an aborted run.
+
+    Args:
+        setup: Tracking backend, experiment, run name and tags.
+
+    Yields:
+        The active MLflow run.
+    """
     mlflow.set_tracking_uri(setup.backend_store)
 
     exp_name = mlflow.get_experiment_by_name(setup.experiment_name)
@@ -386,18 +402,160 @@ def track_mlflow(setup: MLFlowSetup) -> Generator[mlflow.ActiveRun, None, None]:
     )
     mlflow.set_experiment(experiment_id=exp_id)
 
+    active_run = mlflow.start_run(
+        run_id=setup.run_id,
+        run_name=setup.run_name,
+        description=setup.run_description,
+    )
     try:
-        active_run = mlflow.start_run(
-            run_id=setup.run_id,
-            run_name=setup.run_name,
-            description=setup.run_description,
-        )
         mlflow.set_tags(setup.tags)
-
         yield active_run
+    except BaseException:
+        mlflow.end_run(status="FAILED")
+        raise
+    mlflow.end_run()
 
-    finally:
-        mlflow.end_run()
+
+def backbone_tags(*, seed: int, data_generation_run_id: str) -> dict[str, str]:
+    """Return the tags of a backbone run.
+
+    Args:
+        seed: The protocol seed r.
+        data_generation_run_id: MLflow run ID of the data-generation run.
+
+    Returns:
+        The ``role``, ``seed``, ``data_generation_run_id`` and ``stagereg_version``
+        tags.
+    """
+    return {
+        "role": "backbone",
+        "seed": str(seed),
+        "data_generation_run_id": data_generation_run_id,
+        "stagereg_version": stagereg_version(),
+    }
+
+
+@dataclass(frozen=True)
+class ScalerArtifact:
+    """A fitted data scaler to log as an MLflow pyfunc model.
+
+    Attributes:
+        name: Name of the logged model, e.g. ``"x_scaler"``.
+        scaler: The fitted scaler.
+        input_example: Example input, shaped like the data the scaler was fitted on.
+        predict_method: Scaler method the pyfunc's ``predict`` calls, e.g.
+            ``"inverse_transform"`` for the target scaler.
+    """
+
+    name: str
+    scaler: DataScaler
+    input_example: np.ndarray
+    predict_method: str = "transform"
+
+
+class _ScalerWrapper(mlflow.pyfunc.PythonModel):
+    """Pyfunc model whose ``predict`` calls one method of a fitted scaler."""
+
+    def __init__(self, scaler: DataScaler, predict_method: str = "transform") -> None:
+        self.scaler = scaler
+        self.predict_method = predict_method
+
+    def predict(self, model_input: np.ndarray, params: Any = None) -> np.ndarray:
+        return getattr(self.scaler, self.predict_method)(model_input)
+
+
+class LoadedScaler:
+    """Scikit-learn-like view of a scaler logged with ``log_scaler``.
+
+    Both ``transform`` and ``inverse_transform`` call the pyfunc's ``predict``, whose
+    behaviour was fixed at logging time by ``ScalerArtifact.predict_method``.
+
+    Attributes:
+        pyfunc: The loaded pyfunc model.
+    """
+
+    def __init__(self, pyfunc: PyFuncModel) -> None:
+        """Wrap a loaded pyfunc model.
+
+        Args:
+            pyfunc: The pyfunc model logged by ``log_scaler``.
+        """
+        self.pyfunc = pyfunc
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Apply the logged scaler method.
+
+        Args:
+            X: Input data.
+
+        Returns:
+            The scaled data.
+        """
+        return self.pyfunc.predict(X)
+
+    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
+        """Apply the logged scaler method.
+
+        Args:
+            X: Input data.
+
+        Returns:
+            The (inverse-)scaled data.
+        """
+        return self.pyfunc.predict(X)
+
+
+def log_scaler(artifact: ScalerArtifact) -> None:
+    """Log a fitted scaler as a pyfunc model of the active MLflow run.
+
+    Args:
+        artifact: The scaler and how to log it.
+    """
+    mlflow.pyfunc.log_model(
+        name=artifact.name,
+        python_model=_ScalerWrapper(
+            artifact.scaler, predict_method=artifact.predict_method
+        ),
+        input_example=artifact.input_example,
+    )
+
+
+def load_scaler(run_id: str, name: str) -> LoadedScaler:
+    """Load a scaler logged with ``log_scaler``.
+
+    Method runs pass their parent backbone run's ID, where the scalers are logged
+    once.
+
+    Args:
+        run_id: The run the scaler was logged into.
+        name: The scaler's model name, e.g. ``"x_scaler"``.
+
+    Returns:
+        The loaded scaler.
+    """
+    return LoadedScaler(mlflow.pyfunc.load_model(f"runs:/{run_id}/{name}"))
+
+
+def log_general(
+    num_model_params: int,
+    hyperparameters: dict[str, Any],
+    scalers: Sequence[ScalerArtifact],
+    log_stream: io.StringIO | None = None,
+) -> None:
+    """Log the parameter count, hyperparameters, scalers and log of the active run.
+
+    Args:
+        num_model_params: Number of trainable model parameters.
+        hyperparameters: Flat hyperparameters.
+        scalers: The fitted scalers.
+        log_stream: The script's in-memory log, logged as ``training_log.txt``.
+    """
+    mlflow.log_param("n_params", num_model_params)
+    mlflow.log_params(hyperparameters)
+    for artifact in scalers:
+        log_scaler(artifact)
+    if log_stream is not None:
+        mlflow.log_text(log_stream.getvalue(), "training_log.txt")
 
 
 # TODO: implement

@@ -25,8 +25,10 @@ from stagereg.core import (
 from qmodem.tracking import (
     MLflowCheckpointStore,
     MLflowTracker,
+    backbone_tags,
     mlflow_checkpoint_store,
     stagereg_version,
+    track_mlflow,
 )
 
 _MLFLOW_SETTINGS = settings(
@@ -82,6 +84,23 @@ def test_params_are_flattened_and_grouped_by_stage(mlflow_backend) -> None:
         "mean/optimizer/learning_rate": "0.001",
         "mean/batch_size": "32",
         "variance/optimizer/learning_rate": "0.0005",
+    }
+
+
+def test_a_run_aborted_by_an_exception_is_marked_failed(mlflow_backend) -> None:
+    with pytest.raises(RuntimeError), track_mlflow(mlflow_backend.setup) as run:
+        run_id = run.info.run_id
+        raise RuntimeError("training diverged")
+
+    assert mlflow_backend.client.get_run(run_id).info.status == "FAILED"
+
+
+def test_backbone_tags_identify_role_seed_data_and_stagereg() -> None:
+    assert backbone_tags(seed=3, data_generation_run_id="abc") == {
+        "role": "backbone",
+        "seed": "3",
+        "data_generation_run_id": "abc",
+        "stagereg_version": "0.2.0",
     }
 
 

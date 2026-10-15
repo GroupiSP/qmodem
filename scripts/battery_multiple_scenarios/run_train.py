@@ -9,7 +9,6 @@ import sklearn.preprocessing as skpp
 from dotenv import load_dotenv
 
 from qmodem.battery.dispatch import ModelBuildParameters, build_model
-from qmodem.battery.tracking import log_general
 from qmodem.battery.train import TrainHyperparameters, run_training
 from qmodem.data import (
     DataPipeline,
@@ -19,7 +18,13 @@ from qmodem.data import (
     get_time_windows_and_join,
     to_jax,
 )
-from qmodem.tracking import MLFlowSetup, track_mlflow, write_setup_to_file
+from qmodem.tracking import (
+    MLFlowSetup,
+    ScalerArtifact,
+    log_general,
+    track_mlflow,
+    write_setup_to_file,
+)
 from qmodem.utils import count_parameters, setup_script_logging
 
 
@@ -79,18 +84,14 @@ def main() -> None:
         log_general(
             num_model_params=count_parameters(model),
             hyperparameters=hp.model_dump(),
-            scalers={
-                "x_scaler": (
-                    x_scaler,
-                    "transform",
-                    np.ones(shape=(hp.window_size, 1), dtype=np.float32),
+            scalers=(
+                ScalerArtifact(
+                    "x_scaler", x_scaler, np.ones(shape=(hp.window_size, 2))
                 ),
-                "y_scaler": (
-                    y_scaler,
-                    "inverse_transform",
-                    np.ones(shape=(1, 1), dtype=np.float32),
+                ScalerArtifact(
+                    "y_scaler", y_scaler, np.ones(shape=(1, 1)), "inverse_transform"
                 ),
-            },
+            ),
             log_stream=log_stream,
         )
 
