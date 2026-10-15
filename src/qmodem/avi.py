@@ -44,12 +44,6 @@ type PyTree = Any
 LATENT_UPPER = 2 * math.pi
 """Latent inputs are drawn from ``U(0, LATENT_UPPER)``."""
 
-WEIGHT_SPREAD_DRAWS = 8
-"""Draws per update used for the ``weight_spread`` diagnostic.
-
-A fixed count, independent of the training draws S (default 1, for which a spread across
-the training draws would always be zero).
-"""
 
 DISCRIMINATOR_LOSS = "discriminator_loss"
 DISCRIMINATOR_ACCURACY = "discriminator_accuracy"
@@ -364,6 +358,12 @@ class AVI:
     draws. The generator's objective honours the posterior problem's likelihood and
     prior and adds ``adversarial_weight · N`` times the mean adversarial error. The
     reported ``loss`` is the generator loss before its step.
+
+    The S training draws of an update under ``key`` are the posterior's draws under
+    ``fold_in(key, 1)`` (before the step). The ``weight_spread`` diagnostic is their
+    spread; with S = 1 it adds one extra generator draw (no likelihood, no
+    gradient), so the diagnostic never inflates the per-update cost by more than
+    one generator evaluation.
 
     It supports early stopping. ``state()`` holds the generator, the discriminator
     and both optimizer states; ``posterior_state()`` holds the generator only, so the
@@ -724,7 +724,7 @@ def _make_step(
         targets: jax.Array,
         sample_weight: jax.Array | None,
         key: jax.Array,
-    ) -> jax.Array:
+    ) -> tuple[jax.Array, PyTree]:
         weights, fakes = draws_and_fakes(generator_parameters, inputs, key)
         batch = Batch(inputs=inputs, targets=targets, sample_weight=sample_weight)
         likelihood_keys = jax.random.split(jax.random.fold_in(key, 2), num_draws)
@@ -732,12 +732,25 @@ def _make_step(
             lambda w, k: problem.log_likelihood(w, batch, network_key(k))
         )(weights, likelihood_keys)
         log_priors = jax.vmap(problem.prior.log_prob)(weights)
-        return generator_loss(
+        loss = generator_loss(
             log_likelihoods=log_likelihoods,
             log_priors=log_priors,
             fake_logits=fake_logits(discriminator_parameters, inputs, fakes),
             adversarial_weight=adversarial_weight,
             dataset_size=problem.dataset_size,
+        )
+        return loss, weights
+
+    def spread_draws(
+        generator_parameters: nnx.State, training_draws: PyTree, key: jax.Array
+    ) -> PyTree:
+        if num_draws > 1:
+            return training_draws
+        extra = generator.draw(generator_parameters, key)
+        return jax.tree.map(
+            lambda drawn, more: jnp.concatenate([drawn, more[None]]),
+            training_draws,
+            extra,
         )
 
     @jax.jit
@@ -779,7 +792,9 @@ def _make_step(
             )
         )
 
-        loss, grads = jax.value_and_grad(generator_objective)(
+        (loss, training_draws), grads = jax.value_and_grad(
+            generator_objective, has_aux=True
+        )(
             state["generator"],
             discriminator_parameters,
             inputs,
@@ -790,8 +805,10 @@ def _make_step(
         updates, generator_state = generator_optimizer.update(
             grads, state["generator_optimizer"], state["generator"]
         )
-        spread_draws = jax.vmap(lambda k: generator.draw(state["generator"], k))(
-            jax.random.split(spread_key, WEIGHT_SPREAD_DRAWS)
+        spread = weight_spread(
+            spread_draws(
+                state["generator"], jax.lax.stop_gradient(training_draws), spread_key
+            )
         )
         new_state = {
             "generator": optax.apply_updates(state["generator"], updates),
@@ -803,7 +820,7 @@ def _make_step(
             "loss": loss,
             DISCRIMINATOR_LOSS: d_losses[-1],
             DISCRIMINATOR_ACCURACY: accuracies[-1],
-            WEIGHT_SPREAD: weight_spread(spread_draws),
+            WEIGHT_SPREAD: spread,
         }
 
     return step

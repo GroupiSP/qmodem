@@ -289,6 +289,50 @@ def test_avi_early_stops_and_declares_its_diagnostics(
     assert not method.has_posterior
 
 
+def _linear_weights(posterior, key: jax.Array, num_draws: int) -> jax.Array:
+    """Recover each draw's ``(b, w)`` of the linear toy model from its predictions.
+
+    The predictions at the origin are ``b``; at the unit vector ``e_i`` they are
+    ``w_i + b``.
+    """
+    probes = jnp.concatenate([jnp.zeros((1, N_FEATURES)), jnp.eye(N_FEATURES)])
+    means = posterior.sample_means(probes, key, num_draws)[..., 0]
+    bias = means[:, :1]
+    return jnp.concatenate([bias, means[:, 1:] - bias], axis=1)
+
+
+@settings(max_examples=3, deadline=None)
+@given(num_draws=st.integers(2, 4), seed=st.integers(0, 2**16))
+def test_with_several_draws_the_weight_spread_is_that_of_the_training_draws(
+    build_avi: Callable[..., AVI], num_draws: int, seed: int
+) -> None:
+    method = build_avi(num_draws=num_draws)
+    method.init(_problem())
+    before = method.posterior()
+    key = jax.random.key(seed)
+
+    outputs = method.update(_batch(), key)
+
+    weights = _linear_weights(before, jax.random.fold_in(key, 1), num_draws)
+    np.testing.assert_allclose(
+        float(outputs["weight_spread"]),
+        float(jnp.mean(jnp.std(weights, axis=0))),
+        rtol=1e-4,
+        atol=1e-6,
+    )
+
+
+def test_with_one_draw_the_weight_spread_is_still_positive(
+    build_avi: Callable[..., AVI],
+) -> None:
+    method = build_avi(num_draws=1)
+    method.init(_problem())
+
+    outputs = method.update(_batch(), jax.random.key(3))
+
+    assert float(outputs["weight_spread"]) > 0.0
+
+
 def test_an_avi_update_returns_a_finite_loss_and_every_declared_diagnostic(
     build_avi: Callable[..., AVI],
 ) -> None:
