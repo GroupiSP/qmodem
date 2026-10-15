@@ -30,6 +30,7 @@ from qmodem.battery.methods.avi import (
     QAVIConfig,
 )
 from qmodem.battery.posterior import (
+    COST_SCAFFOLDING_PARAMETERS,
     COST_TRAINABLE_PARAMETERS,
     INFERRED_SUBNETWORK,
     PosteriorStageHyperparameters,
@@ -50,6 +51,9 @@ QUANTUM_PARAMETERS = 6
 """2Lq for q = 3, L = 1."""
 CLASSICAL_PARAMETERS = 8
 """H(q + 2) + q for q = 3, h = max(1, round(3/5)) = 1."""
+DISCRIMINATOR_PARAMETERS = 5633
+"""The 64-64 MLP over a flattened (10, 2) window and its target: 21·64 + 64 + 64·64 + 64
++ 64 + 1."""
 LATENT_MAP_PARAMETERS = {
     Method.Q_AVI: QUANTUM_PARAMETERS,
     Method.C_AVI: CLASSICAL_PARAMETERS,
@@ -180,17 +184,28 @@ def test_an_avi_run_finalizes_its_best_epoch_on_validation_crps(avi_run) -> None
     assert persistent.load("posterior/best").epoch == int(np.argmin(crps))
 
 
-def test_an_avi_run_counts_the_generator_and_the_discriminator_as_trainable(
+def test_an_avi_run_counts_only_the_generator_as_its_posterior_parameters(
     method, avi_run, trained_backbone
 ) -> None:
     _, tracker, persistent = avi_run
-    generator = parameter_count(persistent.load("posterior/best").state.posterior_state)
     network = trained_backbone.mean_hp.network
     conv = network.kernel_size * 2 * network.n_filters + network.n_filters
     q = TINY_AVI.n_qubits
+    generator = LATENT_MAP_PARAMETERS[method] + q * conv + conv
 
-    assert generator == LATENT_MAP_PARAMETERS[method] + q * conv + conv
-    assert tracker.history(COST_TRAINABLE_PARAMETERS)[0] > generator
+    assert (
+        parameter_count(persistent.load("posterior/best").state.posterior_state)
+        == generator
+    )
+    assert tracker.history(COST_TRAINABLE_PARAMETERS) == [float(generator)]
+
+
+def test_an_avi_run_counts_the_discriminator_as_scaffolding(avi_run) -> None:
+    _, tracker, _ = avi_run
+
+    assert tracker.history(COST_SCAFFOLDING_PARAMETERS) == [
+        float(DISCRIMINATOR_PARAMETERS)
+    ]
 
 
 @settings(max_examples=10, deadline=None)

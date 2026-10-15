@@ -131,7 +131,8 @@ def avi_posterior_spec(
 
     Returns:
         The posterior specification: early-stopped, on a clone of the mean net,
-        logging both latent maps' parameter counts.
+        counting the generator as the posterior and the discriminator as
+        scaffolding, and logging both latent maps' parameter counts.
     """
 
     def build_generator(warm_start: PyTree, key: jax.Array) -> ConvGenerator:
@@ -153,22 +154,37 @@ def avi_posterior_spec(
     return PosteriorSpec(
         stage=stage,
         build_method=build_method,
-        trainable_parameters=_trained_parameters,
+        trainable_parameters=_generator_parameters,
+        scaffolding_parameters=_discriminator_parameters,
         method_metrics=latent_map_parameter_counts(hp),
     )
 
 
-def _trained_parameters(method: AVI) -> PyTree:
-    """Return what an AVI method trains: the generator and the discriminator.
+def _generator_parameters(method: AVI) -> PyTree:
+    """Return the posterior an AVI method trains: the generator's parameters.
 
     Args:
         method: An initialized ``AVI``.
 
     Returns:
-        ``{"generator": ..., "discriminator": ...}``.
+        The generator's ``nnx.Param`` state.
     """
-    state = method.state()
-    return {"generator": state["generator"], "discriminator": state["discriminator"]}
+    return method.state()["generator"]
+
+
+def _discriminator_parameters(method: AVI) -> PyTree:
+    """Return an AVI method's scaffolding: the discriminator's parameters.
+
+    The discriminator is trained alongside the generator but is not part of the
+    posterior (US 51), so T3 counts it separately.
+
+    Args:
+        method: An initialized ``AVI``.
+
+    Returns:
+        The discriminator's ``nnx.Param`` state.
+    """
+    return method.state()["discriminator"]
 
 
 class QAVIConfig(MethodConfigBase):

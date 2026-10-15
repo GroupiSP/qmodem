@@ -350,6 +350,7 @@ def _cost(
     data: PreparedData,
     wall_clock_seconds: float,
     trainable_parameters: int,
+    scaffolding_parameters: int | None = None,
 ) -> PosteriorCost:
     """Measure the cost of a trained method run (table T3).
 
@@ -357,7 +358,9 @@ def _cost(
         run: The trained method run.
         data: Its windows (the draws are timed at the validation windows).
         wall_clock_seconds: The posterior stage's wall-clock time.
-        trainable_parameters: The method's trainable parameter count.
+        trainable_parameters: The posterior's trainable parameter count.
+        scaffolding_parameters: The count of parameters trained only to fit the
+            posterior, or ``None``.
 
     Returns:
         The cost, with the draws per second of ``PREDICTIVE_SAMPLE_COUNT`` draws.
@@ -368,6 +371,7 @@ def _cost(
     return PosteriorCost(
         wall_clock_seconds=wall_clock_seconds,
         trainable_parameters=trainable_parameters,
+        scaffolding_parameters=scaffolding_parameters,
         draws_per_second=draws_per_second(
             lambda: run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT).draws,
             finite_draws or PREDICTIVE_SAMPLE_COUNT,
@@ -460,6 +464,11 @@ def train_method_run(
     wall_clock_seconds = time.perf_counter() - start
     timer.log_mean()
     trainable_parameters = parameter_count(spec.trainable_parameters(method))
+    scaffolding_parameters = (
+        None
+        if spec.scaffolding_parameters is None
+        else parameter_count(spec.scaffolding_parameters(method))
+    )
     checkpoint = store.load(POSTERIOR_CHECKPOINT_KEY)
     # Rebuild the posterior from the finalized checkpoint, exactly as a restore
     # does: BBB's stds -> rhos -> stds round trip is not bit-exact, and the run
@@ -480,6 +489,7 @@ def train_method_run(
             data=data,
             wall_clock_seconds=wall_clock_seconds,
             trainable_parameters=trainable_parameters,
+            scaffolding_parameters=scaffolding_parameters,
         ),
     )
     return run

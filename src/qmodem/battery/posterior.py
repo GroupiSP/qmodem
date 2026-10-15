@@ -82,6 +82,9 @@ VALIDATION_METRIC = "crps"
 COST_WALL_CLOCK = "cost/posterior/wall_clock_seconds"
 COST_TRAINABLE_PARAMETERS = "cost/posterior/trainable_parameters"
 COST_DRAWS_PER_SECOND = "cost/posterior/draws_per_second"
+COST_SCAFFOLDING_PARAMETERS = "cost/posterior/scaffolding_parameters"
+"""Parameters trained only to fit the posterior, not part of it (AVI's discriminator);
+logged only by methods that have any."""
 COST_EPOCH_SECONDS = "cost/posterior/epoch_seconds"
 """Wall-clock seconds of each posterior epoch (step = epoch)."""
 COST_SECONDS_PER_EPOCH = "cost/posterior/seconds_per_epoch"
@@ -114,13 +117,17 @@ class PosteriorSpec:
         build_method: Builds the inference method from the posterior-stage
             initialization key (``PosteriorKeys.init``). It is called once per
             training or restore, so it must return a fresh method every time.
-        trainable_parameters: Returns the parameters the method trains (e.g.
-            BBB's variational means and rhos), whose size is the trainable
-            parameter count of cost table T3. Called on the finalized method.
+        trainable_parameters: Returns the posterior's trained parameters (e.g.
+            BBB's variational means and rhos, AVI's generator), whose size is the
+            trainable parameter count of cost table T3. Called on the finalized
+            method.
         early_stopping: Whether the stage early-stops on validation CRPS
             (``False`` for pSGLD, which finalizes its last epoch).
         build_network: Builds the posterior network (e.g. the MCD dropout net).
             ``None`` uses a clone of the backbone's mean network.
+        scaffolding_parameters: Returns the parameters trained only to fit the
+            posterior and discarded afterwards (AVI's discriminator), counted
+            separately in T3. ``None`` if the method has none.
         method_metrics: Fixed, derived descriptors of the method (e.g. the AVI
             latent maps' parameter counts), logged once as metrics at step 0.
             They are not hyperparameters, so they never enter ``method_config``.
@@ -131,6 +138,7 @@ class PosteriorSpec:
     trainable_parameters: Callable[[InferenceMethod], PyTree]
     early_stopping: bool = True
     build_network: NetworkBuilder | None = None
+    scaffolding_parameters: Callable[[InferenceMethod], PyTree] | None = None
     method_metrics: Mapping[str, float] = dataclasses.field(default_factory=dict)
 
 
@@ -460,13 +468,17 @@ class PosteriorCost:
     Attributes:
         wall_clock_seconds: Wall-clock time of the posterior stage (prepare,
             train, finalize); zero without a posterior stage.
-        trainable_parameters: Number of parameters the method trains.
+        trainable_parameters: Number of parameters of the posterior the method
+            trains.
         draws_per_second: Posterior draws per second at the validation windows.
+        scaffolding_parameters: Number of parameters trained only to fit the
+            posterior (AVI's discriminator), or ``None`` if there are none.
     """
 
     wall_clock_seconds: float
     trainable_parameters: int
     draws_per_second: float
+    scaffolding_parameters: int | None = None
 
 
 def parameter_count(tree: PyTree) -> int:
@@ -555,11 +567,11 @@ def log_cost(tracker: ExperimentTracker, cost: PosteriorCost) -> None:
         tracker: The method run's tracker.
         cost: The cost to log.
     """
-    tracker.log_metrics(
-        {
-            COST_WALL_CLOCK: cost.wall_clock_seconds,
-            COST_TRAINABLE_PARAMETERS: float(cost.trainable_parameters),
-            COST_DRAWS_PER_SECOND: cost.draws_per_second,
-        },
-        step=0,
-    )
+    metrics = {
+        COST_WALL_CLOCK: cost.wall_clock_seconds,
+        COST_TRAINABLE_PARAMETERS: float(cost.trainable_parameters),
+        COST_DRAWS_PER_SECOND: cost.draws_per_second,
+    }
+    if cost.scaffolding_parameters is not None:
+        metrics[COST_SCAFFOLDING_PARAMETERS] = float(cost.scaffolding_parameters)
+    tracker.log_metrics(metrics, step=0)
