@@ -882,6 +882,24 @@ def load_scaler(run_id: str, name: str) -> LoadedScaler:
     return LoadedScaler(mlflow.pyfunc.load_model(f"runs:/{run_id}/{name}"))
 
 
+def load_fitted_scaler(run_id: str, name: str) -> DataScaler:
+    """Load the fitted scaler object logged with ``log_scaler``.
+
+    Unlike ``load_scaler``, the result has the scaler's own ``transform`` and
+    ``inverse_transform``, so a run consuming a backbone can window its data with
+    exactly the backbone's scaling, without refitting.
+
+    Args:
+        run_id: The run the scaler was logged into.
+        name: The scaler's model name, e.g. ``"x_scaler"``.
+
+    Returns:
+        The fitted scaler.
+    """
+    model = mlflow.pyfunc.load_model(f"runs:/{run_id}/{name}")
+    return model.unwrap_python_model().scaler
+
+
 # TODO: implement
 def get_tags_from_mlflow_run(run_id: str) -> dict[str, str]:
     pass

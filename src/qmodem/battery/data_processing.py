@@ -140,19 +140,28 @@ def make_data_pipeline(
 
 
 def prepare_windows(
-    train_df: pd.DataFrame, val_df: pd.DataFrame, pipeline: DataPipeline
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    pipeline: DataPipeline,
+    *,
+    fit_scalers: bool = True,
 ) -> PreparedData:
     """Window the train and validation histories with train-fitted scalers.
 
     Args:
         train_df: Training histories.
         val_df: Validation histories.
-        pipeline: The data pipeline. Its scalers are fitted on ``train_df``.
+        pipeline: The data pipeline.
+        fit_scalers: Fit the pipeline's scalers on ``train_df`` (a backbone run).
+            ``False`` uses already fitted scalers as they are (runs consuming a
+            backbone, see ``backbone_data_pipeline``).
 
     Returns:
         The prepared train and validation windows.
     """
-    pipeline.set_mode(ScalingMode.FIT_TRANSFORM)
+    pipeline.set_mode(
+        ScalingMode.FIT_TRANSFORM if fit_scalers else ScalingMode.TRANSFORM
+    )
     X_train, y_train = pipeline(train_df)
 
     pipeline.set_mode(ScalingMode.TRANSFORM)
@@ -230,6 +239,8 @@ def prepare_data(
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,
     pipeline: DataPipeline,
+    *,
+    fit_scalers: bool = True,
 ) -> PreparedData:
     """Prepare the multiple-scenarios windows from the raw training histories.
 
@@ -241,6 +252,8 @@ def prepare_data(
         data_gen_run_id: MLflow run ID of the data-generation run. The MLflow
             tracking URI must already be set.
         pipeline: The data pipeline (see ``make_data_pipeline``).
+        fit_scalers: Fit the pipeline's scalers on the training histories;
+            ``False`` keeps already fitted ones (see ``prepare_windows``).
 
     Returns:
         The prepared train and validation windows.
@@ -251,4 +264,4 @@ def prepare_data(
         n_histories_train=int(data_gen_run.data.params["n_histories_train"]),
     )
 
-    return prepare_windows(train_df, val_df, pipeline)
+    return prepare_windows(train_df, val_df, pipeline, fit_scalers=fit_scalers)

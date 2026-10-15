@@ -10,7 +10,9 @@ per-case samples as artifacts.
 
 The method run is selected by ``--run-id`` or by ``--method`` and ``--seed`` (newest
 finished ``role=method`` run). Configuration comes from the environment, falling
-back to ``.env`` (see ``train_backbone.py``).
+back to ``.env`` (see ``train_backbone.py``). The simulator config comes from the
+data-generation run tagged on the parent backbone run; a configured
+``DATA_GEN_RUN_ID_MULTI`` that disagrees with it is refused.
 
 Example:
     uv run scripts/battery_multiple_scenarios/evaluate.py --method hnn --seed 0
@@ -29,13 +31,14 @@ import pandas as pd
 from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
 
+from qmodem.battery.backbone_data import backbone_data_generation_run_id
 from qmodem.battery.data_generation import (
     load_simulation_config,
     reconstruct_true_rul_distribution,
     sim_updater_two_scenarios,
 )
 from qmodem.battery.evaluate import EvaluationParameters
-from qmodem.battery.method_run import evaluate_tracked_method_run
+from qmodem.battery.method_run import PARENT_RUN_TAG, evaluate_tracked_method_run
 from qmodem.tracking import MLFlowSetup, MLflowTracker, RunSelector
 from qmodem.utils import setup_script_logging
 
@@ -99,6 +102,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         args, experiment_ids=[experiment.experiment_id], client=client
     )
     logger.info("Evaluating method run %s", run_id)
+    data_run_id = backbone_data_generation_run_id(
+        client.get_run(run_id).data.tags[PARENT_RUN_TAG],
+        expected=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
+        client=client,
+    )
 
     parameters = EvaluationParameters(
         n_timestamps=args.n_timestamps, num_samples=args.num_samples
@@ -108,9 +116,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     reference_samples = reconstruct_true_rul_distribution(
         test_data=test_histories,
-        simulator_base_config=load_simulation_config(
-            run_id=os.environ["DATA_GEN_RUN_ID_MULTI"]
-        ),
+        simulator_base_config=load_simulation_config(run_id=data_run_id),
         n_soc0s=parameters.n_timestamps,
         n_mc_samples=args.n_reference_samples,
         simulator_updater=sim_updater_two_scenarios,

@@ -36,7 +36,7 @@ import mlflow
 from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
 
-from qmodem.battery.data_processing import WINDOW_SIZE, make_data_pipeline, prepare_data
+from qmodem.battery.backbone_data import prepare_backbone_data
 from qmodem.battery.hpo import (
     STUDY_SEED,
     VARIANCE_STUDY,
@@ -115,10 +115,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     mean_checkpoint = MLflowCheckpointStore(backbone_run_id).load(MEAN_CHECKPOINT_KEY)
     logger.info("Backbone run %s (seed %d)", backbone_run_id, seed)
 
-    data = prepare_data(
-        pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-        os.environ["DATA_GEN_RUN_ID_MULTI"],
-        make_data_pipeline(WINDOW_SIZE),
+    data = prepare_backbone_data(
+        backbone_run_id,
+        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+        expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
+        client=client,
     )
     logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
 
