@@ -15,11 +15,13 @@ from qmodem.battery.method_run import (
     BackboneHandle,
     BBBConfig,
     HNNConfig,
+    MCDConfig,
     MethodRun,
     method_key,
     restore_method_run,
     train_method_run,
 )
+from qmodem.battery.methods.mcd import build_mcd_net
 from qmodem.battery.posterior import (
     COST_DRAWS_PER_SECOND,
     COST_TRAINABLE_PARAMETERS,
@@ -275,6 +277,171 @@ def test_the_bbb_frozen_remainder_keeps_its_trained_mean_values(
 
 def test_the_bbb_posterior_loss_decreases(bbb_run) -> None:
     _, tracker, _ = bbb_run
+    losses = tracker.history("posterior/train/loss")
+
+    assert losses[-1] < losses[0]
+
+
+# --- MCD: input dropout before the conv, fine-tuned by MCDropout ------------------
+
+TINY_MCD = MCDConfig(stage=PosteriorStageHyperparameters(max_epochs=8, patience=2))
+
+
+def _train_mcd(trained_backbone, store_factory, tracker, store) -> MethodRun:
+    return train_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        data=trained_backbone.battery.data,
+        config=TINY_MCD,
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store,
+    )
+
+
+@pytest.fixture(scope="module")
+def mcd_run(trained_backbone, tracker_factory, store_factory):
+    tracker = tracker_factory()
+    persistent = InMemoryCheckpointStore()
+    run = _train_mcd(
+        trained_backbone, store_factory, tracker, store_factory(persistent)
+    )
+    return run, tracker, persistent
+
+
+def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(
+    mcd_run, trained_backbone, store_factory
+) -> None:
+    run, _, persistent = mcd_run
+    restored = restore_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        config=TINY_MCD,
+        seed=trained_backbone.seed,
+        store=store_factory(persistent),
+    )
+    inputs = trained_backbone.battery.data.val.features[:7]
+    key = jax.random.key(5)
+
+    expected = run.predictive(inputs, key, num_draws=PREDICTIVE_SAMPLE_COUNT)
+    actual = restored.predictive(inputs, key, num_draws=PREDICTIVE_SAMPLE_COUNT)
+
+    assert actual.draws.shape == (PREDICTIVE_SAMPLE_COUNT, 7, 1)
+    np.testing.assert_array_equal(actual.draws, expected.draws)
+
+
+def test_the_same_seed_gives_identical_finalized_mcd_checkpoints_and_draws(
+    mcd_run, trained_backbone, tracker_factory, store_factory, exactly_equal
+) -> None:
+    run, _, persistent = mcd_run
+    again_persistent = InMemoryCheckpointStore()
+    again = _train_mcd(
+        trained_backbone,
+        store_factory,
+        tracker_factory(),
+        store_factory(again_persistent),
+    )
+    inputs = trained_backbone.battery.data.val.features
+    key = jax.random.key(11)
+
+    exactly_equal(
+        again_persistent.load("posterior/best"), persistent.load("posterior/best")
+    )
+    np.testing.assert_array_equal(
+        again.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT).draws,
+        run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT).draws,
+    )
+
+
+@settings(max_examples=10, deadline=None)
+@given(start=st.integers(0, 20), size=st.integers(2, 6), split=st.integers(1, 5))
+def test_mcd_draws_differ_but_each_is_one_function_across_input_subsets(
+    mcd_run, trained_backbone, start: int, size: int, split: int
+) -> None:
+    run, _, _ = mcd_run
+    split = min(split, size - 1)
+    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    key = jax.random.key(3)
+
+    whole = run.posterior.sample_means(inputs, key, 4)
+    parts = np.concatenate(
+        [
+            run.posterior.sample_means(inputs[:split], key, 4),
+            run.posterior.sample_means(inputs[split:], key, 4),
+        ],
+        axis=1,
+    )
+    repeated = run.posterior.sample_means(np.repeat(inputs[:1], size, axis=0), key, 4)
+
+    np.testing.assert_allclose(parts, whole, rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(repeated, np.repeat(repeated[:, :1], size, axis=1))
+    for i in range(4):
+        for j in range(i):
+            assert not np.allclose(whole[i], whole[j])
+
+
+def test_an_mcd_run_finalizes_its_best_epoch_on_validation_crps(mcd_run) -> None:
+    run, tracker, persistent = mcd_run
+    crps = tracker.history("posterior/validation/crps")
+    finalized = persistent.load("posterior/best")
+
+    assert is_finalized(finalized)
+    assert finalized.epoch == int(np.argmin(crps))
+    assert run.checkpoint.epoch == finalized.epoch
+
+
+def test_an_mcd_run_logs_its_cost_and_only_its_posterior_hyperparameters(
+    mcd_run, trained_backbone
+) -> None:
+    _, tracker, _ = mcd_run
+    network = trained_backbone.mean_hp.network
+    conv_parameters = network.kernel_size * 2 * network.n_filters + network.n_filters
+
+    assert COST_TAGS <= tracker.tags
+    assert tracker.history(COST_TRAINABLE_PARAMETERS) == [float(conv_parameters)]
+    assert set(tracker.params) == {"posterior"}
+    assert tracker.params["posterior"] == {
+        **TINY_MCD.posterior_hyperparameters(),
+        "dataset_size": len(trained_backbone.battery.data.train),
+    }
+    for metric in ("crps", "nll", "rmse", "coverage_95"):
+        assert tracker.history(f"posterior/validation/{metric}")
+
+
+@settings(max_examples=10, deadline=None)
+@given(start=st.integers(0, 20), size=st.integers(1, 6), seed=st.integers(0, 2**16))
+def test_the_mcd_frozen_remainder_keeps_its_trained_mean_values(
+    mcd_run, trained_backbone, start: int, size: int, seed: int
+) -> None:
+    run, _, _ = mcd_run
+    mean_net = _merged(trained_backbone.checkpoints.mean.parameters)
+    trained_conv = nnx.state(mean_net, nnx.All(nnx.Param, INFERRED_SUBNETWORK))
+    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    key = jax.random.key(seed)
+    # Dropout changes the output, so the reference is the trained mean network
+    # under the same draw's mask: the MCD net with every Param at the trained
+    # mean's values and its one dropout stream keyed as stagereg keys a draw
+    # (stream i <- fold_in(key, i)).
+    reference = build_mcd_net(
+        trained_backbone.mean_hp.network, TINY_MCD.dropout_rate, jax.random.key(0)
+    )
+    nnx.update(reference, nnx.state(mean_net, nnx.Param))
+    nnx.update(
+        reference,
+        jax.tree.map(
+            lambda stream: stream.replace(jax.random.fold_in(key, 0)),
+            nnx.state(reference, nnx.RngKey),
+            is_leaf=lambda node: isinstance(node, nnx.Variable),
+        ),
+    )
+
+    np.testing.assert_allclose(
+        run.posterior.mean_function(trained_conv, inputs, key),
+        reference(inputs),
+        rtol=1e-6,
+    )
+
+
+def test_the_mcd_posterior_loss_decreases(mcd_run) -> None:
+    _, tracker, _ = mcd_run
     losses = tracker.history("posterior/train/loss")
 
     assert losses[-1] < losses[0]

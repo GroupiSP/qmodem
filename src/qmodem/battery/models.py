@@ -86,6 +86,52 @@ class MeanNet(nnx.Module):
         return self.linear(_pooled_conv_features(self.conv, self.activation, x))
 
 
+class MCDropoutNet(nnx.Module):
+    """MCD posterior network: the mean network with input dropout before the conv.
+
+    ``Dropout(rate) -> Conv1D -> act -> GAP -> Linear(n_filters, 1)``. The
+    dropout is elementwise over time and channels and its mask is broadcast over
+    the batch axis, so one mask set is one function of the inputs. Dropout has
+    no parameters, so the parameter tree is the mean network's.
+    """
+
+    def __init__(
+        self,
+        kernel_size: int,
+        n_filters: int,
+        activation: Activation,
+        dropout_rate: float,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Initialize the network.
+
+        Args:
+            kernel_size: Width of the 1D convolution kernel.
+            n_filters: Number of convolution filters.
+            activation: Activation applied after the convolution.
+            dropout_rate: Probability of dropping an input element.
+            rngs: RNGs of the parameter initializers and of the dropout masks.
+        """
+        self.dropout = nnx.Dropout(dropout_rate, broadcast_dims=(0,), rngs=rngs)
+        self.conv = _conv(kernel_size, n_filters, rngs)
+        self.activation = activation
+        self.linear = nnx.Linear(n_filters, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """Predict the mean RUL under the current dropout mask.
+
+        Args:
+            x: Windows of shape ``(B, W, IN_FEATURES)``.
+
+        Returns:
+            Means of shape ``(B, 1)``.
+        """
+        return self.linear(
+            _pooled_conv_features(self.conv, self.activation, self.dropout(x))
+        )
+
+
 class VarianceNet(nnx.Module):
     """Variance network ``Conv1D -> act -> GAP -> GammaHead``.
 

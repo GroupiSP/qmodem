@@ -15,6 +15,7 @@ from qmodem.battery.method_run import (
     BackboneHandle,
     BBBConfig,
     HNNConfig,
+    MCDConfig,
     TrackedMethodRun,
     evaluate_tracked_method_run,
     restore_method_run,
@@ -249,3 +250,60 @@ def test_a_bbb_method_run_is_evaluated_from_its_restored_posterior(
     assert metrics["evaluation/test/crps"] == pytest.approx(
         evaluation.aggregate.overall["crps"]
     )
+
+
+# --- MCD: the posterior network is rebuilt from the logged dropout rate ----------
+
+TINY_MCD = MCDConfig(
+    dropout_rate=0.2, stage=PosteriorStageHyperparameters(max_epochs=3, patience=1)
+)
+
+
+@pytest.fixture(scope="module")
+def tracked_mcd(tracked, mlflow_backend, trained_backbone) -> TrackedMethodRun:
+    return track_method_run(
+        backbone_run_id=tracked.backbone.run_id,
+        data=trained_backbone.battery.data,
+        config=TINY_MCD,
+        seed=trained_backbone.seed,
+        setup=mlflow_backend.setup,
+    )
+
+
+def test_an_mcd_method_run_is_evaluated_from_its_restored_posterior(
+    tracked, tracked_mcd, mlflow_backend
+) -> None:
+    client = mlflow_backend.client
+    histories = _test_histories()
+    rng = np.random.default_rng(3)
+    reference = {
+        f"test_case_{i}": rng.uniform(0, 250, (N_TIMESTAMPS, 7)) for i in range(2)
+    }
+    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_samples=20)
+
+    evaluation = evaluate_tracked_method_run(
+        tracked_mcd.run_id,
+        test_histories=histories,
+        reference_samples=reference,
+        parameters=parameters,
+        client=client,
+    )
+
+    expected = evaluate_predictive_model(
+        tracked_mcd.run,
+        test_histories=histories,
+        reference_samples=reference,
+        x_scaler=tracked.x_scaler,
+        y_scaler=tracked.y_scaler,
+        parameters=parameters,
+        key=tracked_mcd.run.evaluation_key,
+    )
+    assert client.get_run(tracked_mcd.run_id).data.params[
+        "posterior/dropout_rate"
+    ] == str(TINY_MCD.dropout_rate)
+    assert [
+        a.path
+        for a in client.list_artifacts(tracked_mcd.run_id, "checkpoints/posterior")
+    ] == ["checkpoints/posterior/best"]
+    for case, row in expected.table.items():
+        assert evaluation.table[case] == pytest.approx(row)

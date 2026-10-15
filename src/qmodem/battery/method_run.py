@@ -59,6 +59,7 @@ from .evaluate import (
 from .methods.base import MethodConfig
 from .methods.bbb import BBBConfig
 from .methods.hnn import HNNConfig
+from .methods.mcd import MCDConfig
 from .models import MeanNet, VarianceNet
 from .posterior import (
     POSTERIOR_CHECKPOINT_KEY,
@@ -114,6 +115,7 @@ def method_key(seed: int, method: Method) -> jax.Array:
 
 METHOD_CONFIGS: Mapping[Method, type[MethodConfig]] = {
     Method.HNN: HNNConfig,
+    Method.MCD: MCDConfig,
     Method.BBB: BBBConfig,
 }
 """The configuration type of every implemented method (strategy registry).
