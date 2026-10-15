@@ -32,7 +32,7 @@ def main() -> None:
 
     log_stream = setup_script_logging()
     hp = TrainHyperparameters(
-        method="bnn",
+        method="bbb",
         window_size=10,
         conv_kernel_size=3,
         conv_n_filters=29,

@@ -134,7 +134,7 @@ def test_build_model_raises_for_qavi_method() -> None:
     from qmodem.battery.dispatch import build_model
 
     params = ModelBuildParameters(
-        method=Method.QAVI,
+        method=Method.Q_AVI,
         conv_n_filters=4,
         conv_kernel_size=3,
         dropout_rate=0.1,

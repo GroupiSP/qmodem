@@ -75,10 +75,17 @@ from .train_steps import (
 
 
 class Method(StrEnum):
+    """The inference methods of the comparison protocol.
+
+    Values are the ``method`` tag of a method run (glossary names in lowercase).
+    """
+
     HNN = "hnn"
     MCD = "mcd"
-    BNN = "bnn"
-    QAVI = "qavi"
+    BBB = "bbb"
+    PSGLD = "psgld"
+    Q_AVI = "q-avi"
+    C_AVI = "c-avi"
 
 
 class _TrainHyperparametersBase(BaseModel):
@@ -107,7 +114,7 @@ class _TrainHyperparametersBase(BaseModel):
 class TrainHyperparameters(_TrainHyperparametersBase):
     """Hyperparameters for standard supervised training (HNN, MCD, BNN)."""
 
-    method: Literal[Method.HNN, Method.MCD, Method.BNN] = Method.HNN
+    method: Literal[Method.HNN, Method.MCD, Method.BBB] = Method.HNN
     learning_rate: float = 1e-2
     scheduler_alpha: float = 0.1
 
@@ -115,7 +122,7 @@ class TrainHyperparameters(_TrainHyperparametersBase):
 class QAVITrainHyperparameters(_TrainHyperparametersBase):
     """Hyperparameters for adversarial (QAVI) training."""
 
-    method: Literal[Method.QAVI] = Method.QAVI
+    method: Literal[Method.Q_AVI] = Method.Q_AVI
     pqc_n_qubits: int = 5
     pqc_n_layers: int = 1
     discriminator_hidden_size: int = 64

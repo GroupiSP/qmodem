@@ -42,10 +42,10 @@ def test_train_hyperparameters_defaults_are_valid() -> None:
 def test_qavi_train_hyperparameters_defaults_are_valid() -> None:
     hp = QAVITrainHyperparameters()
 
-    assert hp.method == Method.QAVI
+    assert hp.method == Method.Q_AVI
 
 
-@pytest.mark.parametrize("method", ["mcd", "bnn"])
+@pytest.mark.parametrize("method", ["mcd", "bbb"])
 def test_train_hyperparameters_accepts_standard_methods(method: str) -> None:
     hp = TrainHyperparameters(method=method)
 
@@ -54,7 +54,7 @@ def test_train_hyperparameters_accepts_standard_methods(method: str) -> None:
 
 def test_train_hyperparameters_rejects_qavi_method() -> None:
     with pytest.raises(ValidationError):
-        TrainHyperparameters(method="qavi")
+        TrainHyperparameters(method="q-avi")
 
 
 def test_qavi_train_hyperparameters_rejects_standard_method() -> None:
@@ -72,7 +72,7 @@ def test_train_hyperparameters_is_frozen() -> None:
 def test_load_train_hyperparameters_from_mlflow_round_trips_standard_variant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = TrainHyperparameters(method="bnn", window_size=15, learning_rate=0.005)
+    original = TrainHyperparameters(method="bbb", window_size=15, learning_rate=0.005)
     raw_params = {key: str(value) for key, value in original.model_dump().items()}
     monkeypatch.setattr(
         "qmodem.battery.train.get_run_parameters",
@@ -124,7 +124,7 @@ def test_model_build_parameters_derived_from_train_hyperparameters() -> None:
 
 
 @given(
-    method=st.sampled_from(["hnn", "mcd", "bnn"]),
+    method=st.sampled_from(["hnn", "mcd", "bbb"]),
     conv_kernel_size=st.integers(min_value=1, max_value=15),
     conv_n_filters=st.integers(min_value=1, max_value=64),
     dropout_rate=st.floats(

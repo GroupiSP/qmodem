@@ -54,7 +54,7 @@ def objective_factory(hp_hpo: HPOHyperparameters) -> Callable[[optuna.Trial], fl
         )
 
         hp_train = TrainHyperparameters(
-            method="bnn",
+            method="bbb",
             conv_kernel_size=conv_kernel_size,
             conv_n_filters=trial.suggest_int(
                 "conv_n_filters", hp_hpo.conv_n_filters_min, hp_hpo.conv_n_filters_max

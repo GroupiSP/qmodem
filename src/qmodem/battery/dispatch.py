@@ -55,7 +55,7 @@ def build_model(parameters: ModelBuildParameters) -> CNN:
                 mcd=True,
                 rngs=nnx.Rngs(parameters.net_init_seed),
             )
-        case Method.BNN:
+        case Method.BBB:
             return CNN(
                 conv_type=ConvType.BAYESIAN,
                 in_features=2,
@@ -66,7 +66,7 @@ def build_model(parameters: ModelBuildParameters) -> CNN:
                 mcd=False,
                 rngs=nnx.Rngs(parameters.net_init_seed),
             )
-        case Method.QAVI:
+        case Method.Q_AVI:
             raise ValueError(
                 "QAVI is not supported in this function. Please run adversarial training instead."
             )
