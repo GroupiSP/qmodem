@@ -238,7 +238,14 @@ class ClassicalLatentMap(nnx.Module):
 
 
 def _latent_input(key: jax.Array) -> jax.Array:
-    """Draw one latent scalar ``z ~ U(0, LATENT_UPPER)``."""
+    """Draw one latent scalar ``z ~ U(0, LATENT_UPPER)``.
+
+    Args:
+        key: The draw's key.
+
+    Returns:
+        The scalar latent input.
+    """
     return jax.random.uniform(key, (), maxval=LATENT_UPPER)
 
 
@@ -559,7 +566,14 @@ class AVI:
         self._state = {**self._state, "generator": state["generator"]}
 
     def _require_components(self) -> _Components:
-        """Return the live components, refusing an uninitialized method."""
+        """Return the live components, refusing an uninitialized method.
+
+        Returns:
+            The components built by ``init``.
+
+        Raises:
+            ValueError: If the method has not been initialized.
+        """
         if self._components is None:
             raise ValueError("AVI must be initialized with init().")
         return self._components
@@ -567,6 +581,11 @@ class AVI:
 
 def _require_same_tree(actual: PyTree, expected: PyTree, name: str) -> None:
     """Refuse a state part whose tree is not the live one's.
+
+    Args:
+        actual: The given state part.
+        expected: The live state part.
+        name: The part's name, for the error.
 
     Raises:
         ValueError: If the trees' structures differ.
@@ -666,117 +685,165 @@ def weight_spread(draws: PyTree) -> jax.Array:
     return jnp.mean(jnp.std(flat, axis=0))
 
 
-def _make_step(
-    *,
-    problem: PosteriorProblem,
-    generator: _GeneratorModel,
-    discriminator: _DiscriminatorModel,
-    generator_optimizer: optax.GradientTransformation,
-    discriminator_optimizer: optax.GradientTransformation,
-    adversarial_weight: float,
-    num_draws: int,
-    discriminator_steps: int,
-) -> Callable[..., tuple[PyTree, Mapping[str, jax.Array]]]:
-    """Return the jitted AVI update: k discriminator steps, then one generator step."""
-    if problem.aleatoric_variance is None:
-        raise ValueError("AVI needs the problem's aleatoric variance.")
-    aleatoric_variance = problem.aleatoric_variance
+@dataclass(frozen=True, eq=False)
+class _AVIStep:
+    """The AVI update as pure functions of the state.
+
+    One call takes k discriminator steps, then one generator step, on one batch.
+
+    Attributes:
+        problem: The posterior problem (likelihood, prior, mean function, N).
+        generator: The generator as a function of its parameters.
+        discriminator: The discriminator as a function of its parameters.
+        generator_optimizer: Steps the generator's parameters.
+        discriminator_optimizer: Steps the discriminator's parameters.
+        adversarial_weight: The adversarial weight λ.
+        num_draws: Whole-function draws S per step.
+        discriminator_steps: Discriminator steps k per generator step.
+    """
+
+    problem: PosteriorProblem
+    generator: _GeneratorModel
+    discriminator: _DiscriminatorModel
+    generator_optimizer: optax.GradientTransformation
+    discriminator_optimizer: optax.GradientTransformation
+    adversarial_weight: float
+    num_draws: int
+    discriminator_steps: int
+
+    def __post_init__(self) -> None:
+        """Refuse a problem without aleatoric variance.
+
+        Raises:
+            ValueError: If ``problem.aleatoric_variance`` is ``None``.
+        """
+        if self.problem.aleatoric_variance is None:
+            raise ValueError("AVI needs the problem's aleatoric variance.")
 
     def draws_and_fakes(
-        generator_parameters: nnx.State, inputs: PyTree, key: jax.Array
+        self, generator_parameters: nnx.State, inputs: PyTree, key: jax.Array
     ) -> tuple[PyTree, jax.Array]:
-        """Draw S parameter sets and one predictive sample per draw and window."""
-        standard_deviation = jnp.sqrt(aleatoric_variance(inputs))
+        """Draw S parameter sets and one predictive sample per draw and window.
+
+        Args:
+            generator_parameters: The generator's parameters.
+            inputs: The batch inputs.
+            key: Draw ``s`` uses ``fold_in(key, s)``.
+
+        Returns:
+            The draws (stacked on a leading axis S) and the fakes ``(S, B, 1)``.
+        """
+        standard_deviation = jnp.sqrt(self.problem.aleatoric_variance(inputs))
 
         def one(index: jax.Array) -> tuple[PyTree, jax.Array]:
             draw_key = jax.random.fold_in(key, index)
-            weights = generator.draw(generator_parameters, draw_key)
-            means = problem.mean_function(weights, inputs, network_key(draw_key))
+            weights = self.generator.draw(generator_parameters, draw_key)
+            means = self.problem.mean_function(weights, inputs, network_key(draw_key))
             noise = jax.random.normal(
                 jax.random.fold_in(draw_key, 1), means.shape, means.dtype
             )
             return weights, means + standard_deviation * noise
 
-        return jax.vmap(one)(jnp.arange(num_draws))
+        return jax.vmap(one)(jnp.arange(self.num_draws))
 
     def fake_logits(
-        discriminator_parameters: nnx.State, inputs: PyTree, fakes: jax.Array
+        self, discriminator_parameters: nnx.State, inputs: PyTree, fakes: jax.Array
     ) -> jax.Array:
+        """Score every draw's generated targets.
+
+        Args:
+            discriminator_parameters: The discriminator's parameters.
+            inputs: The batch inputs.
+            fakes: Generated targets ``(S, B, 1)``.
+
+        Returns:
+            Logits ``(S, B, 1)``.
+        """
         return jax.vmap(
-            lambda fake: discriminator(discriminator_parameters, inputs, fake)
+            lambda fake: self.discriminator(discriminator_parameters, inputs, fake)
         )(fakes)
 
     def discriminator_objective(
+        self,
         discriminator_parameters: nnx.State,
         inputs: PyTree,
         targets: jax.Array,
         fakes: jax.Array,
     ) -> tuple[jax.Array, jax.Array]:
-        real = discriminator(discriminator_parameters, inputs, targets)
+        """The discriminator's BCE of real against generated pairs.
+
+        Args:
+            discriminator_parameters: The discriminator's parameters.
+            inputs: The batch inputs.
+            targets: The real targets.
+            fakes: Generated targets ``(S, B, 1)``.
+
+        Returns:
+            The loss and its accuracy.
+        """
+        real = self.discriminator(discriminator_parameters, inputs, targets)
         return discriminator_loss(
-            real, fake_logits(discriminator_parameters, inputs, fakes)
+            real, self.fake_logits(discriminator_parameters, inputs, fakes)
         )
 
     def generator_objective(
+        self,
         generator_parameters: nnx.State,
         discriminator_parameters: nnx.State,
-        inputs: PyTree,
-        targets: jax.Array,
-        sample_weight: jax.Array | None,
+        batch: Batch,
         key: jax.Array,
     ) -> tuple[jax.Array, PyTree]:
-        weights, fakes = draws_and_fakes(generator_parameters, inputs, key)
-        batch = Batch(inputs=inputs, targets=targets, sample_weight=sample_weight)
-        likelihood_keys = jax.random.split(jax.random.fold_in(key, 2), num_draws)
+        """The generator loss of S fresh draws, with the draws as auxiliary output.
+
+        Args:
+            generator_parameters: The generator's parameters.
+            discriminator_parameters: The (stepped) discriminator's parameters.
+            batch: The training batch.
+            key: The generator step's key.
+
+        Returns:
+            The loss and the S training draws.
+        """
+        weights, fakes = self.draws_and_fakes(generator_parameters, batch.inputs, key)
+        likelihood_keys = jax.random.split(jax.random.fold_in(key, 2), self.num_draws)
         log_likelihoods = jax.vmap(
-            lambda w, k: problem.log_likelihood(w, batch, network_key(k))
+            lambda w, k: self.problem.log_likelihood(w, batch, network_key(k))
         )(weights, likelihood_keys)
-        log_priors = jax.vmap(problem.prior.log_prob)(weights)
+        log_priors = jax.vmap(self.problem.prior.log_prob)(weights)
         loss = generator_loss(
             log_likelihoods=log_likelihoods,
             log_priors=log_priors,
-            fake_logits=fake_logits(discriminator_parameters, inputs, fakes),
-            adversarial_weight=adversarial_weight,
-            dataset_size=problem.dataset_size,
+            fake_logits=self.fake_logits(discriminator_parameters, batch.inputs, fakes),
+            adversarial_weight=self.adversarial_weight,
+            dataset_size=self.problem.dataset_size,
         )
         return loss, weights
 
-    def spread_draws(
-        generator_parameters: nnx.State, training_draws: PyTree, key: jax.Array
-    ) -> PyTree:
-        if num_draws > 1:
-            return training_draws
-        extra = generator.draw(generator_parameters, key)
-        return jax.tree.map(
-            lambda drawn, more: jnp.concatenate([drawn, more[None]]),
-            training_draws,
-            extra,
-        )
+    def train_discriminator(
+        self, state: PyTree, inputs: PyTree, targets: jax.Array, key: jax.Array
+    ) -> tuple[nnx.State, PyTree, jax.Array, jax.Array]:
+        """Take the k discriminator steps against stop-gradiented fakes.
 
-    @jax.jit
-    def step(
-        state: PyTree,
-        inputs: PyTree,
-        targets: jax.Array,
-        sample_weight: jax.Array | None,
-        key: jax.Array,
-    ) -> tuple[PyTree, Mapping[str, jax.Array]]:
-        discriminator_keys = jax.random.split(
-            jax.random.fold_in(key, 0), discriminator_steps
-        )
-        generator_key = jax.random.fold_in(key, 1)
-        spread_key = jax.random.fold_in(key, 2)
+        Args:
+            state: The method state.
+            inputs: The batch inputs.
+            targets: The real targets.
+            key: Split into one key per step.
 
-        def discriminator_step(
+        Returns:
+            The stepped parameters and optimizer state, and the last step's loss
+            and accuracy.
+        """
+
+        def one_step(
             carry: tuple[nnx.State, PyTree], step_key: jax.Array
         ) -> tuple[tuple[nnx.State, PyTree], tuple[jax.Array, jax.Array]]:
             parameters, optimizer_state = carry
-            _, fakes = draws_and_fakes(state["generator"], inputs, step_key)
-            fakes = jax.lax.stop_gradient(fakes)
+            _, fakes = self.draws_and_fakes(state["generator"], inputs, step_key)
             (loss, accuracy), grads = jax.value_and_grad(
-                discriminator_objective, has_aux=True
-            )(parameters, inputs, targets, fakes)
-            updates, optimizer_state = discriminator_optimizer.update(
+                self.discriminator_objective, has_aux=True
+            )(parameters, inputs, targets, jax.lax.stop_gradient(fakes))
+            updates, optimizer_state = self.discriminator_optimizer.update(
                 grads, optimizer_state, parameters
             )
             return (optax.apply_updates(parameters, updates), optimizer_state), (
@@ -784,30 +851,76 @@ def _make_step(
                 accuracy,
             )
 
-        (discriminator_parameters, discriminator_state), (d_losses, accuracies) = (
-            jax.lax.scan(
-                discriminator_step,
-                (state["discriminator"], state["discriminator_optimizer"]),
-                discriminator_keys,
-            )
+        (parameters, optimizer_state), (losses, accuracies) = jax.lax.scan(
+            one_step,
+            (state["discriminator"], state["discriminator_optimizer"]),
+            jax.random.split(key, self.discriminator_steps),
+        )
+        return parameters, optimizer_state, losses[-1], accuracies[-1]
+
+    def spread_draws(
+        self, generator_parameters: nnx.State, training_draws: PyTree, key: jax.Array
+    ) -> PyTree:
+        """Return the draws the weight spread is measured on.
+
+        Args:
+            generator_parameters: The generator's parameters before the step.
+            training_draws: The S training draws.
+            key: The key of the extra draw taken when S = 1.
+
+        Returns:
+            The training draws, plus one extra generator draw when S = 1.
+        """
+        if self.num_draws > 1:
+            return training_draws
+        extra = self.generator.draw(generator_parameters, key)
+        return jax.tree.map(
+            lambda drawn, more: jnp.concatenate([drawn, more[None]]),
+            training_draws,
+            extra,
         )
 
+    def __call__(
+        self,
+        state: PyTree,
+        inputs: PyTree,
+        targets: jax.Array,
+        sample_weight: jax.Array | None,
+        key: jax.Array,
+    ) -> tuple[PyTree, Mapping[str, jax.Array]]:
+        """Take one AVI update.
+
+        Args:
+            state: The method state.
+            inputs: The batch inputs.
+            targets: The batch targets.
+            sample_weight: The batch sample weights, or ``None``.
+            key: The update key (``fold_in`` 0: discriminator, 1: generator,
+                2: the extra spread draw).
+
+        Returns:
+            The new state and ``{"loss", **diagnostics}``.
+        """
+        discriminator_parameters, discriminator_state, d_loss, accuracy = (
+            self.train_discriminator(state, inputs, targets, jax.random.fold_in(key, 0))
+        )
+        batch = Batch(inputs=inputs, targets=targets, sample_weight=sample_weight)
         (loss, training_draws), grads = jax.value_and_grad(
-            generator_objective, has_aux=True
+            self.generator_objective, has_aux=True
         )(
             state["generator"],
             discriminator_parameters,
-            inputs,
-            targets,
-            sample_weight,
-            generator_key,
+            batch,
+            jax.random.fold_in(key, 1),
         )
-        updates, generator_state = generator_optimizer.update(
+        updates, generator_state = self.generator_optimizer.update(
             grads, state["generator_optimizer"], state["generator"]
         )
         spread = weight_spread(
-            spread_draws(
-                state["generator"], jax.lax.stop_gradient(training_draws), spread_key
+            self.spread_draws(
+                state["generator"],
+                jax.lax.stop_gradient(training_draws),
+                jax.random.fold_in(key, 2),
             )
         )
         new_state = {
@@ -818,9 +931,22 @@ def _make_step(
         }
         return new_state, {
             "loss": loss,
-            DISCRIMINATOR_LOSS: d_losses[-1],
-            DISCRIMINATOR_ACCURACY: accuracies[-1],
+            DISCRIMINATOR_LOSS: d_loss,
+            DISCRIMINATOR_ACCURACY: accuracy,
             WEIGHT_SPREAD: spread,
         }
 
-    return step
+
+def _make_step(**parts: Any) -> Callable[..., tuple[PyTree, Mapping[str, jax.Array]]]:
+    """Return the jitted AVI update.
+
+    Args:
+        **parts: The fields of ``_AVIStep``.
+
+    Returns:
+        ``(state, inputs, targets, sample_weight, key) -> (state, outputs)``.
+
+    Raises:
+        ValueError: If the problem has no aleatoric variance.
+    """
+    return jax.jit(_AVIStep(**parts))
