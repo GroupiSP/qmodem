@@ -29,6 +29,8 @@ from qmodem.battery.train import (
     load_train_hyperparameters_from_mlflow,
     track_backbone_run,
     train_backbone,
+    train_mean_stage,
+    train_variance_stage,
 )
 from qmodem.tracking import MLflowCheckpointStore, ScalerArtifact
 
@@ -274,6 +276,68 @@ def test_backbone_training_loss_decreases(trained_backbone, stage: str) -> None:
     losses = trained_backbone.tracker.history(f"{stage}/train/loss")
 
     assert losses[-1] < losses[0]
+
+
+# --- Single backbone stages (HPO trials train one stage) ---------------------------
+
+
+def test_the_mean_stage_alone_reproduces_the_backbone_mean(
+    trained_backbone, tracker_factory, store_factory
+) -> None:
+    tracker, store = tracker_factory(), store_factory()
+
+    mean = train_mean_stage(
+        data=trained_backbone.battery.data,
+        mean_hp=trained_backbone.mean_hp,
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store,
+    )
+
+    _assert_bit_identical(mean, trained_backbone.checkpoints.mean)
+    assert not store.exists("variance/best")
+    assert tracker.params == {"mean": trained_backbone.mean_hp.model_dump()}
+    assert {tag.split("/")[0] for tag in tracker.tags} == {"mean"}
+
+
+def test_the_variance_stage_on_the_backbone_mean_reproduces_the_backbone_variance(
+    trained_backbone, tracker_factory, store_factory
+) -> None:
+    tracker, store = tracker_factory(), store_factory()
+
+    variance = train_variance_stage(
+        data=trained_backbone.battery.data,
+        mean_hp=trained_backbone.mean_hp,
+        mean_checkpoint=trained_backbone.checkpoints.mean,
+        variance_hp=trained_backbone.variance_hp,
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store,
+    )
+
+    _assert_bit_identical(variance, trained_backbone.checkpoints.variance)
+    assert not store.exists("mean/best")
+    assert tracker.params == {"variance": trained_backbone.variance_hp.model_dump()}
+    assert {tag.split("/")[0] for tag in tracker.tags} == {"variance"}
+
+
+def test_extra_event_sinks_see_every_validation_epoch(
+    trained_backbone, tracker_factory, store_factory
+) -> None:
+    seen = tracker_factory()
+
+    train_mean_stage(
+        data=trained_backbone.battery.data,
+        mean_hp=trained_backbone.mean_hp,
+        seed=trained_backbone.seed,
+        tracker=tracker_factory(),
+        store=store_factory(),
+        event_sinks=(seen,),
+    )
+
+    validation = [e for e in seen.events if e.name == "validation_end"]
+    assert [e.step for e in validation] == list(range(len(validation)))
+    assert validation
 
 
 # --- Backbone run tracked in MLflow (seam 2) --------------------------------------
