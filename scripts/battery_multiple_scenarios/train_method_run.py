@@ -11,8 +11,13 @@ The backbone is selected by ``--backbone-run-id`` or by ``--seed`` (newest finis
 ``role=backbone`` run of that seed). Configuration comes from the environment,
 falling back to ``.env`` (see ``train_backbone.py``).
 
+Methods with a posterior stage take the protocol's schedule (300 epochs, patience
+60) unless ``--max-epochs`` / ``--patience`` override it, e.g. for a smoke run.
+
 Example:
     uv run scripts/battery_multiple_scenarios/train_method_run.py --method hnn --seed 0
+    uv run scripts/battery_multiple_scenarios/train_method_run.py --method bbb --seed 0 \
+        --max-epochs 5
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import logging
 import os
 import pathlib
 from collections.abc import Sequence
+from typing import Any
 
 import mlflow
 from dotenv import load_dotenv
@@ -56,8 +62,47 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Inference method of the run.",
     )
     BACKBONE_SELECTOR.add_arguments(parser)
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=None,
+        help="Posterior-stage epoch cap (default: the protocol's 300).",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="Posterior-stage early-stopping patience (default: the protocol's 60).",
+    )
     parser.add_argument("--run-name", default=None, help="MLflow run name.")
     return parser.parse_args(argv)
+
+
+def posterior_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """Return the posterior hyperparameters set on the command line.
+
+    Args:
+        args: The parsed arguments.
+
+    Returns:
+        Nested hyperparameters for ``method_config`` (empty if none were given).
+
+    Raises:
+        SystemExit: If a schedule is given for a method without posterior stage.
+    """
+    stage = {
+        name: value
+        for name, value in (
+            ("max_epochs", args.max_epochs),
+            ("patience", args.patience),
+        )
+        if value is not None
+    }
+    if not stage:
+        return {}
+    if METHOD_CONFIGS[Method(args.method)]().posterior_spec() is None:
+        raise SystemExit(f"Method {args.method!r} has no posterior stage.")
+    return {"stage": stage}
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -91,7 +136,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     run = track_method_run(
         backbone_run_id=backbone_run_id,
         data=data,
-        config=method_config(method, {}),
+        config=method_config(method, posterior_overrides(args)),
         seed=seed,
         setup=dataclasses.replace(
             setup, run_name=args.run_name or f"{method.value}-seed-{seed}"

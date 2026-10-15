@@ -13,8 +13,9 @@ Every key of a method run derives from ``method_key(seed, method)``, i.e.
 from __future__ import annotations
 
 import dataclasses
+import time
 from collections.abc import Iterable, Mapping
-from typing import Any, ClassVar, Protocol
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -22,12 +23,12 @@ import numpy as np
 import optax
 import pandas as pd
 from mlflow.tracking import MlflowClient
-from pydantic import BaseModel, ConfigDict
 from stagereg.core import (
     Batch,
     Checkpoint,
     CheckpointStore,
     ExperimentTracker,
+    TrackerEventSink,
     TrainingState,
 )
 from stagereg.jax import (
@@ -48,14 +49,27 @@ from qmodem.tracking import (
     track_mlflow,
 )
 
-from .data_processing import PreparedData
+from .data_processing import PreparedData, make_loader, posterior_dataset_size
 from .evaluate import (
     Evaluation,
     EvaluationParameters,
     evaluate_predictive_model,
     log_evaluation,
 )
+from .methods.base import MethodConfig
+from .methods.bbb import BBBConfig
+from .methods.hnn import HNNConfig
 from .models import MeanNet, VarianceNet
+from .posterior import (
+    POSTERIOR_CHECKPOINT_KEY,
+    PREDICTIVE_SAMPLE_COUNT,
+    PosteriorCost,
+    PosteriorKeys,
+    build_posterior_stage,
+    draws_per_second,
+    log_cost,
+    parameter_count,
+)
 from .train import (
     MEAN_CHECKPOINT_KEY,
     VARIANCE_CHECKPOINT_KEY,
@@ -98,46 +112,23 @@ def method_key(seed: int, method: Method) -> jax.Array:
     return jax.random.fold_in(jax.random.key(seed), METHOD_KEY_INDEX[method])
 
 
-class MethodConfig(Protocol):
-    """The per-method configuration of a method run.
-
-    Each implementation is a frozen data container of the method's posterior
-    hyperparameters, registered in ``METHOD_CONFIGS``.
-    """
-
-    method: ClassVar[Method]
-
-    def posterior_hyperparameters(self) -> dict[str, Any]:
-        """Return the posterior hyperparameters, nested, logged under ``posterior``.
-
-        Returns:
-            The hyperparameters (empty for a method without posterior stage).
-        """
-        ...
-
-
-class _MethodConfigBase(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class HNNConfig(_MethodConfigBase):
-    """HNN: no posterior stage; its predictive is the backbone's mean and variance."""
-
-    method: ClassVar[Method] = Method.HNN
-
-    def posterior_hyperparameters(self) -> dict[str, Any]:
-        """Return the (empty) posterior hyperparameters of HNN.
-
-        Returns:
-            An empty mapping: HNN has no posterior stage.
-        """
-        return self.model_dump()
-
-
 METHOD_CONFIGS: Mapping[Method, type[MethodConfig]] = {
     Method.HNN: HNNConfig,
+    Method.BBB: BBBConfig,
 }
-"""The configuration type of every implemented method."""
+"""The configuration type of every implemented method (strategy registry).
+
+A new method adds its configuration module under ``qmodem.battery.methods`` and
+one entry here; the pipeline needs no change.
+"""
+
+
+DATASET_SIZE_PARAM = "dataset_size"
+"""Name of the logged posterior param holding the dataset size N.
+
+It is a method-run parameter, not part of any method configuration, so
+``method_config`` ignores it.
+"""
 
 
 def method_config(method: Method, hyperparameters: Mapping[str, Any]) -> MethodConfig:
@@ -157,7 +148,12 @@ def method_config(method: Method, hyperparameters: Mapping[str, Any]) -> MethodC
     """
     if method not in METHOD_CONFIGS:
         raise NotImplementedError(f"Method {method.value!r} is not implemented yet.")
-    return METHOD_CONFIGS[method].model_validate(dict(hyperparameters))
+    configuration = {
+        key: value
+        for key, value in hyperparameters.items()
+        if key != DATASET_SIZE_PARAM
+    }
+    return METHOD_CONFIGS[method].model_validate(configuration)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -289,6 +285,48 @@ def _require_registered(config: MethodConfig) -> None:
         )
 
 
+def _validation_inputs(data: PreparedData) -> jax.Array:
+    """Return every validation window, the inputs of the draws-per-second probe.
+
+    Args:
+        data: Prepared train and validation windows.
+
+    Returns:
+        The validation windows ``(B, W, C)``.
+    """
+    return jnp.asarray(data.val.features)
+
+
+def _cost(
+    run: MethodRun,
+    *,
+    data: PreparedData,
+    wall_clock_seconds: float,
+    trainable_parameters: int,
+) -> PosteriorCost:
+    """Measure the cost of a trained method run (table T3).
+
+    Args:
+        run: The trained method run.
+        data: Its windows (the draws are timed at the validation windows).
+        wall_clock_seconds: The posterior stage's wall-clock time.
+        trainable_parameters: The method's trainable parameter count.
+
+    Returns:
+        The cost, with the draws per second of ``PREDICTIVE_SAMPLE_COUNT`` draws.
+    """
+    inputs = _validation_inputs(data)
+    key = run.evaluation_key
+    return PosteriorCost(
+        wall_clock_seconds=wall_clock_seconds,
+        trainable_parameters=trainable_parameters,
+        draws_per_second=draws_per_second(
+            lambda: run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT).draws,
+            PREDICTIVE_SAMPLE_COUNT,
+        ),
+    )
+
+
 def train_method_run(
     *,
     backbone: BackboneHandle,
@@ -297,20 +335,27 @@ def train_method_run(
     seed: int,
     tracker: ExperimentTracker,
     store: CheckpointStore,
+    dataset_size: int | None = None,
 ) -> MethodRun:
     """Train a method run on a restored backbone.
 
     The backbone's finalized ``mean`` and ``variance`` checkpoints are restored,
     never re-trained. The training state is then re-keyed with
-    ``method_key(seed, method)``. HNN trains nothing and saves nothing.
+    ``method_key(seed, method)``. A method with a posterior stage then trains the
+    shared posterior stage (``build_posterior_stage``) and finalizes its best
+    epoch on validation CRPS into ``store`` (``posterior/best``). HNN trains and
+    saves nothing. Every method run logs its posterior hyperparameters (with the
+    dataset size N) and its cost metrics (``cost/posterior/...``).
 
     Args:
         backbone: The backbone run to restore.
         data: Prepared train and validation windows (for the posterior stage).
         config: The method's configuration.
         seed: The protocol seed r.
-        tracker: Receives the posterior hyperparameters and stage metrics.
+        tracker: Receives the posterior hyperparameters, stage metrics and cost.
         store: Receives the method run's ``posterior`` checkpoints.
+        dataset_size: The posterior's dataset size N. Defaults to the number of
+            training windows.
 
     Returns:
         The method run, with its finalized ``posterior`` checkpoint (``None`` for
@@ -320,15 +365,67 @@ def train_method_run(
         NotImplementedError: If the method is not implemented yet.
     """
     _require_registered(config)
+    spec = config.posterior_spec()
     hyperparameters = config.posterior_hyperparameters()
+    if spec is not None:
+        if dataset_size is None:
+            dataset_size = posterior_dataset_size(data)
+        hyperparameters = {**hyperparameters, DATASET_SIZE_PARAM: dataset_size}
     if hyperparameters:
         tracker.log_params({"posterior": hyperparameters})
     state, mean_net, variance_net = _restore_backbone(backbone, seed)
     key = method_key(seed, config.method)
     state.rng_state = key
-    return MethodRun(
-        method=config.method, key=key, mean_net=mean_net, variance_net=variance_net
+    if spec is None:
+        run = MethodRun(
+            method=config.method, key=key, mean_net=mean_net, variance_net=variance_net
+        )
+        log_cost(
+            tracker,
+            _cost(run, data=data, wall_clock_seconds=0.0, trainable_parameters=0),
+        )
+        return run
+
+    keys = PosteriorKeys.of(key)
+    method = spec.build_method(keys.init)
+    stage = build_posterior_stage(
+        spec=spec,
+        method=method,
+        network=backbone.mean_hp.network,
+        keys=keys,
+        loader=make_loader(data, batch_size=spec.stage.batch_size, key=keys.loader),
+        dataset_size=dataset_size,
+        event_sinks=(TrackerEventSink(tracker),),
+        store=store,
     )
+    start = time.perf_counter()
+    stage.prepare(state)
+    stage.train(state)
+    wall_clock_seconds = time.perf_counter() - start
+    trainable_parameters = parameter_count(spec.trainable_parameters(method))
+    checkpoint = store.load(POSTERIOR_CHECKPOINT_KEY)
+    # Rebuild the posterior from the finalized checkpoint, exactly as a restore
+    # does: BBB's stds -> rhos -> stds round trip is not bit-exact, and the run
+    # must predict like its restored self.
+    method.load_posterior(checkpoint.state.posterior_state)
+    run = MethodRun(
+        method=config.method,
+        key=key,
+        mean_net=mean_net,
+        variance_net=variance_net,
+        posterior=method.posterior(),
+        checkpoint=checkpoint,
+    )
+    log_cost(
+        tracker,
+        _cost(
+            run,
+            data=data,
+            wall_clock_seconds=wall_clock_seconds,
+            trainable_parameters=trainable_parameters,
+        ),
+    )
+    return run
 
 
 def restore_method_run(
@@ -354,12 +451,26 @@ def restore_method_run(
         NotImplementedError: If the method is not implemented yet.
     """
     _require_registered(config)
-    _, mean_net, variance_net = _restore_backbone(backbone, seed)
+    state, mean_net, variance_net = _restore_backbone(backbone, seed)
+    key = method_key(seed, config.method)
+    spec = config.posterior_spec()
+    if spec is None:
+        return MethodRun(
+            method=config.method, key=key, mean_net=mean_net, variance_net=variance_net
+        )
+    keys = PosteriorKeys.of(key)
+    method = spec.build_method(keys.init)
+    checkpoint = store.load(POSTERIOR_CHECKPOINT_KEY)
+    build_posterior_stage(
+        spec=spec, method=method, network=backbone.mean_hp.network, keys=keys
+    ).restore(state, checkpoint)
     return MethodRun(
         method=config.method,
-        key=method_key(seed, config.method),
+        key=key,
         mean_net=mean_net,
         variance_net=variance_net,
+        posterior=method.posterior(),
+        checkpoint=checkpoint,
     )
 
 
@@ -455,13 +566,15 @@ def track_method_run(
     seed: int,
     setup: MLFlowSetup,
     client: MlflowClient | None = None,
+    dataset_size: int | None = None,
 ) -> TrackedMethodRun:
     """Train a method run inside an MLflow run, as a child of its backbone run.
 
     The run is tagged with ``method_tags``. It receives the posterior
-    hyperparameters (flattened under ``posterior``), the posterior-stage metrics
-    and the finalized ``checkpoints/posterior/best`` (none for HNN). The backbone
-    is restored from the parent run's checkpoints.
+    hyperparameters (flattened under ``posterior``, with the dataset size N), the
+    posterior-stage metrics, the cost metrics and the finalized
+    ``checkpoints/posterior/best`` (none for HNN). The backbone is restored from
+    the parent run's checkpoints.
 
     Args:
         backbone_run_id: The backbone run's ID.
@@ -471,6 +584,8 @@ def track_method_run(
         setup: Tracking backend, experiment and run name. Its tags are extended
             with the method-run tags.
         client: The MLflow client. Defaults to one on the setup's backend.
+        dataset_size: The posterior's dataset size N. Defaults to the number of
+            training windows.
 
     Returns:
         The run ID and the trained method run.
@@ -486,6 +601,7 @@ def track_method_run(
             seed=seed,
             tracker=MLflowTracker(run_id, client=client),
             store=mlflow_checkpoint_store(run_id, client=client),
+            dataset_size=dataset_size,
         )
     return TrackedMethodRun(run_id=run_id, run=method_run)
 

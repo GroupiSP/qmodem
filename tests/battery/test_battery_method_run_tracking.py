@@ -13,10 +13,18 @@ from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE
 from qmodem.battery.evaluate import EvaluationParameters, evaluate_predictive_model
 from qmodem.battery.method_run import (
     BackboneHandle,
+    BBBConfig,
     HNNConfig,
+    TrackedMethodRun,
     evaluate_tracked_method_run,
     restore_method_run,
     track_method_run,
+)
+from qmodem.battery.posterior import (
+    COST_DRAWS_PER_SECOND,
+    COST_TRAINABLE_PARAMETERS,
+    COST_WALL_CLOCK,
+    PosteriorStageHyperparameters,
 )
 from qmodem.battery.train import TrackedBackbone, track_backbone_run
 from qmodem.tracking import ScalerArtifact
@@ -154,3 +162,90 @@ def test_the_evaluation_is_logged_into_the_method_run_with_the_parent_scalers(
         a.path for a in client.list_artifacts(tracked.method_run_id, "evaluation/test")
     }
     assert artifacts == {"evaluation/test/case_0", "evaluation/test/case_1"}
+
+
+# --- BBB: a method run with a posterior stage ------------------------------------
+
+TINY_BBB = BBBConfig(stage=PosteriorStageHyperparameters(max_epochs=3, patience=1))
+
+
+@pytest.fixture(scope="module")
+def tracked_bbb(tracked, mlflow_backend, trained_backbone) -> TrackedMethodRun:
+    return track_method_run(
+        backbone_run_id=tracked.backbone.run_id,
+        data=trained_backbone.battery.data,
+        config=TINY_BBB,
+        seed=trained_backbone.seed,
+        setup=mlflow_backend.setup,
+    )
+
+
+def test_a_bbb_method_run_logs_its_finalized_posterior_checkpoint_only(
+    tracked_bbb, mlflow_backend
+) -> None:
+    client = mlflow_backend.client
+
+    assert [
+        a.path for a in client.list_artifacts(tracked_bbb.run_id, "checkpoints")
+    ] == ["checkpoints/posterior"]
+    assert [
+        a.path
+        for a in client.list_artifacts(tracked_bbb.run_id, "checkpoints/posterior")
+    ] == ["checkpoints/posterior/best"]
+
+
+def test_a_bbb_method_run_logs_posterior_params_metrics_and_cost(
+    tracked_bbb, mlflow_backend, trained_backbone
+) -> None:
+    data = mlflow_backend.client.get_run(tracked_bbb.run_id).data
+
+    assert data.params == {
+        "posterior/optimizer/learning_rate": "0.001",
+        "posterior/initial_std": "0.001",
+        "posterior/stage/max_epochs": "3",
+        "posterior/stage/patience": "1",
+        "posterior/stage/batch_size": "32",
+        "posterior/dataset_size": str(len(trained_backbone.battery.data.train)),
+    }
+    assert {
+        "posterior/train/loss",
+        "posterior/validation/crps",
+        COST_WALL_CLOCK,
+        COST_TRAINABLE_PARAMETERS,
+        COST_DRAWS_PER_SECOND,
+    } <= set(data.metrics)
+
+
+def test_a_bbb_method_run_is_evaluated_from_its_restored_posterior(
+    tracked, tracked_bbb, mlflow_backend, trained_backbone, store_factory
+) -> None:
+    histories = _test_histories()
+    rng = np.random.default_rng(2)
+    reference = {
+        f"test_case_{i}": rng.uniform(0, 250, (N_TIMESTAMPS, 7)) for i in range(2)
+    }
+    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_samples=20)
+
+    evaluation = evaluate_tracked_method_run(
+        tracked_bbb.run_id,
+        test_histories=histories,
+        reference_samples=reference,
+        parameters=parameters,
+        client=mlflow_backend.client,
+    )
+
+    expected = evaluate_predictive_model(
+        tracked_bbb.run,
+        test_histories=histories,
+        reference_samples=reference,
+        x_scaler=tracked.x_scaler,
+        y_scaler=tracked.y_scaler,
+        parameters=parameters,
+        key=tracked_bbb.run.evaluation_key,
+    )
+    for case, row in expected.table.items():
+        assert evaluation.table[case] == pytest.approx(row)
+    metrics = mlflow_backend.client.get_run(tracked_bbb.run_id).data.metrics
+    assert metrics["evaluation/test/crps"] == pytest.approx(
+        evaluation.aggregate.overall["crps"]
+    )
