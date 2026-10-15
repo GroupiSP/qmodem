@@ -121,6 +121,9 @@ class PosteriorSpec:
             (``False`` for pSGLD, which finalizes its last epoch).
         build_network: Builds the posterior network (e.g. the MCD dropout net).
             ``None`` uses a clone of the backbone's mean network.
+        method_metrics: Fixed, derived descriptors of the method (e.g. the AVI
+            latent maps' parameter counts), logged once as metrics at step 0.
+            They are not hyperparameters, so they never enter ``method_config``.
     """
 
     stage: PosteriorStageHyperparameters
@@ -128,6 +131,7 @@ class PosteriorSpec:
     trainable_parameters: Callable[[InferenceMethod], PyTree]
     early_stopping: bool = True
     build_network: NetworkBuilder | None = None
+    method_metrics: Mapping[str, float] = dataclasses.field(default_factory=dict)
 
 
 # --- keys ------------------------------------------------------------------------

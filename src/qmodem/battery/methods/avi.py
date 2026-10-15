@@ -1,9 +1,12 @@
-"""The AVI methods on the battery CNN: Q-AVI (and, by its latent map only, C-AVI).
+"""The AVI methods on the battery CNN: Q-AVI and, by its latent map only, C-AVI.
 
 Both AVI methods share everything but the latent map: the hyperparameters
 (``AVIHyperparameters``), the conv-layer generator's postprocessor, the
 discriminator and the AVI inference method. A method's configuration only names its
 latent-map builder and calls ``avi_posterior_spec``.
+
+Every AVI method run logs both latent maps' parameter counts (``2Lq`` for the
+circuit, ``h(q + 2) + q`` for the matched MLP), so the parameter match is explicit.
 """
 
 from __future__ import annotations
@@ -16,7 +19,13 @@ import optax
 from flax import nnx
 from pydantic import BaseModel, ConfigDict, Field
 
-from qmodem.avi import AVI, LatentMap, QuantumLatentMap
+from qmodem.avi import (
+    AVI,
+    ClassicalLatentMap,
+    LatentMap,
+    QuantumLatentMap,
+    matched_hidden_width,
+)
 
 from ..models import ConvGenerator, WindowDiscriminator
 from ..posterior import PosteriorSpec, PosteriorStageHyperparameters, PyTree
@@ -49,6 +58,13 @@ class AVIHyperparameters(BaseModel):
     discriminator: OptimizerHyperparameters = OptimizerHyperparameters()
 
 
+LATENT_MAP_QUANTUM_PARAMETERS = "posterior/latent_map/quantum_parameters"
+"""Metric: the parameter count ``2Lq`` of the circuit latent map (Q-AVI)."""
+
+LATENT_MAP_CLASSICAL_PARAMETERS = "posterior/latent_map/classical_parameters"
+"""Metric: the parameter count ``h(q + 2) + q`` of the matched MLP map (C-AVI)."""
+
+
 type LatentMapBuilder = Callable[[AVIHyperparameters, nnx.Rngs], LatentMap]
 """Builds an AVI method's latent map from its hyperparameters and RNGs."""
 
@@ -66,6 +82,40 @@ def quantum_latent_map(hp: AVIHyperparameters, rngs: nnx.Rngs) -> LatentMap:
     return QuantumLatentMap(hp.n_qubits, hp.n_layers, rngs=rngs)
 
 
+def classical_latent_map(hp: AVIHyperparameters, rngs: nnx.Rngs) -> LatentMap:
+    """Build C-AVI's latent map: a ``1 → h → q`` tanh MLP matched to the circuit.
+
+    Args:
+        hp: The AVI hyperparameters (``n_qubits`` is the width ``q``; ``n_layers``
+            is the ``L`` of the circuit whose parameter count is matched).
+        rngs: RNGs of the MLP's (Flax default) initializers.
+
+    Returns:
+        The classical latent map, with ``h = matched_hidden_width(q, L)``.
+    """
+    return ClassicalLatentMap(
+        hp.n_qubits, matched_hidden_width(hp.n_qubits, hp.n_layers), rngs=rngs
+    )
+
+
+def latent_map_parameter_counts(hp: AVIHyperparameters) -> dict[str, float]:
+    """Return both latent maps' parameter counts, as logged by an AVI method run.
+
+    Args:
+        hp: The AVI hyperparameters (``n_qubits``, ``n_layers``).
+
+    Returns:
+        ``LATENT_MAP_QUANTUM_PARAMETERS`` (``2Lq``) and
+        ``LATENT_MAP_CLASSICAL_PARAMETERS`` (``h(q + 2) + q``).
+    """
+    q, n_layers = hp.n_qubits, hp.n_layers
+    hidden = matched_hidden_width(q, n_layers)
+    return {
+        LATENT_MAP_QUANTUM_PARAMETERS: float(2 * n_layers * q),
+        LATENT_MAP_CLASSICAL_PARAMETERS: float(hidden * (q + 2) + q),
+    }
+
+
 def avi_posterior_spec(
     *,
     hp: AVIHyperparameters,
@@ -80,7 +130,8 @@ def avi_posterior_spec(
         build_latent_map: Builds the method's latent map.
 
     Returns:
-        The posterior specification: early-stopped, on a clone of the mean net.
+        The posterior specification: early-stopped, on a clone of the mean net,
+        logging both latent maps' parameter counts.
     """
 
     def build_generator(warm_start: PyTree, key: jax.Array) -> ConvGenerator:
@@ -103,6 +154,7 @@ def avi_posterior_spec(
         stage=stage,
         build_method=build_method,
         trainable_parameters=_trained_parameters,
+        method_metrics=latent_map_parameter_counts(hp),
     )
 
 
@@ -148,4 +200,36 @@ class QAVIConfig(MethodConfigBase):
         """
         return avi_posterior_spec(
             hp=self.avi, stage=self.stage, build_latent_map=quantum_latent_map
+        )
+
+
+class CAVIConfig(MethodConfigBase):
+    """C-AVI: Q-AVI with a classical tanh MLP latent map of matched parameter count.
+
+    Attributes:
+        avi: The AVI hyperparameters (``n_layers`` sets the matched hidden width).
+        stage: The shared posterior-stage schedule.
+    """
+
+    method: ClassVar[Method] = Method.C_AVI
+
+    avi: AVIHyperparameters = AVIHyperparameters()
+    stage: PosteriorStageHyperparameters = PosteriorStageHyperparameters()
+
+    def posterior_hyperparameters(self) -> dict[str, Any]:
+        """Return the C-AVI posterior hyperparameters, nested.
+
+        Returns:
+            ``avi`` and ``stage``.
+        """
+        return self.model_dump()
+
+    def posterior_spec(self) -> PosteriorSpec:
+        """Return C-AVI's plug-in: AVI with the classical latent map.
+
+        Returns:
+            The posterior specification.
+        """
+        return avi_posterior_spec(
+            hp=self.avi, stage=self.stage, build_latent_map=classical_latent_map
         )

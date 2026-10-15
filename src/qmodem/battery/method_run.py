@@ -56,7 +56,7 @@ from .evaluate import (
     evaluate_predictive_model,
     log_evaluation,
 )
-from .methods.avi import QAVIConfig
+from .methods.avi import CAVIConfig, QAVIConfig
 from .methods.base import MethodConfig
 from .methods.bbb import BBBConfig
 from .methods.hnn import HNNConfig
@@ -122,6 +122,7 @@ METHOD_CONFIGS: Mapping[Method, type[MethodConfig]] = {
     Method.BBB: BBBConfig,
     Method.PSGLD: PSGLDConfig,
     Method.Q_AVI: QAVIConfig,
+    Method.C_AVI: CAVIConfig,
 }
 """The configuration type of every implemented method (strategy registry).
 
@@ -357,7 +358,8 @@ def train_method_run(
     shared posterior stage (``build_posterior_stage``) and finalizes its best
     epoch on validation CRPS into ``store`` (``posterior/best``). HNN trains and
     saves nothing. Every method run logs its posterior hyperparameters (with the
-    dataset size N) and its cost metrics (``cost/posterior/...``).
+    dataset size N), its method metrics (``PosteriorSpec.method_metrics``) and its
+    cost metrics (``cost/posterior/...``).
 
     Args:
         backbone: The backbone run to restore.
@@ -385,6 +387,8 @@ def train_method_run(
         hyperparameters = {**hyperparameters, DATASET_SIZE_PARAM: dataset_size}
     if hyperparameters:
         tracker.log_params({"posterior": hyperparameters})
+    if spec is not None and spec.method_metrics:
+        tracker.log_metrics(spec.method_metrics, step=0)
     state, mean_net, variance_net = _restore_backbone(backbone, seed)
     key = method_key(seed, config.method)
     state.rng_state = key

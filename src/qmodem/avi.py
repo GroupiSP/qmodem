@@ -182,6 +182,64 @@ class QuantumLatentMap(nnx.Module):
         return jnp.stack(self.circuit(z, self.angles[...]))
 
 
+def matched_hidden_width(width: int, n_layers: int) -> int:
+    """Return C-AVI's hidden width ``h = max(1, round((2Lq − q)/(q + 2)))``.
+
+    A ``1 → h → q`` MLP has ``h(q + 2) + q`` parameters, so this ``h`` brings its
+    count nearest to the ``2Lq`` of a ``q``-qubit, ``L``-layer circuit.
+
+    Args:
+        width: The latent width ``q``.
+        n_layers: The circuit layers ``L`` to match.
+
+    Returns:
+        The hidden width ``h`` (at least one).
+    """
+    return max(1, round((2 * n_layers * width - width) / (width + 2)))
+
+
+class ClassicalLatentMap(nnx.Module):
+    """The classical latent map ``z ↦ tanh(W₂ tanh(W₁z + b₁) + b₂) ∈ [-1, 1]^q``.
+
+    C-AVI's latent map: a ``1 → h → q`` tanh MLP fed the raw latent scalar, with
+    ``h(q + 2) + q`` parameters and Flax's default initialization (LeCun-normal
+    kernels, zero biases).
+    """
+
+    def __init__(self, width: int, hidden_width: int, *, rngs: nnx.Rngs) -> None:
+        """Initialize the two layers.
+
+        Args:
+            width: The latent width ``q``.
+            hidden_width: The hidden width ``h`` (see ``matched_hidden_width``).
+            rngs: RNGs of the layer initializers.
+        """
+        self.hidden = nnx.Linear(1, hidden_width, rngs=rngs)
+        self.output = nnx.Linear(hidden_width, width, rngs=rngs)
+
+    @property
+    def width(self) -> int:
+        """The latent width ``q``."""
+        return self.output.out_features
+
+    @property
+    def parameter_count(self) -> int:
+        """``h(q + 2) + q``: both layers' kernels and biases."""
+        hidden = self.hidden.out_features
+        return hidden * (self.width + 2) + self.width
+
+    def __call__(self, z: jax.Array) -> jax.Array:
+        """Map the raw latent scalar through the MLP.
+
+        Args:
+            z: A scalar random input.
+
+        Returns:
+            The latent vector, shape ``(q,)``.
+        """
+        return jnp.tanh(self.output(jnp.tanh(self.hidden(jnp.reshape(z, (1,))))))
+
+
 # --- posterior ---------------------------------------------------------------------
 
 
