@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import sklearn.preprocessing as skpp
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE
 from qmodem.battery.evaluate import EvaluationParameters, evaluate_predictive_model
@@ -19,6 +21,8 @@ from qmodem.battery.method_run import (
     PSGLDConfig,
     TrackedMethodRun,
     evaluate_tracked_method_run,
+    load_backbone_handle,
+    method_tags,
     restore_method_run,
     track_method_run,
 )
@@ -30,8 +34,16 @@ from qmodem.battery.posterior import (
     COST_WALL_CLOCK,
     PosteriorStageHyperparameters,
 )
-from qmodem.battery.train import TrackedBackbone, track_backbone_run
-from qmodem.tracking import ScalerArtifact
+from qmodem.battery.train import (
+    MeanHyperparameters,
+    MeanNetworkHyperparameters,
+    Method,
+    OptimizerHyperparameters,
+    TrackedBackbone,
+    VarianceHyperparameters,
+    track_backbone_run,
+)
+from qmodem.tracking import MLflowTracker, ScalerArtifact
 
 N_TIMESTAMPS = 5
 
@@ -380,3 +392,55 @@ def test_a_psgld_method_run_is_evaluated_on_all_its_retained_draws(
         assert prediction.samples.predictive_samples.shape[1] == TINY_PSGLD.num_samples
     for case, row in expected.table.items():
         assert evaluation.table[case] == pytest.approx(row)
+
+
+# --- pure and round-trip properties ------------------------------------------------
+
+
+@given(
+    method=st.sampled_from(list(Method)),
+    seed=st.integers(0, 99),
+    backbone_run_id=st.text("0123456789abcdef", min_size=1, max_size=32),
+)
+def test_method_tags_identify_the_run_and_its_backbone_parent(
+    method: Method, seed: int, backbone_run_id: str
+) -> None:
+    tags = method_tags(method=method, seed=seed, backbone_run_id=backbone_run_id)
+
+    assert (tags["role"], tags["method"], tags["seed"]) == ("method", method, str(seed))
+    assert tags["mlflow.parentRunId"] == backbone_run_id
+
+
+@settings(max_examples=10, deadline=None)
+@given(
+    kernel_size=st.integers(2, 8),
+    n_filters=st.integers(4, 64),
+    activation=st.sampled_from(["gelu", "relu", "silu", "tanh"]),
+    mean_lr=st.floats(1e-5, 1e-1),
+    variance_lr=st.floats(1e-5, 1e-1),
+)
+def test_a_backbone_handle_loads_the_hyperparameters_its_run_logged(
+    mlflow_backend,
+    kernel_size: int,
+    n_filters: int,
+    activation: str,
+    mean_lr: float,
+    variance_lr: float,
+) -> None:
+    mean_hp = MeanHyperparameters(
+        network=MeanNetworkHyperparameters(
+            kernel_size=kernel_size, n_filters=n_filters, activation=activation
+        ),
+        optimizer=OptimizerHyperparameters(learning_rate=mean_lr),
+    )
+    variance_hp = VarianceHyperparameters(
+        optimizer=OptimizerHyperparameters(learning_rate=variance_lr)
+    )
+    run_id = mlflow_backend.new_run()
+    MLflowTracker(run_id, client=mlflow_backend.client).log_params(
+        {"mean": mean_hp.model_dump(), "variance": variance_hp.model_dump()}
+    )
+
+    handle = load_backbone_handle(run_id, client=mlflow_backend.client)
+
+    assert (handle.mean_hp, handle.variance_hp) == (mean_hp, variance_hp)

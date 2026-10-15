@@ -5,7 +5,10 @@ from __future__ import annotations
 import dataclasses
 import uuid
 
+import optuna
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from mlflow.entities import Run
 from stagereg.core import Split, TrainingEvent, TrainingState
 
@@ -15,9 +18,21 @@ from qmodem.hpo import (
     StudyLayout,
     TrialRun,
     load_best_params,
+    make_study,
     run_study,
 )
-from qmodem.tracking import MLFlowSetup, RunCriteria, RunSelectionError, select_run
+from qmodem.tracking import (
+    MLFlowSetup,
+    Role,
+    RunCriteria,
+    RunSelectionError,
+    Stage,
+    hpo_study_tags,
+    hpo_trial_tags,
+    select_run,
+)
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 @pytest.fixture
@@ -204,3 +219,66 @@ def test_best_params_are_refused_from_a_run_that_is_not_a_study(
 
     with pytest.raises(ValueError):
         load_best_params(run_id, stage="mean", client=mlflow_backend.client)
+
+
+# --- pure properties ---------------------------------------------------------------
+
+_optional_text = st.one_of(st.none(), st.text("abcdef-", min_size=1, max_size=8))
+
+
+@settings(deadline=None)
+@given(
+    stage=st.sampled_from(list(Stage)),
+    method=_optional_text,
+    backbone_run_id=_optional_text,
+    seed=st.one_of(st.none(), st.integers(0, 99)),
+    number=st.integers(0, 99),
+)
+def test_trial_tags_name_the_study_and_carry_exactly_the_given_layout(
+    stage: Stage,
+    method: str | None,
+    backbone_run_id: str | None,
+    seed: int | None,
+    number: int,
+) -> None:
+    tags = hpo_trial_tags(
+        study_run_id="study",
+        number=number,
+        stage=stage,
+        method=method,
+        backbone_run_id=backbone_run_id,
+        seed=seed,
+    )
+    study = hpo_study_tags(
+        stage=stage,
+        n_trials=3,
+        method=method,
+        backbone_run_id=backbone_run_id,
+        seed=seed,
+    )
+
+    assert tags["role"] == Role.HPO_TRIAL
+    assert tags["mlflow.parentRunId"] == "study"
+    assert tags["hpo.trial"] == str(number)
+    assert study["role"] == Role.HPO_STUDY
+    for name, value in (
+        ("method", method),
+        ("backbone_run_id", backbone_run_id),
+        ("seed", None if seed is None else str(seed)),
+    ):
+        assert tags.get(name) == study.get(name) == value
+
+
+@settings(max_examples=10, deadline=None)
+@given(seed=st.integers(0, 2**16), n_trials=st.integers(1, 4))
+def test_a_study_with_a_fixed_sampler_seed_proposes_the_same_trials(
+    seed: int, n_trials: int
+) -> None:
+    def proposals() -> list[float]:
+        study = make_study(StudyConfig(n_trials=n_trials, sampler_seed=seed))
+        study.optimize(
+            lambda trial: trial.suggest_float("x", -1.0, 1.0) ** 2, n_trials=n_trials
+        )
+        return [trial.params["x"] for trial in study.trials]
+
+    assert proposals() == proposals()

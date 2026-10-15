@@ -11,21 +11,31 @@ import numpy as np
 import pytest
 import sklearn.preprocessing as skpp
 from flax import nnx
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import ValidationError
-from stagereg.core import Checkpoint, is_finalized
+from stagereg.core import Checkpoint, flatten_parameters, is_finalized
 
 from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE
 from qmodem.battery.train import (
     MeanHyperparameters,
     MeanNetworkHyperparameters,
+    OptimizerHyperparameters,
+    StageScheduleHyperparameters,
     TrackedBackbone,
+    backbone_keys,
     load_backbone_hyperparameters,
     track_backbone_run,
     train_backbone,
     train_mean_stage,
     train_variance_stage,
 )
-from qmodem.tracking import MLflowCheckpointStore, ScalerArtifact
+from qmodem.tracking import (
+    MLflowCheckpointStore,
+    ScalerArtifact,
+    Stage,
+    unflatten_parameters,
+)
 
 
 # --- Backbone run ---------------------------------------------------------
@@ -69,6 +79,58 @@ def test_mean_hyperparameters_are_frozen() -> None:
 def test_mean_network_rejects_unknown_activation() -> None:
     with pytest.raises(ValidationError):
         MeanNetworkHyperparameters(activation="softmax")
+
+
+_mean_hyperparameters = st.builds(
+    MeanHyperparameters,
+    network=st.builds(
+        MeanNetworkHyperparameters,
+        kernel_size=st.integers(2, 8),
+        n_filters=st.integers(4, 64),
+        activation=st.sampled_from(["gelu", "relu", "silu", "tanh"]),
+    ),
+    optimizer=st.builds(OptimizerHyperparameters, learning_rate=st.floats(1e-5, 1e-1)),
+    schedule=st.builds(
+        StageScheduleHyperparameters,
+        max_epochs=st.integers(1, 1000),
+        patience=st.integers(0, 100),
+    ),
+    batch_size=st.integers(1, 256),
+)
+
+
+@settings(deadline=None)
+@given(hp=_mean_hyperparameters)
+def test_mean_hyperparameters_round_trip_through_their_logged_params(
+    hp: MeanHyperparameters,
+) -> None:
+    flat = flatten_parameters({Stage.MEAN: hp.model_dump()})
+    logged = {name: str(value) for name, value in flat.items()}
+
+    nested = unflatten_parameters(logged)
+
+    assert MeanHyperparameters.model_validate(nested[Stage.MEAN]) == hp
+
+
+@settings(deadline=None)
+@given(seed=st.integers(0, 2**31 - 1), other=st.integers(0, 2**31 - 1))
+def test_backbone_keys_are_reproducible_and_distinct_across_streams_and_seeds(
+    seed: int, other: int
+) -> None:
+    keys = dataclasses.astuple(backbone_keys(seed))
+    again = dataclasses.astuple(backbone_keys(seed))
+    data = [tuple(np.asarray(jax.random.key_data(k)).ravel()) for k in keys]
+
+    assert all(
+        np.array_equal(jax.random.key_data(a), jax.random.key_data(b))
+        for a, b in zip(keys, again, strict=True)
+    )
+    assert len(set(data)) == len(data)
+    if other != seed:
+        others = dataclasses.astuple(backbone_keys(other))
+        assert not np.array_equal(
+            jax.random.key_data(others[0]), jax.random.key_data(keys[0])
+        )
 
 
 def test_backbone_returns_finalized_mean_and_variance_checkpoints(

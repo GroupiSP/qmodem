@@ -453,3 +453,31 @@ def _run_factory(client: MlflowClient) -> RunFactory:
 def make_run(mlflow_backend: MLflowBackend) -> RunFactory:
     """A run factory over a fresh experiment of the file-backed backend."""
     return _run_factory(mlflow_backend.client)
+
+
+def logged_round_trip(config: Any) -> Any:
+    """Rebuild a method configuration from its params as MLflow stores them.
+
+    The posterior hyperparameters are flattened and string-valued, exactly as a
+    method run logs them, then rebuilt with ``method_config``.
+
+    Args:
+        config: A method configuration.
+
+    Returns:
+        The rebuilt configuration.
+    """
+    from stagereg.core import flatten_parameters
+
+    from qmodem.battery.method_run import method_config
+    from qmodem.tracking import unflatten_parameters
+
+    flat = flatten_parameters(config.posterior_hyperparameters())
+    logged = {name: str(value) for name, value in flat.items()}
+    return method_config(config.method, unflatten_parameters(logged))
+
+
+@pytest.fixture(scope="session")
+def round_trip() -> Any:
+    """``logged_round_trip``: a configuration rebuilt from its logged params."""
+    return logged_round_trip
