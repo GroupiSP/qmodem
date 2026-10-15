@@ -59,6 +59,7 @@ from qmodem.battery.train import (
     track_backbone_run,
 )
 from qmodem.tracking import (
+    Stage,
     MLFlowSetup,
     MLflowTracker,
     ScalerArtifact,
@@ -127,8 +128,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     overridden = [
         f"{stage}/schedule/max_epochs"
         for stage, epochs in (
-            ("mean", args.mean_epochs),
-            ("variance", args.variance_epochs),
+            (Stage.MEAN, args.mean_epochs),
+            (Stage.VARIANCE, args.variance_epochs),
         )
         if epochs != _DEFAULT_SCHEDULE.max_epochs
     ]

@@ -37,7 +37,7 @@ from qmodem.battery.data_processing import WINDOW_SIZE, make_data_pipeline, prep
 from qmodem.battery.hpo import MEAN_STUDY, STUDY_SEED, MeanSearchSpace, mean_objective
 from qmodem.battery.train import MeanHyperparameters, StageScheduleHyperparameters
 from qmodem.hpo import StudyLayout, run_study
-from qmodem.tracking import MLFlowSetup, MLflowTracker
+from qmodem.tracking import Stage, MLFlowSetup, MLflowTracker
 from qmodem.utils import setup_script_logging
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     result = run_study(
         mean_objective(data=data, space=space, base=base, seed=STUDY_SEED),
         config=dataclasses.replace(MEAN_STUDY, n_trials=args.n_trials),
-        layout=StudyLayout(stage="mean"),
+        layout=StudyLayout(stage=Stage.MEAN),
         setup=setup,
         storage=args.optuna_storage,
     )

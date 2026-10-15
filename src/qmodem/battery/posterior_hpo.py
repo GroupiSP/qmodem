@@ -34,7 +34,7 @@ from qmodem.hpo import (
     load_best_params,
     run_study,
 )
-from qmodem.tracking import VARIANCE_STUDY_TAG, MLFlowSetup
+from qmodem.tracking import Stage, VARIANCE_STUDY_TAG, MLFlowSetup
 
 from .data_processing import PreparedData
 from .hpo import SAMPLER_SEED, STUDY_SEED
@@ -48,7 +48,7 @@ from .method_run import (
 from .posterior import VALIDATION_METRIC
 from .train import Method
 
-POSTERIOR_STAGE = "posterior"
+POSTERIOR_STAGE = Stage.POSTERIOR
 """The stage name of a posterior study, its trials' pruned stage and param prefix."""
 
 POSTERIOR_STUDY = StudyConfig(

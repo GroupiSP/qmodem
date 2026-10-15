@@ -51,6 +51,8 @@ from qmodem.battery.train import (
 )
 from qmodem.hpo import StudyLayout, run_study
 from qmodem.tracking import (
+    Role,
+    Stage,
     MLFlowSetup,
     MLflowCheckpointStore,
     MLflowTracker,
@@ -60,7 +62,7 @@ from qmodem.utils import setup_script_logging
 
 logger = logging.getLogger(__name__)
 
-_BACKBONE = RunSelector("backbone", run_id_flag="--backbone-run-id")
+_BACKBONE = RunSelector(Role.BACKBONE, run_id_flag="--backbone-run-id")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -142,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             seed=seed,
         ),
         config=dataclasses.replace(VARIANCE_STUDY, n_trials=args.n_trials),
-        layout=StudyLayout(stage="variance", backbone_run_id=backbone_run_id),
+        layout=StudyLayout(stage=Stage.VARIANCE, backbone_run_id=backbone_run_id),
         setup=setup,
         storage=args.optuna_storage,
     )

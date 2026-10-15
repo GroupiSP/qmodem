@@ -55,6 +55,7 @@ from qmodem.battery.posterior_hpo import (
 )
 from qmodem.battery.train import Method
 from qmodem.tracking import (
+    Role,
     MLFlowSetup,
     MLflowTracker,
     RunSelector,
@@ -64,7 +65,7 @@ from qmodem.utils import setup_script_logging
 
 logger = logging.getLogger(__name__)
 
-_BACKBONE = RunSelector("backbone", run_id_flag="--backbone-run-id")
+_BACKBONE = RunSelector(Role.BACKBONE, run_id_flag="--backbone-run-id")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

@@ -54,6 +54,8 @@ from stagereg.jax import (
     Predictor,
 )
 
+from qmodem.tracking import Stage
+
 from .data_processing import restore_only_loader
 from .evaluate import PRIMARY_COVERAGE_LEVEL, coverage_key
 from .train import MeanNetworkHyperparameters
@@ -515,7 +517,7 @@ class EpochTimer:
     """
 
     tracker: ExperimentTracker
-    stage: str = "posterior"
+    stage: str = Stage.POSTERIOR
     seconds: list[float] = dataclasses.field(default_factory=list)
     _last: float | None = dataclasses.field(default=None, init=False, repr=False)
 

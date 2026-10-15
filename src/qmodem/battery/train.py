@@ -31,6 +31,7 @@ from stagereg.jax import (
 )
 
 from qmodem.tracking import (
+    Stage,
     MLFlowSetup,
     MLflowTracker,
     ScalerArtifact,
@@ -344,7 +345,7 @@ def train_mean_stage(
     Returns:
         The finalized ``mean/best`` checkpoint.
     """
-    tracker.log_params({"mean": mean_hp.model_dump()})
+    tracker.log_params({Stage.MEAN: mean_hp.model_dump()})
     keys = backbone_keys(seed)
     stage = _mean_stage(
         mean_hp=mean_hp,
@@ -391,7 +392,7 @@ def train_variance_stage(
     Returns:
         The finalized ``variance/best`` checkpoint.
     """
-    tracker.log_params({"variance": variance_hp.model_dump()})
+    tracker.log_params({Stage.VARIANCE: variance_hp.model_dump()})
     keys = backbone_keys(seed)
     loader = make_loader(data, batch_size=mean_hp.batch_size, key=keys.loader)
     state = TrainingState()
@@ -542,6 +543,6 @@ def load_backbone_hyperparameters(
     client = client if client is not None else MlflowClient()
     nested = unflatten_parameters(client.get_run(run_id).data.params)
     return (
-        MeanHyperparameters.model_validate(nested["mean"]),
-        VarianceHyperparameters.model_validate(nested["variance"]),
+        MeanHyperparameters.model_validate(nested[Stage.MEAN]),
+        VarianceHyperparameters.model_validate(nested[Stage.VARIANCE]),
     )

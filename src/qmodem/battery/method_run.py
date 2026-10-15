@@ -41,6 +41,8 @@ from stagereg.jax import (
 )
 
 from qmodem.tracking import (
+    Role,
+    Stage,
     MLFlowSetup,
     MLflowTracker,
     load_scaler,
@@ -465,7 +467,7 @@ def _log_method_description(
     if spec is not None:
         hyperparameters = {**hyperparameters, DATASET_SIZE_PARAM: dataset_size}
     if hyperparameters:
-        tracker.log_params({"posterior": hyperparameters})
+        tracker.log_params({Stage.POSTERIOR: hyperparameters})
     if spec is not None and spec.method_metrics:
         tracker.log_metrics(spec.method_metrics, step=0)
 
@@ -606,7 +608,7 @@ def method_tags(*, method: Method, seed: int, backbone_run_id: str) -> dict[str,
         ``mlflow.parentRunId`` tags.
     """
     return {
-        "role": "method",
+        "role": Role.METHOD,
         "method": method.value,
         "seed": str(seed),
         "stagereg_version": stagereg_version(),
@@ -651,9 +653,9 @@ def load_backbone_handle(
     client = client if client is not None else MlflowClient()
     params = client.get_run(run_id).data.params
     return BackboneHandle(
-        mean_hp=MeanHyperparameters.model_validate(_unflatten(params, "mean")),
+        mean_hp=MeanHyperparameters.model_validate(_unflatten(params, Stage.MEAN)),
         variance_hp=VarianceHyperparameters.model_validate(
-            _unflatten(params, "variance")
+            _unflatten(params, Stage.VARIANCE)
         ),
         store=mlflow_checkpoint_store(run_id, client=client),
     )
@@ -750,7 +752,7 @@ def evaluate_tracked_method_run(
     backbone_run_id = run.data.tags[PARENT_RUN_TAG]
     method_run = restore_method_run(
         backbone=load_backbone_handle(backbone_run_id, client=client),
-        config=method_config(method, _unflatten(run.data.params, "posterior")),
+        config=method_config(method, _unflatten(run.data.params, Stage.POSTERIOR)),
         seed=int(run.data.tags["seed"]),
         store=mlflow_checkpoint_store(run_id, client=client),
     )

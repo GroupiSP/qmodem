@@ -39,12 +39,12 @@ from qmodem.battery.data_generation import (
 )
 from qmodem.battery.evaluate import EvaluationParameters
 from qmodem.battery.method_run import PARENT_RUN_TAG, evaluate_tracked_method_run
-from qmodem.tracking import MLFlowSetup, MLflowTracker, RunSelector
+from qmodem.tracking import Role, MLFlowSetup, MLflowTracker, RunSelector
 from qmodem.utils import setup_script_logging
 
 logger = logging.getLogger(__name__)
 
-METHOD_RUN_SELECTOR = RunSelector("method")
+METHOD_RUN_SELECTOR = RunSelector(Role.METHOD)
 _DEFAULTS = EvaluationParameters()
 _EVENT_TIME = 900.0
 """Time after which the simulator's policy is known (two-scenarios event)."""

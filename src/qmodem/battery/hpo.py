@@ -27,6 +27,8 @@ from qmodem.hpo import (
     load_best_params,
 )
 
+from qmodem.tracking import Stage
+
 from .data_processing import PreparedData
 from .train import (
     MeanHyperparameters,
@@ -136,7 +138,9 @@ class MeanSearchSpace(_SearchSpace):
             pydantic.ValidationError: If a value is invalid.
         """
         names = (KERNEL_SIZE, N_FILTERS, ACTIVATION, MEAN_LEARNING_RATE)
-        return MeanHyperparameters.model_validate(_apply(base, "mean", params, names))
+        return MeanHyperparameters.model_validate(
+            _apply(base, Stage.MEAN, params, names)
+        )
 
 
 class VarianceSearchSpace(_SearchSpace):
@@ -180,7 +184,7 @@ class VarianceSearchSpace(_SearchSpace):
             pydantic.ValidationError: If a value is invalid.
         """
         return VarianceHyperparameters.model_validate(
-            _apply(base, "variance", params, (VARIANCE_LEARNING_RATE,))
+            _apply(base, Stage.VARIANCE, params, (VARIANCE_LEARNING_RATE,))
         )
 
 
@@ -239,7 +243,7 @@ def mean_objective(
             seed=seed,
             tracker=run.tracker,
             store=run.store,
-            event_sinks=(PruningEventSink(run.trial, stage="mean"),),
+            event_sinks=(PruningEventSink(run.trial, stage=Stage.MEAN),),
         )
         return best_epoch_value(checkpoint)
 
@@ -290,7 +294,7 @@ def variance_objective(
             seed=seed,
             tracker=run.tracker,
             store=run.store,
-            event_sinks=(PruningEventSink(run.trial, stage="variance"),),
+            event_sinks=(PruningEventSink(run.trial, stage=Stage.VARIANCE),),
         )
         return best_epoch_value(checkpoint)
 
@@ -325,11 +329,11 @@ def frozen_backbone_hyperparameters(
     Raises:
         ValueError: If a run is not a study of the expected stage.
     """
-    mean_params = load_best_params(mean_study_run_id, stage="mean", client=client)
+    mean_params = load_best_params(mean_study_run_id, stage=Stage.MEAN, client=client)
     mean_hp = MeanSearchSpace().apply(mean_params, mean_base)
     if variance_study_run_id is None:
         return mean_hp, variance_base
     variance_params = load_best_params(
-        variance_study_run_id, stage="variance", client=client
+        variance_study_run_id, stage=Stage.VARIANCE, client=client
     )
     return mean_hp, VarianceSearchSpace().apply(variance_params, variance_base)
