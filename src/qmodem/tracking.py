@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
 from contextlib import contextmanager
@@ -11,6 +12,15 @@ import mlflow
 import pandas as pd
 
 from .utils import LAST_TRAIN_SETUP_PATH, ROOT_DIR
+
+
+def stagereg_version() -> str:
+    """Return the installed stagereg version, recorded as the ``stagereg_version`` tag.
+
+    Returns:
+        The version of the ``stagereg`` distribution.
+    """
+    return importlib.metadata.version("stagereg")
 
 
 class DatasetChoice(StrEnum):
