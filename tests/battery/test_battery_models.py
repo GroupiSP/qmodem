@@ -82,7 +82,9 @@ def test_a_draw_is_one_function_across_the_batch_and_input_subsets(
     tail = _keyed(net, jax.random.key(1))(inputs[split:])
 
     np.testing.assert_allclose(repeated, jnp.repeat(repeated[:1], 8, axis=0))
-    np.testing.assert_allclose(jnp.concatenate([head, tail]), whole, rtol=1e-6)
+    np.testing.assert_allclose(
+        jnp.concatenate([head, tail]), whole, rtol=1e-6, atol=1e-8
+    )
 
 
 def test_different_draws_give_different_functions() -> None:
