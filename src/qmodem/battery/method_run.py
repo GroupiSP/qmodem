@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import jax
@@ -24,7 +24,6 @@ import optax
 import pandas as pd
 from mlflow.tracking import MlflowClient
 from stagereg.core import (
-    Batch,
     Checkpoint,
     CheckpointStore,
     EventSink,
@@ -51,7 +50,12 @@ from qmodem.tracking import (
     unflatten_parameters,
 )
 
-from .data_processing import PreparedData, make_loader, posterior_dataset_size
+from .data_processing import (
+    PreparedData,
+    make_loader,
+    posterior_dataset_size,
+    restore_only_loader,
+)
 from .evaluate import (
     Evaluation,
     EvaluationParameters,
@@ -71,6 +75,7 @@ from .posterior import (
     EpochTimer,
     PosteriorCost,
     PosteriorKeys,
+    PosteriorSpec,
     build_posterior_stage,
     draws_per_second,
     log_cost,
@@ -268,15 +273,6 @@ class MethodRun:
         )
 
 
-def _restore_only_loader(*, split: str, epoch: int) -> Iterable[Batch]:
-    """A loader for stages that are only restored, never trained.
-
-    Raises:
-        RuntimeError: Always; a restored stage must not read data.
-    """
-    raise RuntimeError("A restored backbone stage must not read data.")
-
-
 def _restore_backbone(
     backbone: BackboneHandle, seed: int
 ) -> tuple[TrainingState, MeanNet, VarianceNet]:
@@ -299,7 +295,7 @@ def _restore_backbone(
         optimizer=create_optimizer(
             mean_net, optax.adam(backbone.mean_hp.optimizer.learning_rate)
         ),
-        train_loader=_restore_only_loader,
+        train_loader=restore_only_loader,
         options=SupervisedStageOptions(epochs=1, checkpoint_key=MEAN_CHECKPOINT_KEY),
     ).restore(state, backbone.store.load(MEAN_CHECKPOINT_KEY))
 
@@ -309,7 +305,7 @@ def _restore_backbone(
         optimizer=create_optimizer(
             variance_net, optax.adam(backbone.variance_hp.optimizer.learning_rate)
         ),
-        source_loader=_restore_only_loader,
+        source_loader=restore_only_loader,
         options=SupervisedStageOptions(
             epochs=1, checkpoint_key=VARIANCE_CHECKPOINT_KEY
         ),
@@ -422,29 +418,87 @@ def train_method_run(
     """
     _require_registered(config)
     spec = config.posterior_spec()
-    hyperparameters = config.posterior_hyperparameters()
-    if spec is not None:
-        if dataset_size is None:
-            dataset_size = posterior_dataset_size(data)
-        hyperparameters = {**hyperparameters, DATASET_SIZE_PARAM: dataset_size}
-    if hyperparameters:
-        tracker.log_params({"posterior": hyperparameters})
-    if spec is not None and spec.method_metrics:
-        tracker.log_metrics(spec.method_metrics, step=0)
+    if spec is not None and dataset_size is None:
+        dataset_size = posterior_dataset_size(data)
+    _log_method_description(tracker, config, spec, dataset_size)
     state, mean_net, variance_net = _restore_backbone(backbone, seed)
     key = method_key(seed, config.method)
     state.rng_state = key
+    run = MethodRun(
+        method=config.method, key=key, mean_net=mean_net, variance_net=variance_net
+    )
     if spec is None:
-        run = MethodRun(
-            method=config.method, key=key, mean_net=mean_net, variance_net=variance_net
-        )
         log_cost(
             tracker,
             _cost(run, data=data, wall_clock_seconds=0.0, trainable_parameters=0),
         )
         return run
+    return _train_posterior(
+        run,
+        state=state,
+        spec=spec,
+        backbone=backbone,
+        data=data,
+        dataset_size=dataset_size,
+        tracker=tracker,
+        store=store,
+        event_sinks=event_sinks,
+    )
 
-    keys = PosteriorKeys.of(key)
+
+def _log_method_description(
+    tracker: ExperimentTracker,
+    config: MethodConfig,
+    spec: PosteriorSpec | None,
+    dataset_size: int | None,
+) -> None:
+    """Log a method run's posterior hyperparameters and method metrics.
+
+    Args:
+        tracker: The method run's tracker.
+        config: The method's configuration.
+        spec: Its posterior specification, ``None`` for HNN.
+        dataset_size: The posterior's dataset size N (logged with the
+            hyperparameters of a posterior method).
+    """
+    hyperparameters = config.posterior_hyperparameters()
+    if spec is not None:
+        hyperparameters = {**hyperparameters, DATASET_SIZE_PARAM: dataset_size}
+    if hyperparameters:
+        tracker.log_params({"posterior": hyperparameters})
+    if spec is not None and spec.method_metrics:
+        tracker.log_metrics(spec.method_metrics, step=0)
+
+
+def _train_posterior(
+    run: MethodRun,
+    *,
+    state: TrainingState,
+    spec: PosteriorSpec,
+    backbone: BackboneHandle,
+    data: PreparedData,
+    dataset_size: int,
+    tracker: ExperimentTracker,
+    store: CheckpointStore,
+    event_sinks: Sequence[EventSink],
+) -> MethodRun:
+    """Train, finalize and cost a method's posterior stage on a restored backbone.
+
+    Args:
+        run: The method run without posterior (backbone restored, re-keyed).
+        state: The training state holding the restored backbone stages.
+        spec: The method's posterior specification.
+        backbone: The backbone (its network sizes).
+        data: Prepared train and validation windows.
+        dataset_size: The posterior's dataset size N.
+        tracker: Receives the stage metrics and the cost.
+        store: Receives the ``posterior`` checkpoints.
+        event_sinks: Extra receivers of the stage's events.
+
+    Returns:
+        The method run with its finalized posterior and checkpoint.
+    """
+    keys = PosteriorKeys.of(run.key)
     method = spec.build_method(keys.init)
     timer = EpochTimer(tracker)
     stage = build_posterior_stage(
@@ -463,36 +517,29 @@ def train_method_run(
     stage.train(state)
     wall_clock_seconds = time.perf_counter() - start
     timer.log_mean()
-    trainable_parameters = parameter_count(spec.trainable_parameters(method))
-    scaffolding_parameters = (
-        None
-        if spec.scaffolding_parameters is None
-        else parameter_count(spec.scaffolding_parameters(method))
-    )
     checkpoint = store.load(POSTERIOR_CHECKPOINT_KEY)
     # Rebuild the posterior from the finalized checkpoint, exactly as a restore
     # does: BBB's stds -> rhos -> stds round trip is not bit-exact, and the run
     # must predict like its restored self.
     method.load_posterior(checkpoint.state.posterior_state)
-    run = MethodRun(
-        method=config.method,
-        key=key,
-        mean_net=mean_net,
-        variance_net=variance_net,
-        posterior=method.posterior(),
-        checkpoint=checkpoint,
+    trained = dataclasses.replace(
+        run, posterior=method.posterior(), checkpoint=checkpoint
     )
     log_cost(
         tracker,
         _cost(
-            run,
+            trained,
             data=data,
             wall_clock_seconds=wall_clock_seconds,
-            trainable_parameters=trainable_parameters,
-            scaffolding_parameters=scaffolding_parameters,
+            trainable_parameters=parameter_count(spec.trainable_parameters(method)),
+            scaffolding_parameters=(
+                None
+                if spec.scaffolding_parameters is None
+                else parameter_count(spec.scaffolding_parameters(method))
+            ),
         ),
     )
-    return run
+    return trained
 
 
 def restore_method_run(

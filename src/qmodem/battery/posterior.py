@@ -21,7 +21,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import jax
@@ -54,6 +54,7 @@ from stagereg.jax import (
     Predictor,
 )
 
+from .data_processing import restore_only_loader
 from .evaluate import PRIMARY_COVERAGE_LEVEL, coverage_key
 from .train import MeanNetworkHyperparameters
 
@@ -394,15 +395,6 @@ def posterior_early_stopper(stage: PosteriorStageHyperparameters) -> EarlyStoppe
     )
 
 
-def _restore_only_loader(*, split: str, epoch: int) -> Iterable[Batch]:
-    """A loader for posterior stages that are only restored, never trained.
-
-    Raises:
-        RuntimeError: Always; a restored stage must not read data.
-    """
-    raise RuntimeError("A restored posterior stage must not read data.")
-
-
 def build_posterior_stage(
     *,
     spec: PosteriorSpec,
@@ -434,7 +426,7 @@ def build_posterior_stage(
     training = loader is not None
     return PosteriorStage(
         inference_method=FixedDrawKeyMethod(method, keys.validation_draws),
-        train_loader=loader if training else _restore_only_loader,
+        train_loader=loader if training else restore_only_loader,
         dataset_size=dataset_size if training and dataset_size is not None else 1,
         options=PosteriorStageOptions(
             epochs=spec.stage.max_epochs,

@@ -288,6 +288,21 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
     return loader
 
 
+def restore_only_loader(*, split: str, epoch: int) -> Iterable[Batch]:
+    """The loader of a stage that is only restored, never trained.
+
+    Args:
+        split: The requested split (never served).
+        epoch: The requested epoch (never served).
+
+    Raises:
+        RuntimeError: Always; a restored stage must not read data.
+    """
+    raise RuntimeError(
+        f"A restored stage must not read data (asked for {split!r}, epoch {epoch})."
+    )
+
+
 def prepare_data(
     raw_data_dir: pathlib.Path,
     data_gen_run_id: str,

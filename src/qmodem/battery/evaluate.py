@@ -441,6 +441,53 @@ def predict_case(
             do not have one row per timestamp.
     """
     history = history.sort_values("time").reset_index(drop=True)
+    policy = _case_policy(history, reference_samples, name=name, parameters=parameters)
+    indices = evaluation_indices(len(history), parameters.n_timestamps)
+    features = x_scaler.transform(
+        history[list(parameters.features)].to_numpy(dtype=np.float64)
+    )
+    windows = _windows(np.asarray(features), indices[1:], parameters.window_size)
+    sampled = _sample_predictive(
+        model, windows, y_scaler=y_scaler, num_samples=parameters.num_samples, key=key
+    )
+    # A finite posterior (pSGLD) yields its retained draws, not num_samples.
+    no_prediction = np.full((1, sampled.samples.shape[0]), np.nan)
+    return CasePrediction(
+        samples=CaseSamples(
+            name=name,
+            policy=policy,
+            times=history["time"].to_numpy(dtype=np.float64)[indices],
+            targets=history["rul"].to_numpy(dtype=np.float64)[indices],
+            reference_samples=np.asarray(reference_samples, dtype=np.float64),
+            predictive_samples=np.vstack([no_prediction, sampled.samples.T]),
+        ),
+        epistemic_variance=sampled.means.var(axis=0),
+        aleatoric_variance=(sampled.noise_scale**2).mean(axis=0),
+    )
+
+
+def _case_policy(
+    history: pd.DataFrame,
+    reference_samples: np.ndarray,
+    *,
+    name: str,
+    parameters: EvaluationParameters,
+) -> int:
+    """Validate a test case and return its policy.
+
+    Args:
+        history: The test case's rows.
+        reference_samples: Its simulator reference samples ``(T, R)``.
+        name: Test-case name.
+        parameters: Evaluation parameters.
+
+    Returns:
+        The case's single policy.
+
+    Raises:
+        ValueError: If the case has several policies, or the reference samples
+            do not have one row per timestamp.
+    """
     policies = history["policy_id"].unique()
     if len(policies) != 1:
         raise ValueError(f"Test case {name!r} has several policies: {policies}.")
@@ -449,38 +496,57 @@ def predict_case(
             f"Test case {name!r} has {len(reference_samples)} reference rows; "
             f"expected {parameters.n_timestamps}."
         )
-    indices = evaluation_indices(len(history), parameters.n_timestamps)
-    features = x_scaler.transform(
-        history[list(parameters.features)].to_numpy(dtype=np.float64)
-    )
-    windows = _windows(np.asarray(features), indices[1:], parameters.window_size)
+    return int(policies[0])
 
+
+@dataclasses.dataclass(frozen=True)
+class _PredictiveSamples:
+    """Predictive samples at the evaluated windows, in RUL units.
+
+    Attributes:
+        means: The draws' means ``(M, T-1)``.
+        noise_scale: The aleatoric standard deviation per draw ``(M, T-1)``.
+        samples: One noisy sample per draw ``(M, T-1)``.
+    """
+
+    means: np.ndarray
+    noise_scale: np.ndarray
+    samples: np.ndarray
+
+
+def _sample_predictive(
+    model: PredictiveModel,
+    windows: np.ndarray,
+    *,
+    y_scaler: TargetScaler,
+    num_samples: int,
+    key: jax.Array,
+) -> _PredictiveSamples:
+    """Draw M posterior draws and one aleatoric noise sample per draw.
+
+    Args:
+        model: The predictive model.
+        windows: Scaled input windows ``(T-1, W, C)``.
+        y_scaler: Target scaler (affine).
+        num_samples: Draws M of an unlimited posterior.
+        key: Split into the draw key and the noise key.
+
+    Returns:
+        The draws' means, noise scales and samples, unscaled.
+    """
     draw_key, noise_key = jax.random.split(key)
     predictive = model.predictive(
-        jnp.asarray(windows, dtype=jnp.float32), draw_key, parameters.num_samples
+        jnp.asarray(windows, dtype=jnp.float32), draw_key, num_samples
     )
     draws = np.asarray(predictive.draws, dtype=np.float64)[..., 0]  # (M, T-1)
     std = np.sqrt(
         np.broadcast_to(np.asarray(predictive.aleatoric_variance)[..., 0], draws.shape)
     )
     noise = np.asarray(jax.random.normal(noise_key, draws.shape), dtype=np.float64)
-
     means = _unscale(y_scaler, draws)
     noise_scale = _unscale(y_scaler, draws + std) - means  # affine: a * std
-    samples = means + noise_scale * noise
-    # A finite posterior (pSGLD) yields its retained draws, not num_samples.
-    no_prediction = np.full((1, samples.shape[0]), np.nan)
-    return CasePrediction(
-        samples=CaseSamples(
-            name=name,
-            policy=int(policies[0]),
-            times=history["time"].to_numpy(dtype=np.float64)[indices],
-            targets=history["rul"].to_numpy(dtype=np.float64)[indices],
-            reference_samples=np.asarray(reference_samples, dtype=np.float64),
-            predictive_samples=np.vstack([no_prediction, samples.T]),
-        ),
-        epistemic_variance=means.var(axis=0),
-        aleatoric_variance=(noise_scale**2).mean(axis=0),
+    return _PredictiveSamples(
+        means=means, noise_scale=noise_scale, samples=means + noise_scale * noise
     )
 
 
