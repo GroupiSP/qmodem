@@ -1,292 +1,192 @@
+"""Per-test-case evaluation driver of the comparison protocol (§6).
+
+The pure core maps per-timestamp predictive samples and simulator reference samples
+of each test case to a per-test-case metric table (``case_metrics``,
+``metric_table``). Aggregation over test cases is a separate function
+(``aggregate``). Every metric is a stagereg metric function; qmodem has no metric
+code of its own.
+
+The first timestamp of a test case (t0) has no prediction. It is dropped from every
+metric and serves only as the time origin of WSU.
+"""
+
 from __future__ import annotations
 
-import pathlib
-import tempfile
-from collections.abc import Sequence
-from typing import Protocol
+import dataclasses
+from collections.abc import Mapping, Sequence
 
-import jax
-import jax.numpy as jnp
-import matplotlib.pyplot as plt
-import mlflow
 import numpy as np
-import orbax.checkpoint as ocp
-import pandas as pd
-from flax import nnx
-from pydantic import BaseModel, ConfigDict
+from stagereg.core import coverage, expected_sample_crps, rmse, wsu
 
-from qmodem.battery.data_generation import TestCaseRULSamples, TestRULSamples
-from qmodem.battery.scoring import (
-    EvalTimeStamp,
-    TestCaseResults,
-    bar_plot_metrics_per_test_case,
-)
-from qmodem.data import DataScaler
+PRIMARY_COVERAGE_LEVEL = 0.95
+"""The protocol's primary coverage level, also the band WSU integrates."""
 
 
-class MCSampler(Protocol):
-    """Structural interface for models that can produce Monte Carlo predictions.
+@dataclasses.dataclass(frozen=True)
+class CaseSamples:
+    """Predictive and reference samples of one test case, one row per timestamp.
 
-    Every battery ``Net`` implements ``mc_sample`` with this signature; the concrete
-    sampling logic (MC dropout, Bayesian weights, output Gaussian, ...) is model-specific.
-    """
-
-    def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
-        """Return ``(n_samples, 1)`` predictions (in scaled space) for one window
-        ``X``."""
-        ...
-
-    def train(self) -> None: ...
-
-    def eval(self) -> None: ...
-
-
-class TestHyperparameters(BaseModel):
-    """The `test_` prefix is used to distinguish these hyperparameters from the ones
-    used for training.
+    Row 0 is t0. Its target, reference and predictive samples are never used, so a
+    missing prediction may be given as NaN.
 
     Attributes:
-        test_rng_seed: Seed for the PRNG key used to sample the model.
-        test_n_soc0s: Number of intermediate starting SoCs to evaluate per test case.
-        test_n_mc_samples: Number of Monte Carlo samples to draw per intermediate SoC.
-        test_grid_crps_start: Start of the RUL grid for CRPS computation. Before this value,
-            it is assumed that no particle reached the end of life.
-        test_grid_crps_end: End of the RUL grid for CRPS computation. After this value,
-            it is assumed that all particles reached the end of life.
-        test_grid_crps_num: Number of points in the RUL grid for CRPS computation.
+        name: Test-case name, e.g. ``"case_3"``.
+        policy: Current-policy ID of the test case.
+        times: Strictly increasing timestamps ``(T,)``, t0 first.
+        targets: Realized RUL at each timestamp ``(T,)``.
+        reference_samples: Simulator reference RUL samples ``(T, R)``.
+        predictive_samples: Predictive RUL samples ``(T, M)``.
     """
 
-    model_config = ConfigDict(frozen=True)
-
-    test_rng_seed: int = 123
-    test_n_soc0s: int = 20
-    test_n_mc_samples_simulator: int = 100
-    test_n_mc_samples_model: int = 100
-    test_grid_crps_start: float = 0.0
-    test_grid_crps_end: float = 5_000.0
-    # TODO: Specify the step, rather than the number of CRPS grid points.
-    test_grid_crps_resolution: int = 50
+    name: str
+    policy: int
+    times: np.ndarray
+    targets: np.ndarray
+    reference_samples: np.ndarray
+    predictive_samples: np.ndarray
 
 
-def get_test_case_data(df_test: pd.DataFrame, test_case_id: int) -> pd.DataFrame:
-    """Return the discharge data for a given test case ID from the test CSV file.
+def coverage_key(level: float) -> str:
+    """Return the metric name of the coverage at ``level``.
 
     Args:
-        df_test (pd.DataFrame): DataFrame containing the test data.
-        test_case_id (int): ID of the test case to retrieve.
+        level: Nominal coverage level in ``(0, 1)``.
 
     Returns:
-        pd.DataFrame: Discharge data for the specified test case.
+        The metric name, e.g. ``"coverage_95"`` for 0.95.
     """
-    return df_test[df_test["run_id"] == test_case_id]
+    return f"coverage_{100 * level:g}"
 
 
-def restore_model_state(model: nnx.Module, train_run_id: str) -> None:
-    """Restore the parameters of ``model`` in place from the ``best_model_state``
-    checkpoint logged to the given MLflow training run."""
-    abstract_state = nnx.state(model, nnx.Param)
-    with tempfile.TemporaryDirectory() as tmp:
-        artifact_dir = mlflow.artifacts.download_artifacts(
-            run_id=train_run_id,
-            artifact_path="best_model_state",
-            dst_path=tmp,
-        )
-        checkpointer = ocp.StandardCheckpointer()
-        restored_state = checkpointer.restore(
-            pathlib.Path(artifact_dir), target=abstract_state
-        )
-    nnx.update(model, restored_state)
-
-
-def evaluate_test_case(
-    model: MCSampler,
-    test_case_rul_samples: TestCaseRULSamples,
-    test_case_id: int,
-    test_data: pd.DataFrame,
-    features: Sequence[str],
-    x_scaler: DataScaler,
-    y_scaler: DataScaler,
-    window_size: int,
-    n_soc0s: int,
-    n_mc_samples: int,
-    key: jax.Array,
-) -> TestCaseResults:
-    """Evaluate the model on a single test case and return the results.
+def _band(samples: np.ndarray, level: float) -> tuple[np.ndarray, np.ndarray]:
+    """Return the empirical central band of each row of ``samples``.
 
     Args:
-        model: Model implementing :class:`MCSampler`, already constructed by the caller.
-        test_case_rul_samples: True RUL samples for the test case.
-        test_case_id: ID of the test case.
-        test_data: DataFrame containing the test data for the test case.
-        features: List of feature names to use as input to the model.
-        x_scaler: Scaler for the input features.
-        y_scaler: Scaler for the RUL predictions.
-        window_size: Size of the input window for the model.
-        n_soc0s: Number of intermediate starting SoCs to evaluate.
-        n_mc_samples: Number of Monte Carlo samples to draw per intermediate SoC.
-        key: PRNG key for sampling.
+        samples: Samples ``(U, M)``.
+        level: Nominal coverage level in ``(0, 1)``.
 
     Returns:
-        TestCaseResults: Results of the evaluation for the test case.
+        The lower and upper empirical percentiles ``(U,)`` each.
     """
-    # Order the test data by time to ensure correct evaluation.
-    test_data = test_data.sort_values("time").reset_index(drop=True)
-
-    soc0_idxs = np.linspace(0, len(test_data.time) - 1, num=n_soc0s, dtype=np.int32)
-
-    eval_time_stamps = []
-
-    # First timestamp is treated separately, since there is no prediction for it.
-    eval_time_stamps.append(
-        EvalTimeStamp(
-            time=test_data.time[soc0_idxs[0]],
-            target=test_data.rul[soc0_idxs[0]],
-            samples_true=test_case_rul_samples[
-                0, :
-            ],  # RUL samples for the first timestamp
-            samples_pred=np.array([]),  # No prediction for the first timestamp
-        )
-    )
-
-    for i in range(1, len(soc0_idxs)):
-        if soc0_idxs[i] < window_size:
-            time_window_start_idx = 0
-        else:
-            time_window_start_idx = soc0_idxs[i] - window_size
-        previous_window = test_data[
-            features
-        ][
-            time_window_start_idx : soc0_idxs[
-                i
-            ]  # time-window ends one step before the RUL timestamp
-        ]
-        previous_window = x_scaler.transform(previous_window)
-        X = jnp.array(
-            previous_window.reshape(1, -1, len(features))
-        )  # shape (1, window_size, n_features)
-
-        _, subkey = jax.random.split(key)
-        samples_pred = np.array(model.mc_sample(subkey, X, n_mc_samples))
-
-        eval_time_stamps.append(
-            EvalTimeStamp(
-                time=test_data.time[soc0_idxs[i]],
-                target=test_data.rul[soc0_idxs[i]],
-                samples_true=test_case_rul_samples[
-                    i, :
-                ],  # RUL samples for the current timestamp
-                samples_pred=y_scaler.inverse_transform(samples_pred),
-            )
-        )
-
-    return TestCaseResults(id=test_case_id, eval_time_stamps=eval_time_stamps)
+    tail = 100 * (1 - level) / 2
+    lower, upper = np.percentile(samples, [tail, 100 - tail], axis=1)
+    return lower, upper
 
 
-def log_evaluation_metrics(
-    test_case_results: list[TestCaseResults], hp: TestHyperparameters
-) -> None:
-    """Log the standard evaluation metrics and figures to the active MLflow run."""
-    # Metric 1: plot RUL predictions with CI over time.
-    fig, axs = plt.subplots(2, 5, figsize=(15, 6))
-    axs = axs.flatten()
+def case_metrics(
+    case: CaseSamples,
+    coverage_levels: Sequence[float] = (PRIMARY_COVERAGE_LEVEL,),
+    wsu_level: float = PRIMARY_COVERAGE_LEVEL,
+) -> dict[str, float]:
+    """Compute the protocol metrics of one test case, t0 excluded.
 
-    for test_case_result, ax in zip(test_case_results, axs):
-        test_case_result.plot_rul_over_time(ax, legend=False)
-
-    # Add a single legend for all subplots
-    handles, labels = axs.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=5)
-    fig.tight_layout(rect=[0, 0, 1, 0.92])  # Make room for the figure legend
-
-    mlflow.log_figure(fig, artifact_file="rul_predictions_over_test_cases.png")
-
-    # Metric 2: average RMSE
-    mlflow.log_metric(
-        "rmse_average",
-        np.mean([tcr.rmse for tcr in test_case_results]),
-    )
-
-    # Metric 3: average coverage
-    mlflow.log_metric(
-        "coverage_average",
-        np.mean([tcr.coverage for tcr in test_case_results]),
-    )
-
-    # Metric 4: average WSU
-    mlflow.log_metric(
-        "wsu_average",
-        np.mean([tcr.wsu for tcr in test_case_results]),
-    )
-
-    # Metric 5: average CRPS over a common grid.
-    rul_grid_crps = np.arange(
-        hp.test_grid_crps_start, hp.test_grid_crps_end, hp.test_grid_crps_resolution
-    )
-    mlflow.log_metric(
-        "crps_average",
-        np.mean([tcr.average_crps(x_grid=rul_grid_crps) for tcr in test_case_results]),
-    )
-
-    # Metric 6: bar plot of all metrics per test case.
-    fig, axs = plt.subplots(2, 2, figsize=(10, 6))
-    axs = axs.flatten()
-    bar_plot_metrics_per_test_case(
-        axes=axs, test_case_results=test_case_results, rul_grid_crps=rul_grid_crps
-    )
-    fig.tight_layout()
-    mlflow.log_figure(fig, artifact_file="metrics_per_test_case.png")
-
-
-def run_evaluation(
-    *,
-    model: MCSampler,
-    test_data: pd.DataFrame,
-    test_rul_samples: TestRULSamples,
-    x_scaler: DataScaler,
-    y_scaler: DataScaler,
-    window_size: int,
-    n_soc0s: int,
-    n_mc_samples: int,
-    features: Sequence[str] = ["voltage"],
-    key: jax.Array,
-) -> list[TestCaseResults]:
-    """Run the evaluation of the model on the test data and return the results.
+    - ``crps``: mean over timestamps of the expected CRPS against the reference
+      samples (``expected_sample_crps``).
+    - ``rmse``: of the predictive sample means against the realized targets.
+    - ``coverage_<level>``: share of targets inside the empirical central band.
+    - ``wsu``: stagereg's per-trajectory WSU of the ``wsu_level`` band, with t0 as
+      the time origin.
 
     Args:
-        model: Model implementing :class:`MCSampler`, already constructed by the caller.
-        test_data: DataFrame containing the test data.
-        test_rul_samples: True RUL samples for the test cases.
-        x_scaler: Scaler for the input features.
-        y_scaler: Scaler for the RUL predictions.
-        window_size: Size of the input window for the model.
-        n_soc0s: Number of intermediate starting SoCs to evaluate per test case.
-        n_mc_samples: Number of Monte Carlo samples to draw per intermediate SoC.
-        features: List of feature names to use as input to the model.
-        key: PRNG key for sampling.
+        case: The test case's samples.
+        coverage_levels: Nominal levels of the reported coverages.
+        wsu_level: Nominal level of the band WSU integrates.
 
     Returns:
-        List of TestCaseResults for each test case.
+        The metric values by name.
+
+    Raises:
+        ValueError: If a sample used by a metric is not finite, or the case has
+            fewer than two evaluated timestamps (see ``stagereg.core.wsu``).
     """
-    test_case_ids = test_data["run_id"].unique()
-    test_case_results = []
+    predictive = case.predictive_samples[1:]
+    targets = case.targets[1:]
+    metrics = {
+        "crps": float(
+            expected_sample_crps(predictive, case.reference_samples[1:]).mean()
+        ),
+        "rmse": rmse(targets, predictive.mean(axis=1)),
+    }
+    for level in coverage_levels:
+        metrics[coverage_key(level)] = coverage(targets, *_band(predictive, level))
+    lower, upper = _band(predictive, wsu_level)
+    # stagereg's wsu takes the origin from x[0] and never reads lower[0]/upper[0].
+    metrics["wsu"] = wsu(
+        np.concatenate([lower[:1], lower]),
+        np.concatenate([upper[:1], upper]),
+        case.times,
+    )
+    return metrics
 
-    for test_case_id in test_case_ids:
-        test_case_data = get_test_case_data(test_data, test_case_id=test_case_id)
 
-        _, subkey = jax.random.split(key)
-        test_case_result = evaluate_test_case(
-            model,
-            test_case_rul_samples=test_rul_samples[f"test_case_{test_case_id}"],
-            test_case_id=test_case_id,
-            test_data=test_case_data,
-            features=features,
-            x_scaler=x_scaler,
-            y_scaler=y_scaler,
-            n_soc0s=n_soc0s,
-            n_mc_samples=n_mc_samples,
-            window_size=window_size,
-            key=subkey,
-        )
-        test_case_results.append(test_case_result)
+def metric_table(
+    cases: Sequence[CaseSamples],
+    coverage_levels: Sequence[float] = (PRIMARY_COVERAGE_LEVEL,),
+    wsu_level: float = PRIMARY_COVERAGE_LEVEL,
+) -> dict[str, dict[str, float]]:
+    """Compute the metrics of every test case.
 
-    return test_case_results
+    Args:
+        cases: The test cases' samples.
+        coverage_levels: Nominal levels of the reported coverages.
+        wsu_level: Nominal level of the band WSU integrates.
+
+    Returns:
+        The metrics of each case (see ``case_metrics``), keyed by case name in input
+        order.
+    """
+    return {case.name: case_metrics(case, coverage_levels, wsu_level) for case in cases}
+
+
+@dataclasses.dataclass(frozen=True)
+class AggregateMetrics:
+    """Metrics averaged over test cases.
+
+    Attributes:
+        overall: Unweighted mean over every test case (primary).
+        per_policy: Unweighted mean over the cases of each current policy
+            (secondary).
+    """
+
+    overall: dict[str, float]
+    per_policy: dict[int, dict[str, float]]
+
+
+def _mean_rows(rows: Sequence[Mapping[str, float]]) -> dict[str, float]:
+    """Average metric rows key by key.
+
+    Args:
+        rows: Metric rows sharing the same keys.
+
+    Returns:
+        The unweighted mean of each metric.
+    """
+    return {key: float(np.mean([row[key] for row in rows])) for key in rows[0]}
+
+
+def aggregate(
+    table: Mapping[str, Mapping[str, float]], policies: Mapping[str, int]
+) -> AggregateMetrics:
+    """Average a metric table over test cases, overall and per current policy.
+
+    Args:
+        table: Metrics of each test case, keyed by case name.
+        policies: Current-policy ID of each test case, keyed by case name.
+
+    Returns:
+        The unweighted means over all cases and over the cases of each policy.
+
+    Raises:
+        ValueError: If ``table`` is empty.
+    """
+    if not table:
+        raise ValueError("Cannot aggregate an empty metric table.")
+    by_policy: dict[int, list[Mapping[str, float]]] = {}
+    for name, row in table.items():
+        by_policy.setdefault(policies[name], []).append(row)
+    return AggregateMetrics(
+        overall=_mean_rows(list(table.values())),
+        per_policy={
+            policy: _mean_rows(rows) for policy, rows in sorted(by_policy.items())
+        },
+    )
