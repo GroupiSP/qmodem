@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from enum import StrEnum
 from typing import Literal, TypeVar
 
@@ -29,7 +29,16 @@ from stagereg.jax import (
 )
 
 from qmodem.data import DataPipeline
-from qmodem.tracking import get_run_parameters
+from qmodem.tracking import (
+    MLFlowSetup,
+    MLflowTracker,
+    ScalerArtifact,
+    backbone_tags,
+    get_run_parameters,
+    log_scaler,
+    mlflow_checkpoint_store,
+    track_mlflow,
+)
 from qmodem.train import (
     LogReporter,
     mlflow_track_losses,
@@ -525,3 +534,61 @@ def train_backbone(
         mean=store.load(MEAN_CHECKPOINT_KEY),
         variance=store.load(VARIANCE_CHECKPOINT_KEY),
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class TrackedBackbone:
+    """A backbone run recorded in MLflow.
+
+    Attributes:
+        run_id: The backbone run's MLflow run ID.
+        checkpoints: Its finalized checkpoints (also logged as run artifacts).
+    """
+
+    run_id: str
+    checkpoints: BackboneCheckpoints
+
+
+def track_backbone_run(
+    *,
+    data: PreparedData,
+    mean_hp: MeanHyperparameters,
+    variance_hp: VarianceHyperparameters,
+    seed: int,
+    data_generation_run_id: str,
+    scalers: Sequence[ScalerArtifact],
+    setup: MLFlowSetup,
+) -> TrackedBackbone:
+    """Train a backbone run inside an MLflow run.
+
+    The run is tagged with ``backbone_tags``. It receives the mean and variance
+    hyperparameters (flattened by stage), every stage metric, the finalized ``mean``
+    and ``variance`` checkpoints (``checkpoints/<stage>/best``) and the scalers.
+
+    Args:
+        data: Prepared train and validation windows.
+        mean_hp: Mean-stage hyperparameters.
+        variance_hp: Variance-stage hyperparameters.
+        seed: The protocol seed r.
+        data_generation_run_id: MLflow run ID of the data-generation run.
+        scalers: The scalers fitted on the training histories.
+        setup: Tracking backend, experiment and run name. Its tags are extended
+            with the backbone tags.
+
+    Returns:
+        The run ID and the finalized checkpoints.
+    """
+    tags = backbone_tags(seed=seed, data_generation_run_id=data_generation_run_id)
+    with track_mlflow(dataclasses.replace(setup, tags={**setup.tags, **tags})) as run:
+        run_id = run.info.run_id
+        checkpoints = train_backbone(
+            data=data,
+            mean_hp=mean_hp,
+            variance_hp=variance_hp,
+            seed=seed,
+            tracker=MLflowTracker(run_id),
+            store=mlflow_checkpoint_store(run_id),
+        )
+        for scaler in scalers:
+            log_scaler(scaler)
+    return TrackedBackbone(run_id=run_id, checkpoints=checkpoints)

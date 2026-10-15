@@ -1,25 +1,36 @@
 from __future__ import annotations
 
+import dataclasses
+import os
+import subprocess
+import sys
+from typing import Any
 from unittest.mock import Mock
 
 import jax
 import numpy as np
 import pytest
+import sklearn.preprocessing as skpp
+from flax import nnx
 from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
 from stagereg.core import Checkpoint, is_finalized
 
+from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE
 from qmodem.battery.dispatch import ModelBuildParameters
 from qmodem.battery.train import (
     MeanHyperparameters,
     MeanNetworkHyperparameters,
     Method,
     QAVITrainHyperparameters,
+    TrackedBackbone,
     TrainHyperparameters,
     load_train_hyperparameters_from_mlflow,
+    track_backbone_run,
     train_backbone,
 )
+from qmodem.tracking import MLflowCheckpointStore, ScalerArtifact
 
 
 def test_train_hyperparameters_defaults_are_valid() -> None:
@@ -263,3 +274,178 @@ def test_backbone_training_loss_decreases(trained_backbone, stage: str) -> None:
     losses = trained_backbone.tracker.history(f"{stage}/train/loss")
 
     assert losses[-1] < losses[0]
+
+
+# --- Backbone run tracked in MLflow (seam 2) --------------------------------------
+
+_DATA_GENERATION_RUN_ID = "data-generation-run"
+
+
+@dataclasses.dataclass(frozen=True)
+class _MLflowBackbone:
+    run: TrackedBackbone
+    scalers: tuple[ScalerArtifact, ...]
+    backend: Any
+    reference: Any
+
+
+@pytest.fixture(scope="module")
+def mlflow_backbone(mlflow_backend, trained_backbone) -> _MLflowBackbone:
+    """A tiny backbone run tracked in the file-backed MLflow backend."""
+    rng = np.random.default_rng(0)
+    x_scaler = skpp.StandardScaler().fit(rng.normal(3.0, 2.0, (50, len(FEATURES))))
+    y_scaler = skpp.MinMaxScaler().fit(rng.uniform(0.0, 900.0, (50, 1)))
+    scalers = (
+        ScalerArtifact(
+            name="x_scaler",
+            scaler=x_scaler,
+            input_example=np.ones((WINDOW_SIZE, len(FEATURES))),
+        ),
+        ScalerArtifact(
+            name="y_scaler",
+            scaler=y_scaler,
+            input_example=np.ones((1, 1)),
+            predict_method="inverse_transform",
+        ),
+    )
+    run = track_backbone_run(
+        data=trained_backbone.battery.data,
+        mean_hp=trained_backbone.mean_hp,
+        variance_hp=trained_backbone.variance_hp,
+        seed=trained_backbone.seed,
+        data_generation_run_id=_DATA_GENERATION_RUN_ID,
+        scalers=scalers,
+        setup=mlflow_backend.setup,
+    )
+    return _MLflowBackbone(
+        run=run, scalers=scalers, backend=mlflow_backend, reference=trained_backbone
+    )
+
+
+def test_the_backbone_run_carries_its_four_tags(mlflow_backbone) -> None:
+    run = mlflow_backbone.backend.client.get_run(mlflow_backbone.run.run_id)
+
+    assert {
+        key: run.data.tags.get(key)
+        for key in ("role", "seed", "data_generation_run_id", "stagereg_version")
+    } == {
+        "role": "backbone",
+        "seed": str(mlflow_backbone.reference.seed),
+        "data_generation_run_id": _DATA_GENERATION_RUN_ID,
+        "stagereg_version": "0.2.0",
+    }
+    assert run.info.status == "FINISHED"
+
+
+def test_only_the_finalized_backbone_checkpoints_reach_mlflow(
+    mlflow_backbone, exactly_equal
+) -> None:
+    client = mlflow_backbone.backend.client
+    run_id = mlflow_backbone.run.run_id
+    store = MLflowCheckpointStore(run_id, client=client)
+
+    stage_dirs = {a.path for a in client.list_artifacts(run_id, "checkpoints")}
+    assert stage_dirs == {"checkpoints/mean", "checkpoints/variance"}
+    for stage in ("mean", "variance"):
+        assert {
+            a.path for a in client.list_artifacts(run_id, f"checkpoints/{stage}")
+        } == {f"checkpoints/{stage}/best"}
+    exactly_equal(store.load("mean/best"), mlflow_backbone.run.checkpoints.mean)
+    exactly_equal(store.load("variance/best"), mlflow_backbone.run.checkpoints.variance)
+    assert is_finalized(store.load("mean/best"))
+    assert is_finalized(store.load("variance/best"))
+
+
+@pytest.mark.parametrize("stage", ["mean", "variance"])
+def test_backbone_losses_arrive_with_the_stage_epoch_as_step(
+    mlflow_backbone, stage: str
+) -> None:
+    history = mlflow_backbone.backend.client.get_metric_history(
+        mlflow_backbone.run.run_id, f"{stage}/train/loss"
+    )
+
+    steps = sorted(metric.step for metric in history)
+    assert steps == list(range(len(steps)))
+    assert len(steps) >= 2
+
+
+def test_backbone_hyperparameters_arrive_flattened_by_stage(mlflow_backbone) -> None:
+    params = mlflow_backbone.backend.client.get_run(
+        mlflow_backbone.run.run_id
+    ).data.params
+    mean_hp = mlflow_backbone.reference.mean_hp
+    variance_hp = mlflow_backbone.reference.variance_hp
+
+    assert params["mean/optimizer/learning_rate"] == str(
+        mean_hp.optimizer.learning_rate
+    )
+    assert params["mean/network/n_filters"] == str(mean_hp.network.n_filters)
+    assert params["variance/schedule/patience"] == str(variance_hp.schedule.patience)
+
+
+def test_the_tracked_backbone_matches_the_untracked_one(
+    mlflow_backbone, exactly_equal
+) -> None:
+    exactly_equal(
+        mlflow_backbone.run.checkpoints.mean.parameters,
+        mlflow_backbone.reference.checkpoints.mean.parameters,
+    )
+
+
+_FRESH_PROCESS_RESTORE = """
+import sys
+
+import jax.numpy as jnp
+import numpy as np
+from flax import nnx
+
+from qmodem.tracking import MLflowCheckpointStore, load_scaler
+
+run_id, out = sys.argv[1], sys.argv[2]
+store = MLflowCheckpointStore(run_id)
+inputs = jnp.asarray(np.load(out)["inputs"])
+mean = store.load("mean/best").parameters
+variance = store.load("variance/best").parameters
+np.savez(
+    out,
+    mean=np.asarray(nnx.merge(mean.graphdef, mean.state)(inputs)),
+    variance=np.asarray(nnx.merge(variance.graphdef, variance.state)(inputs).mean()),
+    x_scaled=load_scaler(run_id, "x_scaler").transform(np.load(out)["features"]),
+    y_rul=load_scaler(run_id, "y_scaler").inverse_transform(np.load(out)["targets"]),
+)
+"""
+
+
+def test_backbone_checkpoints_and_scalers_restore_in_a_fresh_process(
+    mlflow_backbone, tmp_path
+) -> None:
+    inputs = np.asarray(mlflow_backbone.reference.battery.data.val.features[:5])
+    features = np.linspace(0.5, 1.5, 2 * WINDOW_SIZE).reshape(WINDOW_SIZE, 2)
+    targets = np.linspace(0.0, 1.0, 4).reshape(4, 1)
+    out = tmp_path / "restored.npz"
+    np.savez(out, inputs=inputs, features=features, targets=targets)
+
+    subprocess.run(
+        [sys.executable, "-c", _FRESH_PROCESS_RESTORE, mlflow_backbone.run.run_id, out],
+        check=True,
+        env={
+            **os.environ,
+            "MLFLOW_TRACKING_URI": mlflow_backbone.backend.setup.backend_store,
+        },
+    )
+
+    restored = np.load(out)
+    checkpoints = mlflow_backbone.run.checkpoints
+    mean = nnx.merge(
+        checkpoints.mean.parameters.graphdef, checkpoints.mean.parameters.state
+    )
+    variance = nnx.merge(
+        checkpoints.variance.parameters.graphdef, checkpoints.variance.parameters.state
+    )
+    np.testing.assert_array_equal(restored["mean"], np.asarray(mean(inputs)))
+    np.testing.assert_array_equal(
+        restored["variance"], np.asarray(variance(inputs).mean())
+    )
+    x_scaler, y_scaler = (s.scaler for s in mlflow_backbone.scalers)
+    np.testing.assert_allclose(restored["x_scaled"], x_scaler.transform(features))
+    np.testing.assert_allclose(restored["y_rul"], y_scaler.inverse_transform(targets))
