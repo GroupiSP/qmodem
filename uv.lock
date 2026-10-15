@@ -2999,7 +2999,6 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "simbat" },
     { name = "stagereg", extra = ["jax"] },
-    { name = "tqdm" },
 ]
 
 [package.dev-dependencies]
@@ -3031,7 +3030,6 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "simbat", git = "https://github.com/GroupiSP/simbat.git" },
     { name = "stagereg", extras = ["jax"], specifier = "==0.2.0" },
-    { name = "tqdm", specifier = ">=4.67.3" },
 ]
 
 [package.metadata.requires-dev]

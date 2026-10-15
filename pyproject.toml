@@ -25,7 +25,6 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "simbat",
     "stagereg[jax]==0.2.0",
-    "tqdm>=4.67.3",
 ]
 
 [build-system]
