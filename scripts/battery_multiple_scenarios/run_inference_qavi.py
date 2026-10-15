@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import pathlib
 
@@ -25,21 +26,24 @@ from qmodem.battery.train import (
     load_train_hyperparameters_from_mlflow,
 )
 from qmodem.tracking import (
+    MLFlowSetup,
     load_scaler,
-    retrieve_mlflow_setup_train,
     track_mlflow,
 )
 from qmodem.utils import setup_script_logging
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate a legacy training run.")
+    parser.add_argument("--run-id", required=True, help="Training run to evaluate.")
+    args = parser.parse_args()
     load_dotenv(override=True)
 
     log_stream = setup_script_logging()
 
     hp = TestHyperparameters()
 
-    mlflow_setup = retrieve_mlflow_setup_train()
+    mlflow_setup = MLFlowSetup(run_id=args.run_id)
 
     with track_mlflow(setup=mlflow_setup) as run:
         train_hp = load_train_hyperparameters_from_mlflow(

@@ -24,7 +24,6 @@ from qmodem.tracking import (
     ScalerArtifact,
     log_general,
     track_mlflow,
-    write_setup_to_file,
 )
 from qmodem.utils import count_parameters, setup_script_logging
 
@@ -79,8 +78,6 @@ def main() -> None:
     )
 
     with track_mlflow(mlflow_setup):
-        write_setup_to_file()
-
         run_adversarial_training(
             model=model,
             discriminator=discriminator,

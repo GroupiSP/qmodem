@@ -23,7 +23,6 @@ from qmodem.tracking import (
     ScalerArtifact,
     log_general,
     track_mlflow,
-    write_setup_to_file,
 )
 from qmodem.utils import count_parameters, setup_script_logging
 
@@ -71,8 +70,6 @@ def main() -> None:
     model = build_model(ModelBuildParameters.model_validate(hp, from_attributes=True))
 
     with track_mlflow(mlflow_setup):
-        write_setup_to_file()
-
         run_training(
             model=model,
             hp=hp,

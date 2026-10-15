@@ -47,7 +47,7 @@ Hyperparameter optimization (HPO) is implemented as an Optuna study, where the o
 Testing is always meant to happen after a training run has happened.
 
 1. Environment loading and logging setup happen as for training.
-2. Since the training run is already complete, the test script retrieves the training run ID from `.last_trained.json` and reloads that run. This allows to load the training run parameters. the data scalers and the trained model state, as well as to log test metrics to the same MLflow run.
+2. Since the training run is already complete, the test script takes the training run ID via `--run-id` and reloads that run. This allows to load the training run parameters. the data scalers and the trained model state, as well as to log test metrics to the same MLflow run.
 3. Because the data is generated, the test phase also takes care of reconstreconstrucing the true RUL distribution (`qmodem.battery.data_processing:reconstruct_rul_distribution`) for each test history. It does that by selecing a grid of intermediate state of charges (SoCs) and running Monte Carlo simulations from each intermediate SoC to the end of discharge.
 4. The bulk of the test phase is to run `qmodem.battery.evaluate:run_evaluation`, which uploads the data of each test history (`test_case`s), selects the evaluation time windows and RUL targets, predicts with the trained model and computes all the metrics of interest. The metrics computed are: RMSE, coverage, weighted spread of uncertainty (WSU) and continuous-ranked probability score (CRPS). The metrics are computed and logged both per test case and averaged across test cases to provide a global view of the model performance.
 
@@ -118,7 +118,7 @@ check-with-fixes, Ruff format, and docformatter configured from `pyproject.toml`
   train-only scaler fitting when changing preprocessing.
 - MLflow is the experiment-tracking boundary: training logs metrics and best model
   state there, while test scripts retrieve training setup/parameters using the
-  configured run ID or `.last_trained.json`.
+  run ID passed with `--run-id`, or select it by tags (`qmodem.tracking.RunSelector`).
 - Prefer typed protocols/dataclasses and existing factories (`ConvType`,
   `Method`, step factories, data pipelines) over ad-hoc branching. Follow the
   existing Ruff, docformatter, and Google-style docstring configuration.
