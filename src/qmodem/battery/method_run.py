@@ -18,7 +18,10 @@ from typing import Any, ClassVar, Protocol
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
+import pandas as pd
+from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, ConfigDict
 from stagereg.core import (
     Batch,
@@ -36,7 +39,22 @@ from stagereg.jax import (
     create_optimizer,
 )
 
+from qmodem.tracking import (
+    MLFlowSetup,
+    MLflowTracker,
+    load_scaler,
+    mlflow_checkpoint_store,
+    stagereg_version,
+    track_mlflow,
+)
+
 from .data_processing import PreparedData
+from .evaluate import (
+    Evaluation,
+    EvaluationParameters,
+    evaluate_predictive_model,
+    log_evaluation,
+)
 from .models import MeanNet, VarianceNet
 from .train import (
     MEAN_CHECKPOINT_KEY,
@@ -61,6 +79,8 @@ METHOD_KEY_INDEX: Mapping[Method, int] = {
 
 Never derive it from ``hash()``, which is salted per process.
 """
+
+_EVALUATION_STREAM = 0x6576616C  # "eval": folded into the method run's root key
 
 
 def method_key(seed: int, method: Method) -> jax.Array:
@@ -174,6 +194,11 @@ class MethodRun:
     variance_net: VarianceNet
     posterior: Posterior | None = None
     checkpoint: Checkpoint | None = None
+
+    @property
+    def evaluation_key(self) -> jax.Array:
+        """The key of the run's test evaluation, derived from its root key."""
+        return jax.random.fold_in(self.key, _EVALUATION_STREAM)
 
     def predictive(
         self, inputs: jax.Array, key: jax.Array, num_draws: int
@@ -336,3 +361,177 @@ def restore_method_run(
         mean_net=mean_net,
         variance_net=variance_net,
     )
+
+
+# --- MLflow: method runs as children of their backbone run -----------------------
+
+PARENT_RUN_TAG = "mlflow.parentRunId"
+
+
+def method_tags(*, method: Method, seed: int, backbone_run_id: str) -> dict[str, str]:
+    """Return the tags of a method run.
+
+    Args:
+        method: The inference method.
+        seed: The protocol seed r.
+        backbone_run_id: The MLflow run ID of the backbone run (the parent).
+
+    Returns:
+        The ``role``, ``method``, ``seed``, ``stagereg_version`` and
+        ``mlflow.parentRunId`` tags.
+    """
+    return {
+        "role": "method",
+        "method": method.value,
+        "seed": str(seed),
+        "stagereg_version": stagereg_version(),
+        PARENT_RUN_TAG: backbone_run_id,
+    }
+
+
+def _unflatten(params: Mapping[str, str], stage: str) -> dict[str, Any]:
+    """Nest the flattened params of one stage (``stage/a/b`` -> ``{a: {b: ..}}``).
+
+    Args:
+        params: MLflow run params, flattened by stage.
+        stage: The stage prefix, e.g. ``"mean"``.
+
+    Returns:
+        The stage's params, nested.
+    """
+    nested: dict[str, Any] = {}
+    for key, value in params.items():
+        head, *path = key.split("/")
+        if head != stage or not path:
+            continue
+        node = nested
+        for part in path[:-1]:
+            node = node.setdefault(part, {})
+        node[path[-1]] = value
+    return nested
+
+
+def load_backbone_handle(
+    run_id: str, client: MlflowClient | None = None
+) -> BackboneHandle:
+    """Return the handle of a backbone run recorded in MLflow.
+
+    Args:
+        run_id: The backbone run's ID.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Returns:
+        Its hyperparameters (from the run's params) and its checkpoint store.
+    """
+    client = client if client is not None else MlflowClient()
+    params = client.get_run(run_id).data.params
+    return BackboneHandle(
+        mean_hp=MeanHyperparameters.model_validate(_unflatten(params, "mean")),
+        variance_hp=VarianceHyperparameters.model_validate(
+            _unflatten(params, "variance")
+        ),
+        store=mlflow_checkpoint_store(run_id, client=client),
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class TrackedMethodRun:
+    """A method run recorded in MLflow.
+
+    Attributes:
+        run_id: The method run's MLflow run ID.
+        run: The trained method run.
+    """
+
+    run_id: str
+    run: MethodRun
+
+
+def track_method_run(
+    *,
+    backbone_run_id: str,
+    data: PreparedData,
+    config: MethodConfig,
+    seed: int,
+    setup: MLFlowSetup,
+    client: MlflowClient | None = None,
+) -> TrackedMethodRun:
+    """Train a method run inside an MLflow run, as a child of its backbone run.
+
+    The run is tagged with ``method_tags``. It receives the posterior
+    hyperparameters (flattened under ``posterior``), the posterior-stage metrics
+    and the finalized ``checkpoints/posterior/best`` (none for HNN). The backbone
+    is restored from the parent run's checkpoints.
+
+    Args:
+        backbone_run_id: The backbone run's ID.
+        data: Prepared train and validation windows.
+        config: The method's configuration.
+        seed: The protocol seed r (should match the backbone's ``seed`` tag).
+        setup: Tracking backend, experiment and run name. Its tags are extended
+            with the method-run tags.
+        client: The MLflow client. Defaults to one on the setup's backend.
+
+    Returns:
+        The run ID and the trained method run.
+    """
+    tags = method_tags(method=config.method, seed=seed, backbone_run_id=backbone_run_id)
+    with track_mlflow(dataclasses.replace(setup, tags={**setup.tags, **tags})) as run:
+        client = client if client is not None else MlflowClient()
+        run_id = run.info.run_id
+        method_run = train_method_run(
+            backbone=load_backbone_handle(backbone_run_id, client=client),
+            data=data,
+            config=config,
+            seed=seed,
+            tracker=MLflowTracker(run_id, client=client),
+            store=mlflow_checkpoint_store(run_id, client=client),
+        )
+    return TrackedMethodRun(run_id=run_id, run=method_run)
+
+
+def evaluate_tracked_method_run(
+    run_id: str,
+    *,
+    test_histories: pd.DataFrame,
+    reference_samples: Mapping[str, np.ndarray],
+    parameters: EvaluationParameters,
+    client: MlflowClient | None = None,
+) -> Evaluation:
+    """Restore a method run from MLflow, evaluate it and log the evaluation into it.
+
+    The method, seed and backbone (parent) come from the run's tags, the method
+    configuration from its ``posterior/...`` params, and the scalers from the
+    parent backbone run. The evaluation key is the run's ``evaluation_key``.
+
+    Args:
+        run_id: The method run's ID.
+        test_histories: The test histories.
+        reference_samples: Simulator reference samples keyed ``test_case_<i>``.
+        parameters: Evaluation parameters.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Returns:
+        The evaluation.
+    """
+    client = client if client is not None else MlflowClient()
+    run = client.get_run(run_id)
+    method = Method(run.data.tags["method"])
+    backbone_run_id = run.data.tags[PARENT_RUN_TAG]
+    method_run = restore_method_run(
+        backbone=load_backbone_handle(backbone_run_id, client=client),
+        config=method_config(method, _unflatten(run.data.params, "posterior")),
+        seed=int(run.data.tags["seed"]),
+        store=mlflow_checkpoint_store(run_id, client=client),
+    )
+    evaluation = evaluate_predictive_model(
+        method_run,
+        test_histories=test_histories,
+        reference_samples=reference_samples,
+        x_scaler=load_scaler(backbone_run_id, "x_scaler"),
+        y_scaler=load_scaler(backbone_run_id, "y_scaler"),
+        parameters=parameters,
+        key=method_run.evaluation_key,
+    )
+    log_evaluation(evaluation, MLflowTracker(run_id, client=client))
+    return evaluation
