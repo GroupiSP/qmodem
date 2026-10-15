@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 from collections.abc import Iterable
 from enum import StrEnum
@@ -8,7 +9,24 @@ from typing import Literal, TypeVar
 import jax
 import optax
 from flax import nnx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from stagereg.core import (
+    Checkpoint,
+    CheckpointStore,
+    EarlyStopper,
+    ExperimentTracker,
+    SquaredErrorLoss,
+    TrackerEventSink,
+    TrainingState,
+)
+from stagereg.jax import (
+    GammaVarianceStage,
+    HeldOutValidation,
+    MeanStage,
+    SupervisedStageOptions,
+    create_optimizer,
+    make_supervised_loss,
+)
 
 from qmodem.data import DataPipeline
 from qmodem.tracking import get_run_parameters
@@ -30,9 +48,16 @@ from qmodem.train_adversarial import (
 from qmodem.train_adversarial import (
     train_loop as adversarial_train_loop,
 )
-from qmodem.train_base import Callback, EarlyStopper, mlflow_track_model_best_state
+from qmodem.train_base import Callback, mlflow_track_model_best_state
+from qmodem.train_base import EarlyStopper as LegacyEarlyStopper
 
-from .data_processing import dataloader_builders, prepare_data
+from .data_processing import (
+    PreparedData,
+    dataloader_builders,
+    make_loader,
+    prepare_data,
+)
+from .models import MeanNet, VarianceNet
 from .train_steps import (
     StandardStepFactory,
     StandardStepFactoryContext,
@@ -157,7 +182,7 @@ def run_training(
         alpha=hp.scheduler_alpha,
     )
     optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
-    early_stopper = EarlyStopper(
+    early_stopper = LegacyEarlyStopper(
         patience=hp.early_stopping_patience,
         min_delta=hp.early_stopping_min_delta,
     )
@@ -216,7 +241,7 @@ def run_adversarial_training(
         optax.adam(hp.learning_rate_discriminator),
         wrt=nnx.Param,
     )
-    early_stopper = EarlyStopper(
+    early_stopper = LegacyEarlyStopper(
         patience=hp.early_stopping_patience,
         min_delta=hp.early_stopping_min_delta,
     )
@@ -240,4 +265,263 @@ def run_adversarial_training(
             *callbacks,
         ),
         early_stopper=early_stopper,
+    )
+
+
+# --- Backbone run (stagereg) ---------------------------------------------------
+
+MEAN_CHECKPOINT_KEY = "mean/best"
+VARIANCE_CHECKPOINT_KEY = "variance/best"
+
+_BACKBONE_NAMESPACE = (
+    0x6261636B  # "back": keeps backbone keys apart from fold_in(r, method)
+)
+_MEAN_INIT_STREAM = 0
+_VARIANCE_INIT_STREAM = 1
+_LOADER_STREAM = 2
+_TRAINING_STREAM = 3
+
+
+class _FrozenHyperparameters(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class MeanNetworkHyperparameters(_FrozenHyperparameters):
+    """Backbone sizes, shared by the mean and the variance network.
+
+    Attributes:
+        kernel_size: Width of the 1D convolution kernel.
+        n_filters: Number of convolution filters.
+        activation: Name of the ``flax.nnx`` activation after the convolution.
+    """
+
+    kernel_size: int = Field(default=3, ge=1)
+    n_filters: int = Field(default=29, ge=1)
+    activation: Literal["gelu", "relu", "silu", "tanh"] = "gelu"
+
+
+class OptimizerHyperparameters(_FrozenHyperparameters):
+    """Adam at a constant learning rate.
+
+    Attributes:
+        learning_rate: Adam's learning rate.
+    """
+
+    learning_rate: float = Field(default=1e-3, gt=0.0)
+
+
+class StageScheduleHyperparameters(_FrozenHyperparameters):
+    """Epoch cap and early stopping on the validation loss (``min_delta = 0``).
+
+    Attributes:
+        max_epochs: Maximum number of epochs.
+        patience: Non-improving epochs tolerated before stopping.
+    """
+
+    max_epochs: int = Field(default=500, ge=1)
+    patience: int = Field(default=50, ge=0)
+
+
+class MeanHyperparameters(_FrozenHyperparameters):
+    """Hyperparameters of the mean stage.
+
+    Attributes:
+        network: Backbone sizes (inherited by the variance network).
+        optimizer: Mean-stage optimizer.
+        schedule: Mean-stage epochs and early stopping.
+        batch_size: Training batch size of the backbone run.
+    """
+
+    network: MeanNetworkHyperparameters = MeanNetworkHyperparameters()
+    optimizer: OptimizerHyperparameters = OptimizerHyperparameters()
+    schedule: StageScheduleHyperparameters = StageScheduleHyperparameters()
+    batch_size: int = Field(default=32, ge=1)
+
+
+class VarianceHyperparameters(_FrozenHyperparameters):
+    """Hyperparameters of the variance stage (sizes come from the mean network).
+
+    Attributes:
+        optimizer: Variance-stage optimizer.
+        schedule: Variance-stage epochs and early stopping.
+    """
+
+    optimizer: OptimizerHyperparameters = OptimizerHyperparameters()
+    schedule: StageScheduleHyperparameters = StageScheduleHyperparameters()
+
+
+@dataclasses.dataclass(frozen=True)
+class BackboneCheckpoints:
+    """The finalized checkpoints of a backbone run.
+
+    Attributes:
+        mean: Finalized ``mean/best`` checkpoint.
+        variance: Finalized ``variance/best`` checkpoint.
+    """
+
+    mean: Checkpoint
+    variance: Checkpoint
+
+
+@dataclasses.dataclass(frozen=True)
+class BackboneKeys:
+    """Every RNG key of a backbone run, derived from the protocol seed r.
+
+    Attributes:
+        mean_init: Initializes the mean network.
+        variance_init: Initializes the variance network.
+        loader: Shuffles the training windows.
+        training: The training state's key.
+    """
+
+    mean_init: jax.Array
+    variance_init: jax.Array
+    loader: jax.Array
+    training: jax.Array
+
+
+def backbone_keys(seed: int) -> BackboneKeys:
+    """Derive every key of a backbone run from the protocol seed.
+
+    The keys live under a backbone namespace, so they never coincide with a
+    method run's ``fold_in(key(r), method)``.
+
+    Args:
+        seed: The protocol seed r.
+
+    Returns:
+        The backbone run's keys.
+    """
+    root = jax.random.fold_in(jax.random.key(seed), _BACKBONE_NAMESPACE)
+    return BackboneKeys(
+        mean_init=jax.random.fold_in(root, _MEAN_INIT_STREAM),
+        variance_init=jax.random.fold_in(root, _VARIANCE_INIT_STREAM),
+        loader=jax.random.fold_in(root, _LOADER_STREAM),
+        training=jax.random.fold_in(root, _TRAINING_STREAM),
+    )
+
+
+def build_mean_net(network: MeanNetworkHyperparameters, key: jax.Array) -> MeanNet:
+    """Build the mean network.
+
+    Args:
+        network: Backbone sizes.
+        key: Initialization key.
+
+    Returns:
+        A freshly initialized mean network.
+    """
+    return MeanNet(
+        kernel_size=network.kernel_size,
+        n_filters=network.n_filters,
+        activation=getattr(nnx, network.activation),
+        rngs=nnx.Rngs(key),
+    )
+
+
+def build_variance_net(
+    network: MeanNetworkHyperparameters, key: jax.Array
+) -> VarianceNet:
+    """Build the variance network with the mean network's sizes.
+
+    Args:
+        network: Backbone sizes, taken from the mean network's configuration.
+        key: Initialization key.
+
+    Returns:
+        A freshly initialized variance network.
+    """
+    return VarianceNet(
+        kernel_size=network.kernel_size,
+        n_filters=network.n_filters,
+        activation=getattr(nnx, network.activation),
+        rngs=nnx.Rngs(key),
+    )
+
+
+def _early_stopper(schedule: StageScheduleHyperparameters) -> EarlyStopper:
+    return EarlyStopper(
+        metric="loss", mode="min", patience=schedule.patience, min_delta=0.0
+    )
+
+
+def train_backbone(
+    *,
+    data: PreparedData,
+    mean_hp: MeanHyperparameters,
+    variance_hp: VarianceHyperparameters,
+    seed: int,
+    tracker: ExperimentTracker,
+    store: CheckpointStore,
+) -> BackboneCheckpoints:
+    """Train a backbone run: ``MeanStage`` then ``GammaVarianceStage``.
+
+    Both stages early-stop on their validation loss (MSE, then Gamma NLL) and
+    finalize their best epoch into ``store``. Every RNG key derives from
+    ``seed``, so the same seed gives bit-identical checkpoints.
+
+    Args:
+        data: Prepared train and validation windows.
+        mean_hp: Mean-stage hyperparameters (they also size the variance net).
+        variance_hp: Variance-stage hyperparameters.
+        seed: The protocol seed r.
+        tracker: Receives the hyperparameters and every stage metric.
+        store: Receives the stage checkpoints.
+
+    Returns:
+        The finalized ``mean`` and ``variance`` checkpoints.
+    """
+    tracker.log_params(
+        {"mean": mean_hp.model_dump(), "variance": variance_hp.model_dump()}
+    )
+    keys = backbone_keys(seed)
+    loader = make_loader(data, batch_size=mean_hp.batch_size, key=keys.loader)
+    event_sinks = (TrackerEventSink(tracker),)
+    state = TrainingState(rng_state=keys.training)
+
+    mean_net = build_mean_net(mean_hp.network, keys.mean_init)
+    mean_loss = make_supervised_loss(SquaredErrorLoss())
+    mean_stage = MeanStage(
+        model=mean_net,
+        optimizer=create_optimizer(
+            mean_net, optax.adam(mean_hp.optimizer.learning_rate)
+        ),
+        train_loader=loader,
+        options=SupervisedStageOptions(
+            epochs=mean_hp.schedule.max_epochs,
+            validation=HeldOutValidation(model=mean_net, loader=loader, loss=mean_loss),
+            early_stopper=_early_stopper(mean_hp.schedule),
+            event_sinks=event_sinks,
+            checkpoint_store=store,
+            checkpoint_key=MEAN_CHECKPOINT_KEY,
+        ),
+        loss=mean_loss,
+    )
+    mean_stage.prepare(state)
+    mean_stage.train(state)
+
+    variance_net = build_variance_net(mean_hp.network, keys.variance_init)
+    variance_stage = GammaVarianceStage(
+        model=variance_net,
+        optimizer=create_optimizer(
+            variance_net, optax.adam(variance_hp.optimizer.learning_rate)
+        ),
+        source_loader=loader,
+        options=SupervisedStageOptions(
+            epochs=variance_hp.schedule.max_epochs,
+            early_stopper=_early_stopper(variance_hp.schedule),
+            event_sinks=event_sinks,
+            checkpoint_store=store,
+            checkpoint_key=VARIANCE_CHECKPOINT_KEY,
+        ),
+        validation_factory=lambda residuals: HeldOutValidation(
+            model=variance_net, loader=residuals, loss=variance_stage.loss
+        ),
+    )
+    variance_stage.prepare(state)
+    variance_stage.train(state)
+
+    return BackboneCheckpoints(
+        mean=store.load(MEAN_CHECKPOINT_KEY),
+        variance=store.load(VARIANCE_CHECKPOINT_KEY),
     )

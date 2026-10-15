@@ -8,6 +8,8 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
+from stagereg.jax import Gamma, GammaHead
+
 from qmodem.module import (
     ConvWeightGenerator,
     GaussianBlock,
@@ -26,6 +28,117 @@ from qmodem.quantum_circuits import (
 # TODO: There should be a single backbone CNN class that includes dropout (MCD only if mode=train during inference)
 # TODO: The final layer should be an input argument to the network initializer.
 # TODO: The convolutional layer should be an input argument to the network initializer (standard, bayesian, flipout, generator).
+
+
+IN_FEATURES = 2
+"""Input channels of a battery window (load, voltage)."""
+
+type Activation = Callable[[jax.Array], jax.Array]
+
+
+def _pooled_conv_features(
+    conv: nnx.Conv, activation: Activation, x: jax.Array
+) -> jax.Array:
+    """Apply ``Conv1D -> activation -> global average pooling``.
+
+    Args:
+        conv: The convolution, mapping ``(B, W, C)`` to ``(B, W', F)``.
+        activation: Elementwise activation.
+        x: Input windows of shape ``(B, W, C)``.
+
+    Returns:
+        Pooled features of shape ``(B, F)``.
+    """
+    return jnp.mean(activation(conv(x)), axis=-2)
+
+
+def _conv(kernel_size: int, n_filters: int, rngs: nnx.Rngs) -> nnx.Conv:
+    return nnx.Conv(
+        in_features=IN_FEATURES,
+        out_features=n_filters,
+        kernel_size=kernel_size,
+        padding="VALID",
+        rngs=rngs,
+    )
+
+
+class MeanNet(nnx.Module):
+    """Mean network ``Conv1D -> act -> GAP -> Linear(n_filters, 1)``.
+
+    It is deterministic (no dropout) and outputs the mean only, so the shared
+    mean checkpoint is method-neutral. The convolution is the attribute ``conv``,
+    which the posterior stages select as the inferred subnetwork.
+    """
+
+    def __init__(
+        self,
+        kernel_size: int,
+        n_filters: int,
+        activation: Activation,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Initialize the network.
+
+        Args:
+            kernel_size: Width of the 1D convolution kernel.
+            n_filters: Number of convolution filters.
+            activation: Activation applied after the convolution.
+            rngs: RNGs of the parameter initializers.
+        """
+        self.conv = _conv(kernel_size, n_filters, rngs)
+        self.activation = activation
+        self.linear = nnx.Linear(n_filters, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """Predict the mean RUL.
+
+        Args:
+            x: Windows of shape ``(B, W, IN_FEATURES)``.
+
+        Returns:
+            Means of shape ``(B, 1)``.
+        """
+        return self.linear(_pooled_conv_features(self.conv, self.activation, x))
+
+
+class VarianceNet(nnx.Module):
+    """Variance network ``Conv1D -> act -> GAP -> GammaHead``.
+
+    It has the mean network's backbone shape but its own weights, and outputs a Gamma
+    distribution over the squared residual (stagereg's convention).
+    """
+
+    def __init__(
+        self,
+        kernel_size: int,
+        n_filters: int,
+        activation: Activation,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        """Initialize the network.
+
+        Args:
+            kernel_size: Width of the 1D convolution kernel.
+            n_filters: Number of convolution filters.
+            activation: Activation applied after the convolution.
+            rngs: RNGs of the parameter initializers.
+        """
+        self.conv = _conv(kernel_size, n_filters, rngs)
+        self.activation = activation
+        self.head = GammaHead(n_filters, 1, rngs=rngs)
+
+    def __call__(self, x: jax.Array) -> Gamma:
+        """Predict the distribution of the squared residual.
+
+        Args:
+            x: Windows of shape ``(B, W, IN_FEATURES)``.
+
+        Returns:
+            A Gamma distribution with batch shape ``(B, 1)``.
+        """
+        return self.head(_pooled_conv_features(self.conv, self.activation, x))
 
 
 class Discriminator(nnx.Module):
