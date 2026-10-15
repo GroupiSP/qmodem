@@ -26,6 +26,7 @@ from qmodem.battery.train import (
     QAVITrainHyperparameters,
     TrackedBackbone,
     TrainHyperparameters,
+    load_backbone_hyperparameters,
     load_train_hyperparameters_from_mlflow,
     track_backbone_run,
     train_backbone,
@@ -445,6 +446,17 @@ def test_backbone_hyperparameters_arrive_flattened_by_stage(mlflow_backbone) -> 
     )
     assert params["mean/network/n_filters"] == str(mean_hp.network.n_filters)
     assert params["variance/schedule/patience"] == str(variance_hp.schedule.patience)
+
+
+def test_backbone_hyperparameters_load_back_from_the_run(mlflow_backbone) -> None:
+    loaded = load_backbone_hyperparameters(
+        mlflow_backbone.run.run_id, client=mlflow_backbone.backend.client
+    )
+
+    assert loaded == (
+        mlflow_backbone.reference.mean_hp,
+        mlflow_backbone.reference.variance_hp,
+    )
 
 
 def test_the_tracked_backbone_matches_the_untracked_one(

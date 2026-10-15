@@ -123,6 +123,36 @@ class MLflowTracker:
             )
 
 
+def unflatten_parameters(flat: Mapping[str, Any]) -> dict[str, Any]:
+    """Nest flattened hyperparameters back by their ``/``-separated keys.
+
+    It inverts stagereg's ``flatten_parameters``, e.g. for the params of a logged
+    run: ``{"mean/optimizer/learning_rate": "0.001"}`` becomes
+    ``{"mean": {"optimizer": {"learning_rate": "0.001"}}}``.
+
+    Args:
+        flat: Hyperparameters keyed by ``/``-separated paths.
+
+    Returns:
+        The nested hyperparameters.
+
+    Raises:
+        ValueError: If a key is both a leaf and a prefix of another key.
+    """
+    nested: dict[str, Any] = {}
+    for key, value in flat.items():
+        *path, leaf = key.split("/")
+        node = nested
+        for part in path:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"Parameter {key!r} nests under a leaf.")
+        if leaf in node:
+            raise ValueError(f"Parameter {key!r} is both a leaf and a prefix.")
+        node[leaf] = value
+    return nested
+
+
 CHECKPOINT_ARTIFACT_ROOT = "checkpoints"
 _PICKLE_FILE = "checkpoint.pkl"
 _ARRAYS_DIR = "arrays"

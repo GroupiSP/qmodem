@@ -9,6 +9,7 @@ from typing import Literal, TypeVar
 import jax
 import optax
 from flax import nnx
+from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, ConfigDict, Field
 from stagereg.core import (
     Checkpoint,
@@ -40,6 +41,7 @@ from qmodem.tracking import (
     log_scaler,
     mlflow_checkpoint_store,
     track_mlflow,
+    unflatten_parameters,
 )
 from qmodem.train import (
     LogReporter,
@@ -732,3 +734,26 @@ def track_backbone_run(
         for scaler in scalers:
             log_scaler(scaler)
     return TrackedBackbone(run_id=run_id, checkpoints=checkpoints)
+
+
+def load_backbone_hyperparameters(
+    run_id: str, client: MlflowClient | None = None
+) -> tuple[MeanHyperparameters, VarianceHyperparameters]:
+    """Reload the mean and variance hyperparameters a backbone run logged.
+
+    Args:
+        run_id: The backbone run.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Returns:
+        The validated mean and variance hyperparameters.
+
+    Raises:
+        pydantic.ValidationError: If the logged params do not match the schemas.
+    """
+    client = client if client is not None else MlflowClient()
+    nested = unflatten_parameters(client.get_run(run_id).data.params)
+    return (
+        MeanHyperparameters.model_validate(nested["mean"]),
+        VarianceHyperparameters.model_validate(nested["variance"]),
+    )

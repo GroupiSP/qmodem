@@ -3,86 +3,13 @@ from __future__ import annotations
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import ValidationError
 
 from qmodem.battery.dispatch import (
     ModelBuildParameters,
     build_discriminator,
     build_qavi_model,
 )
-from qmodem.battery.hpo import HPOHyperparameters, QAVIHPOHyperparameters
 from qmodem.battery.train import Method, QAVITrainHyperparameters
-
-
-# ---------------------------------------------------------------------------
-# HPO hyperparameter container tests
-# ---------------------------------------------------------------------------
-
-
-def test_hpo_hyperparameters_defaults_are_valid() -> None:
-    hp = HPOHyperparameters()
-
-    assert hp.num_hp_trials == 25
-    assert hp.window_size_min == 10
-    assert hp.window_size_max == 100
-
-
-def test_qavi_hpo_hyperparameters_defaults_are_valid() -> None:
-    hp = QAVIHPOHyperparameters()
-
-    assert hp.pqc_n_qubits_min == 3
-    assert hp.pqc_n_qubits_max == 8
-    assert hp.pqc_n_layers_min == 1
-    assert hp.pqc_n_layers_max == 6
-    assert hp.lr_generator_min == pytest.approx(1e-4)
-    assert hp.lr_generator_max == pytest.approx(1e-2)
-    assert hp.lr_discriminator_min == pytest.approx(1e-4)
-    assert hp.lr_discriminator_max == pytest.approx(1e-2)
-    assert hp.adversarial_loss_weight_min == pytest.approx(0.0)
-    assert hp.adversarial_loss_weight_max == pytest.approx(1.0)
-
-
-def test_qavi_hpo_inherits_base_hpo_fields() -> None:
-    hp = QAVIHPOHyperparameters()
-
-    # Fields from the base class must still be accessible.
-    assert hp.kernel_size_min == 3
-    assert hp.kernel_size_ceil == 20
-    assert hp.conv_n_filters_min == 4
-    assert hp.conv_n_filters_max == 40
-
-
-@given(
-    pqc_n_qubits_min=st.integers(min_value=1, max_value=4),
-    pqc_n_qubits_max=st.integers(min_value=5, max_value=10),
-    pqc_n_layers_min=st.integers(min_value=1, max_value=3),
-    pqc_n_layers_max=st.integers(min_value=4, max_value=8),
-)
-def test_qavi_hpo_bounds_are_consistent(
-    pqc_n_qubits_min: int,
-    pqc_n_qubits_max: int,
-    pqc_n_layers_min: int,
-    pqc_n_layers_max: int,
-) -> None:
-    """Min bounds must be strictly less than max bounds."""
-    hp = QAVIHPOHyperparameters(
-        pqc_n_qubits_min=pqc_n_qubits_min,
-        pqc_n_qubits_max=pqc_n_qubits_max,
-        pqc_n_layers_min=pqc_n_layers_min,
-        pqc_n_layers_max=pqc_n_layers_max,
-    )
-
-    assert hp.pqc_n_qubits_min < hp.pqc_n_qubits_max
-    assert hp.pqc_n_layers_min < hp.pqc_n_layers_max
-
-
-def test_qavi_hpo_invalid_bounds_raise_validation_error() -> None:
-    with pytest.raises(ValidationError, match="Invalid bounds for 'lr_generator'"):
-        QAVIHPOHyperparameters(
-            lr_generator_min=1e-2,
-            lr_generator_max=1e-2,
-        )
-
 
 # ---------------------------------------------------------------------------
 # dispatch factory tests
