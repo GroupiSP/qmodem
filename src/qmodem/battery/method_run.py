@@ -64,12 +64,14 @@ from .evaluate import (
     evaluate_predictive_model,
     log_evaluation,
 )
-from .methods.avi import CAVIConfig, QAVIConfig
+from .methods.avi import CAVIConfig as CAVIConfig
+from .methods.avi import QAVIConfig as QAVIConfig
 from .methods.base import MethodConfig
-from .methods.bbb import BBBConfig
-from .methods.hnn import HNNConfig
-from .methods.mcd import MCDConfig
-from .methods.psgld import PSGLDConfig
+from .methods.bbb import BBBConfig as BBBConfig
+from .methods.hnn import HNNConfig as HNNConfig
+from .methods.mcd import MCDConfig as MCDConfig
+from .methods.psgld import PSGLDConfig as PSGLDConfig
+from .methods.registry import METHODS
 from .models import MeanNet, VarianceNet
 from .posterior import (
     POSTERIOR_CHECKPOINT_KEY,
@@ -95,17 +97,9 @@ from .train import (
 )
 
 METHOD_KEY_INDEX: Mapping[Method, int] = {
-    Method.HNN: 0,
-    Method.MCD: 1,
-    Method.BBB: 2,
-    Method.PSGLD: 3,
-    Method.Q_AVI: 4,
-    Method.C_AVI: 5,
+    method: entry.key_index for method, entry in METHODS.items()
 }
-"""Fixed integer of each method, folded into the protocol seed's key.
-
-Never derive it from ``hash()``, which is salted per process.
-"""
+"""Fixed integer of each method, folded into the protocol seed's key (registry)."""
 
 _EVALUATION_STREAM = 0x6576616C  # "eval": folded into the method run's root key
 
@@ -126,17 +120,12 @@ def method_key(seed: int, method: Method) -> jax.Array:
 
 
 METHOD_CONFIGS: Mapping[Method, type[MethodConfig]] = {
-    Method.HNN: HNNConfig,
-    Method.MCD: MCDConfig,
-    Method.BBB: BBBConfig,
-    Method.PSGLD: PSGLDConfig,
-    Method.Q_AVI: QAVIConfig,
-    Method.C_AVI: CAVIConfig,
+    method: entry.config for method, entry in METHODS.items()
 }
 """The configuration type of every implemented method (strategy registry).
 
-A new method adds its configuration module under ``qmodem.battery.methods`` and
-one entry here; the pipeline needs no change.
+A new method registers itself once, in ``methods.registry.METHODS``; the pipeline
+needs no change.
 """
 
 

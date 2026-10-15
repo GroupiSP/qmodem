@@ -18,13 +18,17 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import Any
 
 import optuna
 from mlflow.tracking import MlflowClient
 from stagereg.core import TrainingEvent
 
 from qmodem.hpo import (
+    Categorical,
+    Dimension,
+    FloatRange,
+    IntRange,
     PruningEventSink,
     StudyConfig,
     StudyLayout,
@@ -45,115 +49,34 @@ from .method_run import (
     method_config,
     train_method_run,
 )
+from .methods.registry import METHODS
 from .posterior import VALIDATION_METRIC
 from .train import Method
 
 POSTERIOR_STAGE = Stage.POSTERIOR
 """The stage name of a posterior study, its trials' pruned stage and param prefix."""
 
+__all__ = [
+    "POSTERIOR_SEARCH_SPACES",
+    "POSTERIOR_STAGE",
+    "POSTERIOR_STUDY",
+    "Categorical",
+    "Dimension",
+    "FloatRange",
+    "IntRange",
+    "PosteriorSearchSpace",
+    "ValidationRecorder",
+    "frozen_method_config",
+    "posterior_objective",
+    "require_tuned_backbone",
+    "run_posterior_study",
+    "search_space",
+]
+
 POSTERIOR_STUDY = StudyConfig(
     n_trials=50, sampler_seed=SAMPLER_SEED, n_startup_trials=5, n_warmup_steps=60
 )
 """50 trials, TPE, median pruning after 5 startup trials and 60 warm-up epochs."""
-
-
-class Dimension(Protocol):
-    """One tuned hyperparameter of a search space.
-
-    Attributes:
-        name: The flattened posterior param it sets, e.g. ``posterior/step_size``.
-    """
-
-    name: str
-
-    def suggest(self, trial: optuna.Trial) -> Any:
-        """Sample the hyperparameter in ``trial`` under ``name``.
-
-        Args:
-            trial: The Optuna trial.
-
-        Returns:
-            The sampled value.
-        """
-        ...
-
-
-@dataclasses.dataclass(frozen=True)
-class FloatRange:
-    """A real hyperparameter in ``[low, high]``.
-
-    Attributes:
-        name: The flattened posterior param.
-        low: Lower bound.
-        high: Upper bound.
-        log: Whether to sample on a log scale.
-    """
-
-    name: str
-    low: float
-    high: float
-    log: bool = False
-
-    def suggest(self, trial: optuna.Trial) -> float:
-        """Sample the value.
-
-        Args:
-            trial: The Optuna trial.
-
-        Returns:
-            The sampled value.
-        """
-        return trial.suggest_float(self.name, self.low, self.high, log=self.log)
-
-
-@dataclasses.dataclass(frozen=True)
-class IntRange:
-    """An integer hyperparameter in ``[low, high]`` (inclusive).
-
-    Attributes:
-        name: The flattened posterior param.
-        low: Lower bound.
-        high: Upper bound.
-    """
-
-    name: str
-    low: int
-    high: int
-
-    def suggest(self, trial: optuna.Trial) -> int:
-        """Sample the value.
-
-        Args:
-            trial: The Optuna trial.
-
-        Returns:
-            The sampled value.
-        """
-        return trial.suggest_int(self.name, self.low, self.high)
-
-
-@dataclasses.dataclass(frozen=True)
-class Categorical:
-    """A hyperparameter chosen from a fixed set.
-
-    Attributes:
-        name: The flattened posterior param.
-        choices: The candidate values.
-    """
-
-    name: str
-    choices: tuple[int | float | str, ...]
-
-    def suggest(self, trial: optuna.Trial) -> int | float | str:
-        """Sample the value.
-
-        Args:
-            trial: The Optuna trial.
-
-        Returns:
-            The sampled value.
-        """
-        return trial.suggest_categorical(self.name, list(self.choices))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -218,36 +141,10 @@ class PosteriorSearchSpace:
         return method_config(self.method, nested)
 
 
-_LEARNING_RATE = FloatRange("posterior/optimizer/learning_rate", 1e-5, 1e-2, log=True)
-
-_AVI_DIMENSIONS: tuple[Dimension, ...] = (
-    FloatRange("posterior/avi/adversarial_weight", 1e-4, 1.0, log=True),
-    Categorical("posterior/avi/num_draws", (1, 4, 8, 16)),
-    Categorical("posterior/avi/discriminator_steps", (1, 2, 3, 5)),
-    IntRange("posterior/avi/n_qubits", 3, 6),
-    IntRange("posterior/avi/n_layers", 1, 4),
-    FloatRange("posterior/avi/generator/learning_rate", 1e-5, 1e-2, log=True),
-    FloatRange("posterior/avi/discriminator/learning_rate", 1e-5, 1e-2, log=True),
-)
-"""Q-AVI's space, reused by C-AVI (its hidden width h derives from q and L)."""
-
 POSTERIOR_SEARCH_SPACES: Mapping[Method, PosteriorSearchSpace] = {
-    Method.MCD: PosteriorSearchSpace(
-        Method.MCD,
-        (FloatRange("posterior/dropout_rate", 0.01, 0.5), _LEARNING_RATE),
-    ),
-    Method.BBB: PosteriorSearchSpace(
-        Method.BBB,
-        (
-            _LEARNING_RATE,
-            FloatRange("posterior/initial_std", 1e-4, 1e-1, log=True),
-        ),
-    ),
-    Method.PSGLD: PosteriorSearchSpace(
-        Method.PSGLD, (FloatRange("posterior/step_size", 1e-6, 1e-2, log=True),)
-    ),
-    Method.Q_AVI: PosteriorSearchSpace(Method.Q_AVI, _AVI_DIMENSIONS),
-    Method.C_AVI: PosteriorSearchSpace(Method.C_AVI, _AVI_DIMENSIONS),
+    method: PosteriorSearchSpace(method, entry.search_dimensions)
+    for method, entry in METHODS.items()
+    if entry.search_dimensions
 }
 """Protocol §5's search space of every method with a posterior stage (not HNN)."""
 

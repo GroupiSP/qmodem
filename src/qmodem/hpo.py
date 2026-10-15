@@ -12,7 +12,7 @@ from __future__ import annotations
 import dataclasses
 import time
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, Protocol
 
 import optuna
 from mlflow.entities import Metric, Param
@@ -33,6 +33,105 @@ HPO_STATE_TAG = "hpo.state"
 BEST_PARAM_PREFIX = "best."
 BEST_VALUE_METRIC = "best.value"
 BEST_TRIAL_PARAM = f"{BEST_PARAM_PREFIX}trial"
+
+
+class Dimension(Protocol):
+    """One tuned hyperparameter of a search space.
+
+    Attributes:
+        name: The flattened param it sets, e.g. ``posterior/step_size``.
+    """
+
+    name: str
+
+    def suggest(self, trial: optuna.Trial) -> Any:
+        """Sample the hyperparameter in ``trial`` under ``name``.
+
+        Args:
+            trial: The Optuna trial.
+
+        Returns:
+            The sampled value.
+        """
+        ...
+
+
+@dataclasses.dataclass(frozen=True)
+class FloatRange:
+    """A real hyperparameter in ``[low, high]``.
+
+    Attributes:
+        name: The flattened param.
+        low: Lower bound.
+        high: Upper bound.
+        log: Whether to sample on a log scale.
+    """
+
+    name: str
+    low: float
+    high: float
+    log: bool = False
+
+    def suggest(self, trial: optuna.Trial) -> float:
+        """Sample the value.
+
+        Args:
+            trial: The Optuna trial.
+
+        Returns:
+            The sampled value.
+        """
+        return trial.suggest_float(self.name, self.low, self.high, log=self.log)
+
+
+@dataclasses.dataclass(frozen=True)
+class IntRange:
+    """An integer hyperparameter in ``[low, high]`` (inclusive).
+
+    Attributes:
+        name: The flattened param.
+        low: Lower bound.
+        high: Upper bound.
+    """
+
+    name: str
+    low: int
+    high: int
+
+    def suggest(self, trial: optuna.Trial) -> int:
+        """Sample the value.
+
+        Args:
+            trial: The Optuna trial.
+
+        Returns:
+            The sampled value.
+        """
+        return trial.suggest_int(self.name, self.low, self.high)
+
+
+@dataclasses.dataclass(frozen=True)
+class Categorical:
+    """A hyperparameter chosen from a fixed set.
+
+    Attributes:
+        name: The flattened param.
+        choices: The candidate values.
+    """
+
+    name: str
+    choices: tuple[int | float | str, ...]
+
+    def suggest(self, trial: optuna.Trial) -> int | float | str:
+        """Sample the value.
+
+        Args:
+            trial: The Optuna trial.
+
+        Returns:
+            The sampled value.
+        """
+        return trial.suggest_categorical(self.name, list(self.choices))
 
 
 @dataclasses.dataclass(frozen=True)
