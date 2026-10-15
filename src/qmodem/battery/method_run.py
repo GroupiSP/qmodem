@@ -56,6 +56,7 @@ from .evaluate import (
     evaluate_predictive_model,
     log_evaluation,
 )
+from .methods.avi import QAVIConfig
 from .methods.base import MethodConfig
 from .methods.bbb import BBBConfig
 from .methods.hnn import HNNConfig
@@ -115,6 +116,7 @@ def method_key(seed: int, method: Method) -> jax.Array:
 METHOD_CONFIGS: Mapping[Method, type[MethodConfig]] = {
     Method.HNN: HNNConfig,
     Method.BBB: BBBConfig,
+    Method.Q_AVI: QAVIConfig,
 }
 """The configuration type of every implemented method (strategy registry).
 
