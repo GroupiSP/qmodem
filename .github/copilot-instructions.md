@@ -39,8 +39,8 @@ head. Convolutions may be deterministic, Bayesian, or quantum-generated. The
 quantum-generated path is built from PennyLane circuit factories and weight
 generators in `qmodem.quantum_circuits` and `qmodem.battery.models`.
 
-### Hyperparameter tuning -> `scripts/battery_multiple_scenarios/run_hpo.py`
-Hyperparameter optimization (HPO) is implemented as an Optuna study, where the objective function is essentially a wrapper around the training main function. The main difference is that the HPO's objective also takes care of computing the score of the HPO iteration, which is the average CRPS across validation histories.
+### Hyperparameter tuning -> `scripts/battery_multiple_scenarios/run_{mean,variance}_study.py`
+Hyperparameter optimization (HPO) follows protocol §5: one Optuna study per stage (and per method for posterior studies). `qmodem.hpo.run_study` records a study as one `role=hpo_study` MLflow run (tags `stage`, `method`/`backbone_run_id` where applicable, `n_trials`; params `best.<name>`) with one `role=hpo_trial` child per trial (tag `hpo.trial=<n>`). The objectives in `qmodem.battery.hpo` train their stage through the same operations as backbone runs (`train_mean_stage`, `train_variance_stage`) and report the per-epoch validation loss to a median pruner. The legacy `run_hpo.py` / `run_hpo_qavi.py` are not maintained.
 
 ### Testing flow -> `scripts/battery_multiple_scenarios/run_test.py`
 
