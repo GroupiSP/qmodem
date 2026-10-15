@@ -23,7 +23,6 @@ from qmodem.battery.train import (
     MeanHyperparameters,
     MeanNetworkHyperparameters,
     Method,
-    QAVITrainHyperparameters,
     TrackedBackbone,
     TrainHyperparameters,
     load_backbone_hyperparameters,
@@ -42,12 +41,6 @@ def test_train_hyperparameters_defaults_are_valid() -> None:
     assert hp.method == Method.HNN
 
 
-def test_qavi_train_hyperparameters_defaults_are_valid() -> None:
-    hp = QAVITrainHyperparameters()
-
-    assert hp.method == Method.Q_AVI
-
-
 @pytest.mark.parametrize("method", ["mcd", "bbb"])
 def test_train_hyperparameters_accepts_standard_methods(method: str) -> None:
     hp = TrainHyperparameters(method=method)
@@ -58,11 +51,6 @@ def test_train_hyperparameters_accepts_standard_methods(method: str) -> None:
 def test_train_hyperparameters_rejects_qavi_method() -> None:
     with pytest.raises(ValidationError):
         TrainHyperparameters(method="q-avi")
-
-
-def test_qavi_train_hyperparameters_rejects_standard_method() -> None:
-    with pytest.raises(ValidationError):
-        QAVITrainHyperparameters(method="hnn")
 
 
 def test_train_hyperparameters_is_frozen() -> None:
@@ -84,23 +72,6 @@ def test_load_train_hyperparameters_from_mlflow_round_trips_standard_variant(
 
     loaded = load_train_hyperparameters_from_mlflow(
         TrainHyperparameters, run_id="fake-run", backend_store="sqlite:///fake.db"
-    )
-
-    assert loaded == original
-
-
-def test_load_train_hyperparameters_from_mlflow_round_trips_qavi_variant(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    original = QAVITrainHyperparameters(pqc_n_qubits=8, pqc_n_layers=3)
-    raw_params = {key: str(value) for key, value in original.model_dump().items()}
-    monkeypatch.setattr(
-        "qmodem.battery.train.get_run_parameters",
-        Mock(return_value=raw_params),
-    )
-
-    loaded = load_train_hyperparameters_from_mlflow(
-        QAVITrainHyperparameters, run_id="fake-run", backend_store="sqlite:///fake.db"
     )
 
     assert loaded == original

@@ -1,20 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Protocol
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
 
 logger = logging.getLogger(__name__)
-
-
-class PQC(Protocol):
-    n_qubits: int
-    params_shape: tuple[int, ...]
-
-    def __call__(self, x: jax.Array, params: jax.Array) -> jax.Array: ...
 
 
 @nnx.vmap(in_axes=(None, 0, 0), out_axes=0)
@@ -32,11 +23,6 @@ def mc_sample(
     Carlo samples."""
     mu, var = model(x, rngs=nnx.Rngs(default=key_weights))[0]  # Shape (2,)
     return mu + jnp.sqrt(var) * jax.random.normal(key_noise, shape=(1,))
-
-
-class ConvWeightGenerator(Protocol):
-    def init_params(self, rngs: nnx.Rngs) -> None: ...
-    def __call__(self, rngs: nnx.Rngs) -> jax.Array: ...
 
 
 def nll_batched(

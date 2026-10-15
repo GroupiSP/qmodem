@@ -32,17 +32,17 @@ battery discharge with a probabilistic mixture of two possible variable loads ->
    `MeanStage` and `GammaVarianceStage`; method runs
    (`qmodem.battery.method_run.train_method_run`) restore them and train the shared
    posterior stage (`qmodem.battery.posterior`) with the method's inference method.
-   Legacy QAVI training still uses `qmodem.train_adversarial.train_loop`.
 5. Training callbacks report/log losses and persist the best parameter state to MLflow.
 
 The networks in `qmodem.battery.models` are the mean network
 (`Conv1D -> activation -> GAP -> Linear`) and the variance network (same backbone,
-stagereg `GammaHead`). Posteriors are inferred over the conv layer only
-(`qmodem.battery.posterior.INFERRED_SUBNETWORK`). PennyLane circuit factories and
-weight generators live in `qmodem.quantum_circuits` and `qmodem.battery.models`.
+stagereg `GammaHead`), plus the AVI conv-layer generator (`ConvGenerator`) and
+discriminator (`WindowDiscriminator`). Posteriors are inferred over the conv layer
+only (`qmodem.battery.posterior.INFERRED_SUBNETWORK`). PennyLane circuit factories
+live in `qmodem.quantum_circuits`.
 
 ### Hyperparameter tuning -> `scripts/battery_multiple_scenarios/run_{mean,variance}_study.py`
-Hyperparameter optimization (HPO) follows protocol §5: one Optuna study per stage (and per method for posterior studies). `qmodem.hpo.run_study` records a study as one `role=hpo_study` MLflow run (tags `stage`, `method`/`backbone_run_id` where applicable, `n_trials`; params `best.<name>`) with one `role=hpo_trial` child per trial (tag `hpo.trial=<n>`). The objectives in `qmodem.battery.hpo` train their stage through the same operations as backbone runs (`train_mean_stage`, `train_variance_stage`) and report the per-epoch validation loss to a median pruner. The legacy `run_hpo.py` / `run_hpo_qavi.py` are not maintained.
+Hyperparameter optimization (HPO) follows protocol §5: one Optuna study per stage (and per method for posterior studies). `qmodem.hpo.run_study` records a study as one `role=hpo_study` MLflow run (tags `stage`, `method`/`backbone_run_id` where applicable, `n_trials`; params `best.<name>`) with one `role=hpo_trial` child per trial (tag `hpo.trial=<n>`). The objectives in `qmodem.battery.hpo` train their stage through the same operations as backbone runs (`train_mean_stage`, `train_variance_stage`) and report the per-epoch validation loss to a median pruner. The legacy `run_hpo.py` is not maintained.
 
 ### Method runs and evaluation -> `scripts/battery_multiple_scenarios/train_method_run.py`, `evaluate.py`
 
@@ -54,74 +54,6 @@ Evaluation always happens after a method run exists, in a separate process:
 2. It reconstructs the simulator's reference RUL samples for each test history (`qmodem.battery.data_generation:reconstruct_true_rul_distribution`) at `n_timestamps` intermediate SoCs.
 3. `qmodem.battery.evaluate` draws M = 100 predictive samples per timestamp and computes, per test case and with stagereg metric functions only, expected CRPS, RMSE, coverage and WSU. The first timestamp (t0) is dropped from every metric and is only WSU's origin. Metrics are logged into the method run per case (`evaluation/test/<case>/<metric>`), as unweighted means over cases (`evaluation/test/<metric>`) and per policy (`evaluation/test/policy_<p>/<metric>`).
 
-### Standard vs adversarial training
+### AVI (Q-AVI, C-AVI)
 
-Training can happen in a standard fully supervised way, as in `scripts/battery_multiple_scenarios/run_train.py`, or in an adversarial way, as in `scripts/battery_multiple_scenarios/run_train_adversarial.py`.
-
-The main difference is that the adversarial training uses a generator and a discriminator, which are trained in an adversarial way. The generator is the model that predicts the RUL, while the discriminator is a model that tries to distinguish between the true RUL distribution and the predicted RUL distribution. The generator is trained to fool the discriminator, while the discriminator is trained to correctly classify the true and predicted RUL samples.
-
-Adversarial training currently serves only the QAVI method.
-
-## Environment and configuration
-
-- Use `uv`; the project requires Python `>=3.12` and `.python-version` pins `3.12`.
-- Install/sync dependencies with `uv sync` (CI uses
-  `uv sync --locked --all-extras --dev`).
-- Copy `.env.example` to `.env` before running battery experiments. Battery scripts
-  require absolute raw-data paths, data-generation MLflow run IDs, and MLflow backend
-  and artifact-store settings. Do not commit `.env`, generated data, checkpoints,
-  model outputs, or MLflow state.
-- Scripts expect `train.csv` and `test.csv` in the configured raw-data directory.
-  `generate-all` creates the multi-scenario histories before training.
-
-## Code Testing
-
-Code testing does not have a consistent convention at the moment, since some tests are organized by classes and some are standalone functions.
-
-When adding new tests or updating old ones, pytest and the *functional* convention should be used.
-
-## Commands
-
-Run from the repository root:
-
-```bash
-uv sync --locked --all-extras --dev
-uv run pytest
-uv run pre-commit install
-uv run pre-commit run --all-files
-```
-
-The CI workflows run `uv run pytest` and `uv run pre-commit run --all-files`.
-Pre-commit includes trailing-whitespace, EOF, YAML, large-file checks, Ruff
-check-with-fixes, Ruff format, and docformatter configured from `pyproject.toml`.
-
-## Repository-specific conventions
-
-- Keep reusable code in `src/qmodem` and use `scripts/` only for experiment,
-  comparison, or dataset-specific orchestration. Preserve the `src` layout and
-  import library code as `qmodem...`.
-- JAX PRNG keys are explicit inputs. Split keys per batch/sample and pass them into
-  Flax NNX modules through `nnx.Rngs`; do not introduce implicit global randomness.
-- NNX modules are mutable stateful objects. Training/evaluation mode matters:
-  `CNN.eval()` deliberately keeps MCD models in training mode so dropout remains
-  stochastic for Monte Carlo predictions.
-- Model outputs for the heteroscedastic head are `[mean, positive_variance]`.
-  NLL-based steps clip variance to a small positive value; preserve this convention
-  when adding losses or sampling code.
-- Training loops communicate through `TrainingPhase` callbacks
-  (`INIT`, `EPOCH_START`, `EVAL_START`, `EPOCH_END`, `BEFORE_RETURN`). Add reporting,
-  checkpointing, or metrics as callbacks rather than embedding unrelated side effects
-  in the loop.
-- During the test phase, the input time window is the one one time-step before the SoC of interest, while the target RUL is at the time of the SoC of interest.
-- Bayesian training adds KL divergence normalized by the number of training samples;
-  step factories receive `StandardStepFactoryContext` for this dataset-size
-  dependency. QAVI has separate generator/discriminator optimizers and steps.
-- Battery data is grouped by `run_id`/history. Windows must not cross history
-  boundaries, and RUL targets are aligned to the end of each window. Preserve
-  train-only scaler fitting when changing preprocessing.
-- MLflow is the experiment-tracking boundary: training logs metrics and best model
-  state there, while test scripts retrieve training setup/parameters using the
-  run ID passed with `--run-id`, or select it by tags (`qmodem.tracking.RunSelector`).
-- Prefer typed protocols/dataclasses and existing registries (`METHOD_CONFIGS`,
-  `Method`, data pipelines) over ad-hoc branching. Follow the
-  existing Ruff, docformatter, and Google-style docstring configuration.
+`qmodem.avi` holds the dataset-agnostic `AVI` inference method (stagereg's `InferenceMethod` seam), its implicit posterior and loss, the `LatentMap` protocol and the quantum latent map. A generator (latent map -> postprocessor) maps `z ~ U(0, 2π)` to one draw of the conv layer; it is fitted adversarially against a discriminator that judges (window, target) pairs, with `k` discriminator steps per generator step. The battery generator and discriminator live in `qmodem.battery.models`; the method configurations in `qmodem.battery.methods.avi`. Q-AVI and C-AVI differ only in their latent map.

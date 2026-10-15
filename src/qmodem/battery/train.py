@@ -48,19 +48,6 @@ from qmodem.train import (
     mlflow_track_losses,
     train_loop,
 )
-from qmodem.train_adversarial import (
-    EvalStepFn,
-    TrainStepFn,
-)
-from qmodem.train_adversarial import (
-    LogReporter as AdversarialLogReporter,
-)
-from qmodem.train_adversarial import (
-    mlflow_track_losses as mlflow_track_adversarial_losses,
-)
-from qmodem.train_adversarial import (
-    train_loop as adversarial_train_loop,
-)
 from qmodem.train_base import Callback, mlflow_track_model_best_state
 from qmodem.train_base import EarlyStopper as LegacyEarlyStopper
 
@@ -123,20 +110,6 @@ class TrainHyperparameters(_TrainHyperparametersBase):
     scheduler_alpha: float = 0.1
 
 
-class QAVITrainHyperparameters(_TrainHyperparametersBase):
-    """Hyperparameters for adversarial (QAVI) training."""
-
-    method: Literal[Method.Q_AVI] = Method.Q_AVI
-    pqc_n_qubits: int = 5
-    pqc_n_layers: int = 1
-    discriminator_hidden_size: int = 64
-    discriminator_act_fn: str = "leaky_relu"
-    discriminator_init_seed: int = 43
-    learning_rate_generator: float = 1e-3
-    learning_rate_discriminator: float = 1e-3
-    adversarial_loss_weight: float = 0.1
-
-
 TrainHpT = TypeVar("TrainHpT", bound=_TrainHyperparametersBase)
 
 
@@ -151,7 +124,7 @@ def load_train_hyperparameters_from_mlflow(
 
     Args:
         model_cls: Concrete hyperparameter model to validate against
-            (``TrainHyperparameters`` or ``QAVITrainHyperparameters``).
+            (``TrainHyperparameters``).
         run_id: The ID of the MLflow training run to reload parameters from.
         backend_store: SQLAlchemy URI for the MLflow backend store.
 
@@ -220,68 +193,6 @@ def run_training(
             LogReporter(log_every=10),
             mlflow_track_model_best_state,
             mlflow_track_losses,
-            *callbacks,
-        ),
-        early_stopper=early_stopper,
-    )
-
-
-def run_adversarial_training(
-    *,
-    model: nnx.Module,
-    discriminator: nnx.Module,
-    hp: QAVITrainHyperparameters,
-    raw_data_dir: pathlib.Path,
-    data_gen_run_id: str,
-    data_pipeline: DataPipeline,
-    generator_batch_fn: TrainStepFn,
-    discriminator_batch_fn: TrainStepFn,
-    eval_batch_fn: EvalStepFn | None = None,
-    callbacks: Iterable[Callback] = (),
-) -> None:
-    data = prepare_data(
-        raw_data_dir,
-        data_gen_run_id,
-        pipeline=data_pipeline,
-    )
-    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
-        data,
-        batch_size=hp.batch_size,
-        drop_remainder=hp.drop_remainder,
-    )
-
-    if eval_batch_fn is None:
-        _, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
-
-    optimizer_generator = nnx.Optimizer(
-        model, optax.adam(hp.learning_rate_generator), wrt=nnx.Param
-    )
-    optimizer_discriminator = nnx.Optimizer(
-        discriminator,
-        optax.adam(hp.learning_rate_discriminator),
-        wrt=nnx.Param,
-    )
-    early_stopper = LegacyEarlyStopper(
-        patience=hp.early_stopping_patience,
-        min_delta=hp.early_stopping_min_delta,
-    )
-
-    adversarial_train_loop(
-        n_epochs=hp.n_epochs,
-        train_dataloader_builder=train_dataloader_builder,
-        val_dataloader_builder=val_dataloader_builder,
-        initial_key=jax.random.key(hp.train_rng_seed),
-        model=model,
-        discriminator=discriminator,
-        optimizer_generator=optimizer_generator,
-        optimizer_discriminator=optimizer_discriminator,
-        generator_batch_fn=generator_batch_fn,
-        discriminator_batch_fn=discriminator_batch_fn,
-        eval_batch_fn=eval_batch_fn,
-        callbacks=(
-            AdversarialLogReporter(log_every=10),
-            mlflow_track_model_best_state,
-            mlflow_track_adversarial_losses,
             *callbacks,
         ),
         early_stopper=early_stopper,
