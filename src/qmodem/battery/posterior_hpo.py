@@ -308,6 +308,17 @@ def posterior_objective(
     """
 
     def objective(run: TrialRun) -> float:
+        """Train one method run with the trial's posterior HPs.
+
+        Args:
+            run: The trial and its run's tracker and store.
+
+        Returns:
+            The validation CRPS at the finalized epoch.
+
+        Raises:
+            ValueError: If the method has no posterior stage.
+        """
         recorder = ValidationRecorder()
         method_run = train_method_run(
             backbone=backbone,

@@ -136,10 +136,27 @@ def avi_posterior_spec(
     """
 
     def build_generator(warm_start: PyTree, key: jax.Array) -> ConvGenerator:
+        """Build the conv generator with the method's latent map.
+
+        Args:
+            warm_start: The inferred conv parameters (the generator's offset).
+            key: Initializes the latent map and the postprocessor.
+
+        Returns:
+            The generator.
+        """
         rngs = nnx.Rngs(key)
         return ConvGenerator(build_latent_map(hp, rngs), warm_start, rngs=rngs)
 
     def build_method(key: jax.Array) -> AVI:
+        """Build a fresh AVI inference method.
+
+        Args:
+            key: The posterior-stage initialization key.
+
+        Returns:
+            The AVI method.
+        """
         return AVI(
             build_generator=build_generator,
             build_discriminator=lambda k: WindowDiscriminator(rngs=nnx.Rngs(k)),

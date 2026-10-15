@@ -36,6 +36,13 @@ VALIDATION_SPLIT = "validation"
 
 @dataclasses.dataclass
 class PreparedData:
+    """Windowed, scaled train and validation data.
+
+    Attributes:
+        train: Training windows and targets.
+        val: Validation windows and targets.
+    """
+
     train: ArrayDataSource
     val: ArrayDataSource
 
@@ -43,6 +50,15 @@ class PreparedData:
 def _split_train_val(
     train_path: pathlib.Path, n_histories_train: int
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split the training CSV into training and validation histories by ``run_id``.
+
+    Args:
+        train_path: Path of ``train.csv``.
+        n_histories_train: Histories with a smaller ``run_id`` are training data.
+
+    Returns:
+        The training and the validation histories.
+    """
     data = pd.read_csv(train_path)
     return (
         data[data["run_id"] < n_histories_train],
@@ -56,6 +72,17 @@ def _train_dataloader_builder(
     batch_size: int,
     drop_remainder: bool,
 ) -> grain.DataLoader:
+    """Build one epoch's shuffled training loader.
+
+    Args:
+        sampler_seed: Seed of this epoch's shuffle.
+        ds_train: The training windows.
+        batch_size: Batch size.
+        drop_remainder: Whether to drop a smaller last batch.
+
+    Returns:
+        The Grain loader.
+    """
     sampler = grain.samplers.IndexSampler(
         num_records=len(ds_train),
         num_epochs=1,
@@ -78,6 +105,18 @@ def _train_dataloader_builder(
 def dataloader_builders(
     data: PreparedData, batch_size: int, drop_remainder: bool
 ) -> tuple[Callable[[int], Iterable], Callable[[int], Iterable]]:
+    """Return per-epoch builders of the training and validation loaders.
+
+    Args:
+        data: The prepared windows.
+        batch_size: Training batch size.
+        drop_remainder: Whether to drop a smaller last training batch.
+
+    Returns:
+        ``(train_builder, val_builder)``: the training builder takes the epoch's
+        shuffle seed, the validation builder the epoch (one batch of every
+        validation window).
+    """
     train_builder = functools.partial(
         _train_dataloader_builder,
         ds_train=data.train,
@@ -86,11 +125,13 @@ def dataloader_builders(
     )
 
     def val_builder(epoch: int) -> list[tuple[jax.Array, jax.Array]]:
-        """The validation dataloader is a convention for consistency with the training
-        loop.
+        """Return the whole validation set as a single batch.
 
-        It returns a single batch containing the entire validation set, which is assumed
-        to be small enough to fit in memory.
+        Args:
+            epoch: The epoch (unused; the validation set never changes).
+
+        Returns:
+            One ``(features, targets)`` batch.
         """
         return [(data.val.features, data.val.targets)]
 
@@ -219,6 +260,18 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
     )
 
     def loader(*, split: str, epoch: int) -> list[Batch]:
+        """Return the batches of one split and epoch.
+
+        Args:
+            split: ``"train"`` or ``"validation"``.
+            epoch: The epoch index.
+
+        Returns:
+            The batches.
+
+        Raises:
+            ValueError: If the split is unknown.
+        """
         if split == TRAIN_SPLIT:
             batches = train_builder(_shuffle_seed(key, epoch))
         elif split == VALIDATION_SPLIT:

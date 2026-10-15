@@ -218,6 +218,14 @@ def run_study(
         client = MlflowClient()
 
         def run_trial(trial: optuna.Trial) -> float:
+            """Run one trial as a child run of the study run.
+
+            Args:
+                trial: The Optuna trial.
+
+            Returns:
+                The trial's objective value.
+            """
             return _run_trial(
                 trial,
                 objective,

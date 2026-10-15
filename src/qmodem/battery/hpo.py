@@ -225,6 +225,14 @@ def mean_objective(
     """
 
     def objective(run: TrialRun) -> float:
+        """Train the mean stage with the trial's HPs.
+
+        Args:
+            run: The trial and its run's tracker and store.
+
+        Returns:
+            The best-epoch validation loss.
+        """
         checkpoint = train_mean_stage(
             data=data,
             mean_hp=space.suggest(run.trial, base),
@@ -266,6 +274,14 @@ def variance_objective(
     """
 
     def objective(run: TrialRun) -> float:
+        """Train the variance stage with the trial's learning rate.
+
+        Args:
+            run: The trial and its run's tracker and store.
+
+        Returns:
+            The best-epoch validation Gamma NLL.
+        """
         checkpoint = train_variance_stage(
             data=data,
             mean_hp=mean_hp,
