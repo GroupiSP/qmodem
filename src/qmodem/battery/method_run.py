@@ -60,10 +60,12 @@ from .methods.base import MethodConfig
 from .methods.bbb import BBBConfig
 from .methods.hnn import HNNConfig
 from .methods.mcd import MCDConfig
+from .methods.psgld import PSGLDConfig
 from .models import MeanNet, VarianceNet
 from .posterior import (
     POSTERIOR_CHECKPOINT_KEY,
     PREDICTIVE_SAMPLE_COUNT,
+    EpochTimer,
     PosteriorCost,
     PosteriorKeys,
     build_posterior_stage,
@@ -117,6 +119,7 @@ METHOD_CONFIGS: Mapping[Method, type[MethodConfig]] = {
     Method.HNN: HNNConfig,
     Method.MCD: MCDConfig,
     Method.BBB: BBBConfig,
+    Method.PSGLD: PSGLDConfig,
 }
 """The configuration type of every implemented method (strategy registry).
 
@@ -203,12 +206,14 @@ class MethodRun:
     ) -> PosteriorPredictive:
         """Return the posterior predictive at ``inputs`` over ``num_draws`` draws.
 
-        Without a posterior (HNN), every draw is the backbone's single mean.
+        Without a posterior (HNN), every draw is the backbone's single mean. A
+        finite posterior (pSGLD) always uses all its retained draws, so
+        ``num_draws`` does not apply to it.
 
         Args:
             inputs: Windows ``(B, W, C)``.
             key: Key of the posterior draws.
-            num_draws: Number of draws M.
+            num_draws: Number of draws M of an unlimited posterior.
 
         Returns:
             The draws' means ``(M, B, 1)`` with the aleatoric variance ``(B, 1)``.
@@ -216,6 +221,8 @@ class MethodRun:
         if self.posterior is None:
             mean = self.mean_net(inputs)
             draws = jnp.broadcast_to(mean, (num_draws, *mean.shape))
+        elif self.posterior.num_draws is not None:
+            draws = self.posterior.sample_means(inputs, key)
         else:
             draws = self.posterior.sample_means(inputs, key, num_draws)
         return PosteriorPredictive(
@@ -319,12 +326,13 @@ def _cost(
     """
     inputs = _validation_inputs(data)
     key = run.evaluation_key
+    finite_draws = None if run.posterior is None else run.posterior.num_draws
     return PosteriorCost(
         wall_clock_seconds=wall_clock_seconds,
         trainable_parameters=trainable_parameters,
         draws_per_second=draws_per_second(
             lambda: run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT).draws,
-            PREDICTIVE_SAMPLE_COUNT,
+            finite_draws or PREDICTIVE_SAMPLE_COUNT,
         ),
     )
 
@@ -390,6 +398,7 @@ def train_method_run(
 
     keys = PosteriorKeys.of(key)
     method = spec.build_method(keys.init)
+    timer = EpochTimer(tracker)
     stage = build_posterior_stage(
         spec=spec,
         method=method,
@@ -397,13 +406,15 @@ def train_method_run(
         keys=keys,
         loader=make_loader(data, batch_size=spec.stage.batch_size, key=keys.loader),
         dataset_size=dataset_size,
-        event_sinks=(TrackerEventSink(tracker),),
+        event_sinks=(TrackerEventSink(tracker), timer),
         store=store,
     )
     start = time.perf_counter()
     stage.prepare(state)
+    timer.start()
     stage.train(state)
     wall_clock_seconds = time.perf_counter() - start
+    timer.log_mean()
     trainable_parameters = parameter_count(spec.trainable_parameters(method))
     checkpoint = store.load(POSTERIOR_CHECKPOINT_KEY)
     # Rebuild the posterior from the finalized checkpoint, exactly as a restore
