@@ -8,18 +8,50 @@ code of its own.
 
 The first timestamp of a test case (t0) has no prediction. It is dropped from every
 metric and serves only as the time origin of WSU.
+
+Around the core, ``evaluate_predictive_model`` builds the samples from a predictive
+model (M posterior draws, each with one aleatoric noise sample), and
+``log_evaluation`` logs the result into a method run through an
+``ExperimentTracker``.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping, Sequence
+from typing import Any, Protocol
 
+import jax
+import jax.numpy as jnp
 import numpy as np
-from stagereg.core import coverage, expected_sample_crps, rmse, wsu
+import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
+from stagereg.core import (
+    ExperimentTracker,
+    coverage,
+    expected_sample_crps,
+    rmse,
+    wsu,
+)
+from stagereg.jax import PosteriorPredictive
+
+from .data_processing import FEATURES, WINDOW_SIZE
 
 PRIMARY_COVERAGE_LEVEL = 0.95
 """The protocol's primary coverage level, also the band WSU integrates."""
+
+RELIABILITY_LEVELS: tuple[float, ...] = (
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.9,
+    PRIMARY_COVERAGE_LEVEL,
+)
+"""Default coverage levels: the reliability curve (F1), primary level last."""
+
+EVALUATION_PREFIX = "evaluation/test"
+"""Prefix of every evaluation metric and artifact of a method run."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -190,3 +222,348 @@ def aggregate(
             policy: _mean_rows(rows) for policy, rows in sorted(by_policy.items())
         },
     )
+
+
+# --- Driver: sampling a predictive model on the test histories -------------------
+
+
+class FeatureScaler(Protocol):
+    """Scales input features fitted on the training histories."""
+
+    def transform(self, x: np.ndarray) -> np.ndarray:
+        """Scale features ``(N, C)``.
+
+        Args:
+            x: Raw features.
+
+        Returns:
+            The scaled features.
+        """
+        ...
+
+
+class TargetScaler(Protocol):
+    """Maps scaled RUL back to seconds.
+
+    Assumed affine (e.g. min-max).
+    """
+
+    def inverse_transform(self, x: np.ndarray) -> np.ndarray:
+        """Unscale targets ``(N, 1)``.
+
+        Args:
+            x: Scaled targets.
+
+        Returns:
+            The targets in RUL units.
+        """
+        ...
+
+
+class PredictiveModel(Protocol):
+    """A model with a posterior predictive, such as a ``MethodRun``."""
+
+    def predictive(
+        self, inputs: jax.Array, key: jax.Array, num_draws: int
+    ) -> PosteriorPredictive:
+        """Return the posterior predictive at ``inputs``.
+
+        Args:
+            inputs: Windows ``(B, W, C)``.
+            key: Key of the posterior draws.
+            num_draws: Number of draws M.
+
+        Returns:
+            Draw means ``(M, B, 1)`` and the aleatoric variance ``(B, 1)``.
+        """
+        ...
+
+
+class EvaluationParameters(BaseModel):
+    """The protocol's evaluation parameters (§6).
+
+    Attributes:
+        num_samples: Predictive samples per timestamp M (draws, one noise each).
+        n_timestamps: Evaluation timestamps per test case, t0 included.
+        coverage_levels: Nominal levels of the reported coverages.
+        wsu_level: Nominal level of the band WSU integrates.
+        window_size: Length of each input window.
+        features: Input channels of each window.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    num_samples: int = Field(default=100, ge=1)
+    n_timestamps: int = Field(default=20, ge=3)
+    coverage_levels: tuple[float, ...] = RELIABILITY_LEVELS
+    wsu_level: float = Field(default=PRIMARY_COVERAGE_LEVEL, gt=0.0, lt=1.0)
+    window_size: int = Field(default=WINDOW_SIZE, ge=1)
+    features: tuple[str, ...] = FEATURES
+
+
+@dataclasses.dataclass(frozen=True)
+class CasePrediction:
+    """The predictive samples of one test case and their variance split.
+
+    Attributes:
+        samples: The case's samples (t0 prediction row is NaN).
+        epistemic_variance: Variance of the draw means, per evaluated timestamp
+            ``(T - 1,)``, in RUL units.
+        aleatoric_variance: Mean aleatoric variance, per evaluated timestamp
+            ``(T - 1,)``, in RUL units.
+    """
+
+    samples: CaseSamples
+    epistemic_variance: np.ndarray
+    aleatoric_variance: np.ndarray
+
+    def to_artifact(self) -> dict[str, Any]:
+        """Return the case as a JSON-serializable mapping.
+
+        Prediction rows (``predictive_samples`` and the variances) start at the
+        first evaluated timestamp; ``times``, ``targets`` and ``reference_samples``
+        include t0.
+
+        Returns:
+            The artifact payload.
+        """
+        samples = self.samples
+        return {
+            "name": samples.name,
+            "policy": samples.policy,
+            "times": samples.times.tolist(),
+            "targets": samples.targets.tolist(),
+            "reference_samples": samples.reference_samples.tolist(),
+            "predictive_samples": samples.predictive_samples[1:].tolist(),
+            "epistemic_variance": self.epistemic_variance.tolist(),
+            "aleatoric_variance": self.aleatoric_variance.tolist(),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class Evaluation:
+    """The evaluation of one predictive model on the test cases.
+
+    Attributes:
+        predictions: Samples and variance split of each test case.
+        table: Metrics of each test case.
+        aggregate: Means over test cases, overall and per policy.
+    """
+
+    predictions: list[CasePrediction]
+    table: dict[str, dict[str, float]]
+    aggregate: AggregateMetrics
+
+
+def evaluation_indices(n_rows: int, n_timestamps: int) -> np.ndarray:
+    """Return the row indices of the evaluation timestamps of one test case.
+
+    They match the checkpoints of ``reconstruct_true_rul_distribution``.
+
+    Args:
+        n_rows: Number of rows of the time-sorted test case.
+        n_timestamps: Number of timestamps, t0 included.
+
+    Returns:
+        The row index of each timestamp ``(n_timestamps,)``.
+    """
+    return np.linspace(0, n_rows - 1, num=n_timestamps, dtype=np.int32)
+
+
+def _windows(features: np.ndarray, ends: np.ndarray, window_size: int) -> np.ndarray:
+    """Cut the window ending one step before each index.
+
+    A window that would start before the first row is left-padded with the first
+    row, as in training.
+
+    Args:
+        features: Scaled features ``(N, C)``.
+        ends: Exclusive end index of each window.
+        window_size: Window length W.
+
+    Returns:
+        Windows ``(len(ends), W, C)``.
+    """
+    windows = []
+    for end in ends:
+        window = features[max(0, end - window_size) : end]
+        windows.append(
+            np.pad(window, ((window_size - len(window), 0), (0, 0)), mode="edge")
+        )
+    return np.stack(windows)
+
+
+def _unscale(y_scaler: TargetScaler, values: np.ndarray) -> np.ndarray:
+    """Apply the inverse target scaling elementwise.
+
+    Args:
+        y_scaler: The target scaler.
+        values: Scaled targets of any shape.
+
+    Returns:
+        The targets in RUL units, shaped like ``values``.
+    """
+    flat = np.asarray(values, dtype=np.float64).reshape(-1, 1)
+    return np.asarray(y_scaler.inverse_transform(flat)).reshape(values.shape)
+
+
+def predict_case(
+    model: PredictiveModel,
+    history: pd.DataFrame,
+    reference_samples: np.ndarray,
+    *,
+    name: str,
+    x_scaler: FeatureScaler,
+    y_scaler: TargetScaler,
+    parameters: EvaluationParameters,
+    key: jax.Array,
+) -> CasePrediction:
+    """Draw the predictive samples of one test case.
+
+    At each evaluated timestamp, M posterior draws are taken and each gets one
+    aleatoric noise sample. t0 gets no prediction (a NaN row).
+
+    Args:
+        model: The predictive model.
+        history: The test case's rows (any order).
+        reference_samples: Simulator reference samples ``(T, R)``.
+        name: Test-case name.
+        x_scaler: Input feature scaler.
+        y_scaler: Target scaler (affine).
+        parameters: Evaluation parameters.
+        key: Key of this case's draws and noise.
+
+    Returns:
+        The case's samples and variance split, in RUL units.
+
+    Raises:
+        ValueError: If the case has several policies, or the reference samples
+            do not have one row per timestamp.
+    """
+    history = history.sort_values("time").reset_index(drop=True)
+    policies = history["policy_id"].unique()
+    if len(policies) != 1:
+        raise ValueError(f"Test case {name!r} has several policies: {policies}.")
+    if len(reference_samples) != parameters.n_timestamps:
+        raise ValueError(
+            f"Test case {name!r} has {len(reference_samples)} reference rows; "
+            f"expected {parameters.n_timestamps}."
+        )
+    indices = evaluation_indices(len(history), parameters.n_timestamps)
+    features = x_scaler.transform(
+        history[list(parameters.features)].to_numpy(dtype=np.float64)
+    )
+    windows = _windows(np.asarray(features), indices[1:], parameters.window_size)
+
+    draw_key, noise_key = jax.random.split(key)
+    predictive = model.predictive(
+        jnp.asarray(windows, dtype=jnp.float32), draw_key, parameters.num_samples
+    )
+    draws = np.asarray(predictive.draws, dtype=np.float64)[..., 0]  # (M, T-1)
+    std = np.sqrt(
+        np.broadcast_to(np.asarray(predictive.aleatoric_variance)[..., 0], draws.shape)
+    )
+    noise = np.asarray(jax.random.normal(noise_key, draws.shape), dtype=np.float64)
+
+    means = _unscale(y_scaler, draws)
+    noise_scale = _unscale(y_scaler, draws + std) - means  # affine: a * std
+    samples = means + noise_scale * noise
+    no_prediction = np.full((1, parameters.num_samples), np.nan)
+    return CasePrediction(
+        samples=CaseSamples(
+            name=name,
+            policy=int(policies[0]),
+            times=history["time"].to_numpy(dtype=np.float64)[indices],
+            targets=history["rul"].to_numpy(dtype=np.float64)[indices],
+            reference_samples=np.asarray(reference_samples, dtype=np.float64),
+            predictive_samples=np.vstack([no_prediction, samples.T]),
+        ),
+        epistemic_variance=means.var(axis=0),
+        aleatoric_variance=(noise_scale**2).mean(axis=0),
+    )
+
+
+def evaluate_predictive_model(
+    model: PredictiveModel,
+    *,
+    test_histories: pd.DataFrame,
+    reference_samples: Mapping[str, np.ndarray],
+    x_scaler: FeatureScaler,
+    y_scaler: TargetScaler,
+    parameters: EvaluationParameters,
+    key: jax.Array,
+) -> Evaluation:
+    """Evaluate a predictive model on every test case.
+
+    Test case ``i`` (``run_id`` i) is named ``case_<i>`` and draws with
+    ``fold_in(key, i)``.
+
+    Args:
+        model: The predictive model.
+        test_histories: The test histories (``run_id``, ``policy_id``, ``time``,
+            the features and ``rul``).
+        reference_samples: Simulator reference samples ``(T, R)`` keyed
+            ``test_case_<i>``, as built by ``reconstruct_true_rul_distribution``.
+        x_scaler: Input feature scaler.
+        y_scaler: Target scaler (affine).
+        parameters: Evaluation parameters.
+        key: The evaluation key of the method run.
+
+    Returns:
+        The samples, metric table and aggregates.
+    """
+    predictions = [
+        predict_case(
+            model,
+            history,
+            reference_samples[f"test_case_{case_id}"],
+            name=f"case_{case_id}",
+            x_scaler=x_scaler,
+            y_scaler=y_scaler,
+            parameters=parameters,
+            key=jax.random.fold_in(key, int(case_id)),
+        )
+        for case_id, history in test_histories.groupby("run_id", sort=True)
+    ]
+    cases = [prediction.samples for prediction in predictions]
+    table = metric_table(cases, parameters.coverage_levels, parameters.wsu_level)
+    return Evaluation(
+        predictions=predictions,
+        table=table,
+        aggregate=aggregate(table, {case.name: case.policy for case in cases}),
+    )
+
+
+def log_evaluation(evaluation: Evaluation, tracker: ExperimentTracker) -> None:
+    """Log an evaluation into a method run.
+
+    Metrics go to ``evaluation/test/<case>/<metric>`` (per case),
+    ``evaluation/test/<metric>`` (mean over cases) and
+    ``evaluation/test/policy_<p>/<metric>`` (mean over a policy's cases), at step
+    0. Each case's samples and variance split go to the artifact
+    ``evaluation/test/<case>/predictive`` (JSON).
+
+    Args:
+        evaluation: The evaluation.
+        tracker: The method run's tracker.
+    """
+    metrics = {
+        f"{EVALUATION_PREFIX}/{case}/{metric}": value
+        for case, row in evaluation.table.items()
+        for metric, value in row.items()
+    }
+    metrics |= {
+        f"{EVALUATION_PREFIX}/{metric}": value
+        for metric, value in evaluation.aggregate.overall.items()
+    }
+    metrics |= {
+        f"{EVALUATION_PREFIX}/policy_{policy}/{metric}": value
+        for policy, row in evaluation.aggregate.per_policy.items()
+        for metric, value in row.items()
+    }
+    tracker.log_metrics(metrics, step=0)
+    for prediction in evaluation.predictions:
+        tracker.log_artifact(
+            f"{EVALUATION_PREFIX}/{prediction.samples.name}/predictive",
+            prediction.to_artifact(),
+        )

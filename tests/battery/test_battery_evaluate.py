@@ -1,17 +1,29 @@
-"""Seam 3: the evaluation driver's pure core (predictive and reference samples per
-test case -> metric table and aggregates)."""
+"""Seam 3: the evaluation driver (predictive and reference samples per test case ->
+metric table and aggregates, plus the sampling and logging around that core)."""
 
 from __future__ import annotations
 
 import dataclasses
 
+import jax
+import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from stagereg.core import expected_sample_crps, wsu
+from stagereg.jax import PosteriorPredictive
 
-from qmodem.battery.evaluate import CaseSamples, aggregate, case_metrics, metric_table
+from qmodem.battery.evaluate import (
+    CaseSamples,
+    EvaluationParameters,
+    aggregate,
+    case_metrics,
+    evaluate_predictive_model,
+    log_evaluation,
+    metric_table,
+)
 
 _FINITE = st.floats(-50.0, 50.0, allow_nan=False, width=32)
 
@@ -187,3 +199,161 @@ def test_the_metric_table_has_one_row_per_case() -> None:
 
     assert list(table) == ["case_0", "case_1", "case_2"]
     assert table["case_1"] == case_metrics(cases[1], coverage_levels=(0.5, 0.95))
+
+
+# --- Driver: a predictive model + test histories -> samples, table, logging ------
+
+N_TIMESTAMPS = 6
+N_REFERENCE = 5
+OFFSETS = np.linspace(-1.0, 1.0, 8)
+ALEATORIC_VARIANCE = 0.25
+
+
+class _OffsetModel:
+    """Draw s predicts the window's last load plus ``OFFSETS[s % 8]``."""
+
+    def predictive(self, inputs, key, num_draws):
+        last_load = inputs[:, -1, :1]
+        offsets = jnp.asarray(np.resize(OFFSETS, num_draws))[:, None, None]
+        return PosteriorPredictive(
+            draws=last_load[None] + offsets,
+            aleatoric_variance=jnp.full(last_load.shape, ALEATORIC_VARIANCE),
+        )
+
+
+class _AffineTarget:
+    """Inverse target scaling ``y -> 2 y + 1``."""
+
+    def inverse_transform(self, x):
+        return 2.0 * np.asarray(x) + 1.0
+
+
+class _IdentityFeatures:
+    def transform(self, x):
+        return np.asarray(x)
+
+
+def _test_histories() -> pd.DataFrame:
+    frames = []
+    for case_id, (policy, length) in enumerate([(0, 60), (1, 45), (0, 52)]):
+        time = 5.0 * np.arange(length)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "run_id": case_id,
+                    "policy_id": policy,
+                    "time": time,
+                    "load": np.linspace(0.0, 1.0, length) + case_id,
+                    "soc": np.linspace(1.0, 0.1, length),
+                    "voltage": np.linspace(4.2, 3.0, length),
+                    "rul": time[-1] - time,
+                }
+            )
+        )
+    return pd.concat(frames, ignore_index=True).sample(frac=1.0, random_state=0)
+
+
+@pytest.fixture(scope="module")
+def driver_inputs():
+    histories = _test_histories()
+    rng = np.random.default_rng(0)
+    reference = {
+        f"test_case_{case_id}": rng.uniform(0, 300, (N_TIMESTAMPS, N_REFERENCE))
+        for case_id in histories["run_id"].unique()
+    }
+    return histories, reference
+
+
+def _evaluate(driver_inputs, key=0, num_samples=100):
+    histories, reference = driver_inputs
+    return evaluate_predictive_model(
+        _OffsetModel(),
+        test_histories=histories,
+        reference_samples=reference,
+        x_scaler=_IdentityFeatures(),
+        y_scaler=_AffineTarget(),
+        parameters=EvaluationParameters(
+            num_samples=num_samples,
+            n_timestamps=N_TIMESTAMPS,
+            coverage_levels=(0.5, 0.95),
+        ),
+        key=jax.random.key(key),
+    )
+
+
+def test_every_evaluated_timestamp_gets_one_noise_sample_per_draw(
+    driver_inputs,
+) -> None:
+    evaluation = _evaluate(driver_inputs)
+
+    assert [p.samples.name for p in evaluation.predictions] == [
+        "case_0",
+        "case_1",
+        "case_2",
+    ]
+    assert [p.samples.policy for p in evaluation.predictions] == [0, 1, 0]
+    for prediction in evaluation.predictions:
+        samples = prediction.samples
+        assert samples.predictive_samples.shape == (N_TIMESTAMPS, 100)
+        assert np.isnan(samples.predictive_samples[0]).all()
+        assert np.isfinite(samples.predictive_samples[1:]).all()
+        assert np.all(np.diff(samples.times) > 0)
+        # epistemic/aleatoric split in RUL units (scale factor 2 -> variance x4)
+        np.testing.assert_allclose(
+            prediction.epistemic_variance,
+            4 * np.var(np.resize(OFFSETS, 100)),
+            rtol=1e-5,
+        )
+        np.testing.assert_allclose(
+            prediction.aleatoric_variance, 4 * ALEATORIC_VARIANCE, rtol=1e-5
+        )
+
+
+def test_the_same_key_gives_the_same_samples_and_cases_get_their_own_noise(
+    driver_inputs,
+) -> None:
+    first, second = _evaluate(driver_inputs), _evaluate(driver_inputs)
+    other = _evaluate(driver_inputs, key=1)
+
+    def noise(evaluation, case):
+        samples = evaluation.predictions[case].samples.predictive_samples[1:]
+        return samples - samples.mean(axis=1, keepdims=True)
+
+    np.testing.assert_array_equal(noise(first, 0), noise(second, 0))
+    assert not np.allclose(noise(first, 0), noise(other, 0))
+    assert not np.allclose(noise(first, 0)[:, :10], noise(first, 2)[:, :10])
+
+
+def test_the_table_and_aggregate_follow_the_samples(driver_inputs) -> None:
+    evaluation = _evaluate(driver_inputs)
+
+    assert evaluation.table == metric_table(
+        [p.samples for p in evaluation.predictions], coverage_levels=(0.5, 0.95)
+    )
+    assert evaluation.aggregate == aggregate(
+        evaluation.table, {"case_0": 0, "case_1": 1, "case_2": 0}
+    )
+
+
+def test_the_evaluation_is_logged_per_case_overall_and_per_policy(
+    driver_inputs, tracker_factory
+) -> None:
+    evaluation = _evaluate(driver_inputs)
+    tracker = tracker_factory()
+
+    log_evaluation(evaluation, tracker)
+
+    logged = {
+        key: value for values, _ in tracker.metrics for key, value in values.items()
+    }
+    assert logged["evaluation/test/case_1/crps"] == evaluation.table["case_1"]["crps"]
+    assert logged["evaluation/test/rmse"] == evaluation.aggregate.overall["rmse"]
+    assert (
+        logged["evaluation/test/policy_0/coverage_95"]
+        == evaluation.aggregate.per_policy[0]["coverage_95"]
+    )
+    assert not any(key.endswith("_average") for key in logged)
+    artifact = tracker.artifacts["evaluation/test/case_2/predictive"]
+    assert len(artifact["predictive_samples"]) == N_TIMESTAMPS - 1
+    assert len(artifact["predictive_samples"][0]) == 100
+    assert set(artifact) >= {"epistemic_variance", "aleatoric_variance", "times"}
