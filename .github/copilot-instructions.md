@@ -50,7 +50,7 @@ Hyperparameter optimization (HPO) follows protocol §5: one Optuna study per sta
 
 ### Method runs and evaluation -> `scripts/battery_multiple_scenarios/train_method_run.py`, `evaluate.py`
 
-A method run is an MLflow child (`mlflow.parentRunId`) of a backbone run, tagged `role=method`, `method` and `seed` (`qmodem.battery.method_run`). It restores the backbone's finalized `mean`/`variance` checkpoints and adds the method's posterior stage (none for HNN). Methods are registered in `METHOD_CONFIGS`, keyed by `Method`.
+A method run is an MLflow child (`mlflow.parentRunId`) of a backbone run, tagged `role=method`, `method` and `seed` (`qmodem.battery.method_run`). It restores the backbone's finalized `mean`/`variance` checkpoints and adds the method's posterior stage (none for HNN). Methods are registered once in `qmodem.battery.methods.registry.METHODS` (configuration type, key index and posterior search dimensions), keyed by `Method`; `METHOD_CONFIGS`, `METHOD_KEY_INDEX` and `POSTERIOR_SEARCH_SPACES` derive from it. Method runs and studies on a backbone take the data-generation run from its `data_generation_run_id` tag and window the data with its logged scalers (`qmodem.battery.backbone_data`). Scripts run inside `qmodem.script_session.script_session` (`.env`, logging, MLflow backend, log artifact). `qmodem.tracking` is a package (`tracker`, `checkpoints`, `tags` with the `Role`/`Stage` enums, `selection`, `scalers`).
 
 Evaluation always happens after a method run exists, in a separate process:
 
