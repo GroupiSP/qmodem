@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import dataclasses
 import pathlib
 import pickle
@@ -235,6 +236,27 @@ def reconstruct_true_rul_distribution(
     simulator_updater: SimulatorUpdater,
     event_fn: EventFunction,
 ) -> TestRULSamples:
+    """Simulate reference RUL samples at evenly spaced timestamps of every test case.
+
+    The samples are a pure function of the arguments: the simulator's random
+    generators (held by the config's noise and policy-choice callables) are copied
+    before simulating, so every call, and so every method run's evaluation, is scored
+    against the same reference samples, and ``simulator_base_config`` is left
+    unchanged.
+
+    Args:
+        test_data: Test histories with ``run_id``, ``time``, ``soc`` and
+            ``policy_id`` columns.
+        simulator_base_config: The data-generation run's test simulation config.
+        n_soc0s: Timestamps per test case (``t0`` included), evenly spaced in rows.
+        n_mc_samples: Reference samples per timestamp.
+        simulator_updater: Builds the config of one timestamp.
+        event_fn: Whether the policy is known at ``(t0, soc0)``.
+
+    Returns:
+        ``(n_soc0s, n_mc_samples)`` RUL samples keyed ``test_case_<run_id>``.
+    """
+    simulator_base_config = copy.deepcopy(simulator_base_config)
     # Count the number of unique test cases; create the output data structure
     tc_run_ids = test_data["run_id"].unique()
     out = dict.fromkeys([f"test_case_{i}" for i in tc_run_ids], None)
