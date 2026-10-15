@@ -11,8 +11,15 @@ Configuration comes from the environment, falling back to ``.env``:
 ``MLFLOW_ARTIFACT_STORE`` and ``MLFLOW_EXPERIMENT_NAME``. Variables already set in
 the environment win over ``.env``, so a run can be pointed at another backend.
 
+Protocol backbones (seed 0 included) are re-trained from the frozen HPs of the mean
+and variance studies, passed as ``--mean-study-run-id`` and
+``--variance-study-run-id`` (their ``best.*`` params); epoch caps and patience
+stay as configured here. Without them, the defaults are used.
+
 Example:
     uv run scripts/battery_multiple_scenarios/train_backbone.py --seed 0
+    uv run scripts/battery_multiple_scenarios/train_backbone.py --seed 1 \
+        --mean-study-run-id <ID> --variance-study-run-id <ID>
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ from qmodem.battery.data_processing import (
     make_data_pipeline,
     prepare_data,
 )
+from qmodem.battery.hpo import frozen_backbone_hyperparameters
 from qmodem.battery.train import (
     MeanHyperparameters,
     StageScheduleHyperparameters,
@@ -71,8 +79,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=_DEFAULT_SCHEDULE.max_epochs,
         help="Epoch cap of the variance stage.",
     )
+    parser.add_argument(
+        "--mean-study-run-id",
+        default=None,
+        help="Mean study run whose frozen best.* params set the mean HPs.",
+    )
+    parser.add_argument(
+        "--variance-study-run-id",
+        default=None,
+        help="Variance study run whose frozen best.* params set the variance LR.",
+    )
     parser.add_argument("--run-name", default=None, help="MLflow run name.")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if (args.mean_study_run_id is None) != (args.variance_study_run_id is None):
+        parser.error("--mean-study-run-id and --variance-study-run-id go together.")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -104,6 +125,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     variance_hp = VarianceHyperparameters(
         schedule=StageScheduleHyperparameters(max_epochs=args.variance_epochs)
     )
+    if args.mean_study_run_id is not None:
+        mean_hp, variance_hp = frozen_backbone_hyperparameters(
+            mean_study_run_id=args.mean_study_run_id,
+            variance_study_run_id=args.variance_study_run_id,
+            mean_base=mean_hp,
+            variance_base=variance_hp,
+        )
+        logger.info("Frozen backbone HPs: %s, %s", mean_hp, variance_hp)
     run = track_backbone_run(
         data=data,
         mean_hp=mean_hp,

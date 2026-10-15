@@ -48,6 +48,7 @@ from qmodem.tracking import (
     mlflow_checkpoint_store,
     stagereg_version,
     track_mlflow,
+    unflatten_parameters,
 )
 
 from .data_processing import PreparedData, make_loader, posterior_dataset_size
@@ -163,6 +164,39 @@ def method_config(method: Method, hyperparameters: Mapping[str, Any]) -> MethodC
         if key != DATASET_SIZE_PARAM
     }
     return METHOD_CONFIGS[method].model_validate(configuration)
+
+
+def posterior_overrides(
+    assignments: Sequence[str],
+    *,
+    max_epochs: int | None = None,
+    patience: int | None = None,
+) -> dict[str, Any]:
+    """Nest command-line overrides of a method's posterior hyperparameters.
+
+    Args:
+        assignments: ``NAME=VALUE`` strings, ``NAME`` nested with ``/`` as in the
+            logged ``posterior/...`` params (without the prefix).
+        max_epochs: Override of the stage's epoch cap, or ``None``.
+        patience: Override of the stage's patience, or ``None``.
+
+    Returns:
+        Nested hyperparameters for ``method_config`` (empty if none were given).
+
+    Raises:
+        ValueError: If an assignment is not ``NAME=VALUE``.
+    """
+    flat: dict[str, Any] = {
+        f"stage/{name}": value
+        for name, value in (("max_epochs", max_epochs), ("patience", patience))
+        if value is not None
+    }
+    for assignment in assignments:
+        name, separator, value = assignment.partition("=")
+        if not separator or not name:
+            raise ValueError(f"Expected NAME=VALUE, got {assignment!r}.")
+        flat[name] = value
+    return unflatten_parameters(flat)
 
 
 @dataclasses.dataclass(frozen=True)

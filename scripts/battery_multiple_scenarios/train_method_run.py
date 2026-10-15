@@ -16,12 +16,19 @@ Methods with a posterior stage take the protocol's schedule (300 epochs, patienc
 other posterior hyperparameter is overridden by ``--posterior-param NAME=VALUE``
 (e.g. pSGLD's ``burn_in_epochs``, which must stay below ``--max-epochs``).
 
+Protocol runs (seed 0 included) are re-trained from the method's posterior study:
+``--study-run-id`` applies the study run's frozen ``best.*`` params (the study's
+fixed settings, e.g. its epoch cap, must be passed again as overrides if they were
+changed). A trial run is never reused.
+
 Example:
     uv run scripts/battery_multiple_scenarios/train_method_run.py --method hnn --seed 0
     uv run scripts/battery_multiple_scenarios/train_method_run.py --method bbb --seed 0 \
         --max-epochs 5
     uv run scripts/battery_multiple_scenarios/train_method_run.py --method psgld \
         --seed 0 --max-epochs 4 --posterior-param burn_in_epochs=2
+    uv run scripts/battery_multiple_scenarios/train_method_run.py --method mcd --seed 1 \
+        --study-run-id <posterior study run ID>
 """
 
 from __future__ import annotations
@@ -32,20 +39,24 @@ import logging
 import os
 import pathlib
 from collections.abc import Sequence
-from typing import Any
-
 import mlflow
 from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
 
 from qmodem.battery.data_processing import WINDOW_SIZE, make_data_pipeline, prepare_data
-from qmodem.battery.method_run import METHOD_CONFIGS, method_config, track_method_run
+from qmodem.battery.method_run import (
+    METHOD_CONFIGS,
+    MethodConfig,
+    method_config,
+    posterior_overrides,
+    track_method_run,
+)
+from qmodem.battery.posterior_hpo import frozen_method_config
 from qmodem.battery.train import Method
 from qmodem.tracking import (
     MLFlowSetup,
     MLflowTracker,
     RunSelector,
-    unflatten_parameters,
 )
 from qmodem.utils import setup_script_logging
 
@@ -93,41 +104,48 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "burn_in_epochs=2 (repeatable)."
         ),
     )
+    parser.add_argument(
+        "--study-run-id",
+        default=None,
+        help=(
+            "Posterior study run (role=hpo_study) of this method whose frozen best.* "
+            "params set the tuned HPs (protocol runs); the others come from the "
+            "defaults and overrides."
+        ),
+    )
     parser.add_argument("--run-name", default=None, help="MLflow run name.")
     return parser.parse_args(argv)
 
 
-def posterior_overrides(args: argparse.Namespace) -> dict[str, Any]:
-    """Return the posterior hyperparameters set on the command line.
+def method_configuration(
+    args: argparse.Namespace, client: MlflowClient
+) -> MethodConfig:
+    """Return the run's configuration: defaults, frozen study HPs, CLI overrides.
 
     Args:
         args: The parsed arguments.
+        client: The MLflow client (reads the study run, if one is given).
 
     Returns:
-        Nested hyperparameters for ``method_config`` (empty if none were given).
+        The method configuration.
 
     Raises:
-        SystemExit: If a schedule is given for a method without posterior stage.
+        SystemExit: If overrides are given for a method without posterior stage,
+            or an override is malformed.
     """
-    stage = {
-        name: value
-        for name, value in (
-            ("max_epochs", args.max_epochs),
-            ("patience", args.patience),
+    method = Method(args.method)
+    try:
+        overrides = posterior_overrides(
+            args.posterior_param, max_epochs=args.max_epochs, patience=args.patience
         )
-        if value is not None
-    }
-    flat = {f"stage/{name}": value for name, value in stage.items()}
-    for assignment in args.posterior_param:
-        name, separator, value = assignment.partition("=")
-        if not separator or not name:
-            raise SystemExit(f"--posterior-param needs NAME=VALUE, got {assignment!r}.")
-        flat[name] = value
-    if not flat:
-        return {}
-    if METHOD_CONFIGS[Method(args.method)]().posterior_spec() is None:
+    except ValueError as error:
+        raise SystemExit(f"--posterior-param: {error}") from error
+    if overrides and METHOD_CONFIGS[method]().posterior_spec() is None:
         raise SystemExit(f"Method {args.method!r} has no posterior stage.")
-    return unflatten_parameters(flat)
+    base = method_config(method, overrides)
+    if args.study_run_id is None:
+        return base
+    return frozen_method_config(args.study_run_id, base, client=client)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -161,7 +179,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     run = track_method_run(
         backbone_run_id=backbone_run_id,
         data=data,
-        config=method_config(method, posterior_overrides(args)),
+        config=method_configuration(args, client),
         seed=seed,
         setup=dataclasses.replace(
             setup, run_name=args.run_name or f"{method.value}-seed-{seed}"

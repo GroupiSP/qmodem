@@ -18,6 +18,7 @@ from qmodem.battery.method_run import (
     MCDConfig,
     MethodRun,
     method_key,
+    posterior_overrides,
     restore_method_run,
     train_method_run,
 )
@@ -445,3 +446,27 @@ def test_the_mcd_posterior_loss_decreases(mcd_run) -> None:
     losses = tracker.history("posterior/train/loss")
 
     assert losses[-1] < losses[0]
+
+
+# --- Command-line overrides of a configuration -----------------------------------
+
+
+def test_overrides_nest_the_schedule_and_named_posterior_params() -> None:
+    overrides = posterior_overrides(
+        ["burn_in_epochs=2", "avi/generator/learning_rate=0.01"],
+        max_epochs=4,
+        patience=None,
+    )
+
+    assert overrides == {
+        "stage": {"max_epochs": 4},
+        "burn_in_epochs": "2",
+        "avi": {"generator": {"learning_rate": "0.01"}},
+    }
+    assert posterior_overrides([]) == {}
+
+
+@pytest.mark.parametrize("assignment", ["burn_in_epochs", "=2"])
+def test_a_malformed_override_is_refused(assignment: str) -> None:
+    with pytest.raises(ValueError):
+        posterior_overrides([assignment])
