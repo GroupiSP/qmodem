@@ -12,12 +12,16 @@ The backbone is selected by ``--backbone-run-id`` or by ``--seed`` (newest finis
 falling back to ``.env`` (see ``train_backbone.py``).
 
 Methods with a posterior stage take the protocol's schedule (300 epochs, patience
-60) unless ``--max-epochs`` / ``--patience`` override it, e.g. for a smoke run.
+60) unless ``--max-epochs`` / ``--patience`` override it, e.g. for a smoke run. Any
+other posterior hyperparameter is overridden by ``--posterior-param NAME=VALUE``
+(e.g. pSGLD's ``burn_in_epochs``, which must stay below ``--max-epochs``).
 
 Example:
     uv run scripts/battery_multiple_scenarios/train_method_run.py --method hnn --seed 0
     uv run scripts/battery_multiple_scenarios/train_method_run.py --method bbb --seed 0 \
         --max-epochs 5
+    uv run scripts/battery_multiple_scenarios/train_method_run.py --method psgld \
+        --seed 0 --max-epochs 4 --posterior-param burn_in_epochs=2
 """
 
 from __future__ import annotations
@@ -37,7 +41,12 @@ from mlflow.tracking import MlflowClient
 from qmodem.battery.data_processing import WINDOW_SIZE, make_data_pipeline, prepare_data
 from qmodem.battery.method_run import METHOD_CONFIGS, method_config, track_method_run
 from qmodem.battery.train import Method
-from qmodem.tracking import MLFlowSetup, MLflowTracker, RunSelector
+from qmodem.tracking import (
+    MLFlowSetup,
+    MLflowTracker,
+    RunSelector,
+    unflatten_parameters,
+)
 from qmodem.utils import setup_script_logging
 
 logger = logging.getLogger(__name__)
@@ -74,6 +83,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Posterior-stage early-stopping patience (default: the protocol's 60).",
     )
+    parser.add_argument(
+        "--posterior-param",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help=(
+            "Override one posterior hyperparameter, nested with '/', e.g. "
+            "burn_in_epochs=2 (repeatable)."
+        ),
+    )
     parser.add_argument("--run-name", default=None, help="MLflow run name.")
     return parser.parse_args(argv)
 
@@ -98,11 +117,17 @@ def posterior_overrides(args: argparse.Namespace) -> dict[str, Any]:
         )
         if value is not None
     }
-    if not stage:
+    flat = {f"stage/{name}": value for name, value in stage.items()}
+    for assignment in args.posterior_param:
+        name, separator, value = assignment.partition("=")
+        if not separator or not name:
+            raise SystemExit(f"--posterior-param needs NAME=VALUE, got {assignment!r}.")
+        flat[name] = value
+    if not flat:
         return {}
     if METHOD_CONFIGS[Method(args.method)]().posterior_spec() is None:
         raise SystemExit(f"Method {args.method!r} has no posterior stage.")
-    return {"stage": stage}
+    return unflatten_parameters(flat)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
