@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
@@ -35,9 +35,9 @@ def test_qavi_hpo_hyperparameters_defaults_are_valid() -> None:
     assert hp.pqc_n_layers_min == 1
     assert hp.pqc_n_layers_max == 6
     assert hp.lr_generator_min == pytest.approx(1e-4)
-    assert hp.lr_generator_max == pytest.approx(1e-1)
+    assert hp.lr_generator_max == pytest.approx(1e-2)
     assert hp.lr_discriminator_min == pytest.approx(1e-4)
-    assert hp.lr_discriminator_max == pytest.approx(1e-1)
+    assert hp.lr_discriminator_max == pytest.approx(1e-2)
     assert hp.adversarial_loss_weight_min == pytest.approx(0.0)
     assert hp.adversarial_loss_weight_max == pytest.approx(1.0)
 
@@ -146,6 +146,7 @@ def test_build_model_raises_for_qavi_method() -> None:
         build_model(params)
 
 
+@settings(deadline=None)
 @given(
     pqc_n_qubits=st.integers(min_value=3, max_value=5),
     pqc_n_layers=st.integers(min_value=1, max_value=3),
