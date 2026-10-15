@@ -15,7 +15,6 @@ from .utils import LAST_TRAIN_SETUP_PATH, ROOT_DIR
 
 class DatasetChoice(StrEnum):
     BATTERY = auto()
-    CMAPSS = auto()
 
 
 class LossChoice(StrEnum):
@@ -25,7 +24,6 @@ class LossChoice(StrEnum):
 
 class ModelChoice(StrEnum):
     CNN = auto()
-    LSTM = auto()
 
 
 class OptimizerChoice(StrEnum):

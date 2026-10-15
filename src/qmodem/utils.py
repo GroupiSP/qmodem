@@ -12,7 +12,6 @@ from jax.typing import ArrayLike
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 RAW_DATA_DIR_PATH = ROOT_DIR / "data" / "raw"
-CMAPSS_DIR_PATH = RAW_DATA_DIR_PATH / "CMAPSSData"
 PROCESSED_DATA_DIR_PATH = ROOT_DIR / "data" / "processed"
 
 LAST_TRAIN_SETUP_PATH = ROOT_DIR / ".last_trained.json"

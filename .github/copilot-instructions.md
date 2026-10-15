@@ -8,13 +8,9 @@ installable library lives under `src/qmodem`; `scripts/` contains executable
 experiment entry points, and `tests/` contains pytest coverage for both the reusable
 library and the battery workflows.
 
-### Use cases
-There are three use cases considered so far in QMoDeM, which are available from the `scripts/` directory:
-1. Battery discharge with a single constant amplitude load -> `scripts/battery`
-2. Battery discharge with a probabilistic mixture of two possible variable loads -> `scripts/battery_multiple_scenarios`
-3. CMAPSS turbofan engine degradation -> `scripts/cmapss`
-
-> **NOTE: unmaintained code**: `scripts/cmapss` and `scripts/battery` are not maintained currently. Also unmaintained is any other code related to CMAPSS. All of this logic and implementation can be for now safely ignored when developing QMoDeM.
+### Use case
+QMoDeM currently considers a single use case, available from the `scripts/` directory:
+battery discharge with a probabilistic mixture of two possible variable loads -> `scripts/battery_multiple_scenarios`.
 
 ### Uncertainty modeling techniques
 - HNN: Heteroscedastic Neural Network, a deterministic neural network with a Gaussian head that predicts both the mean and variance of the target distribution.
@@ -73,7 +69,7 @@ Adversarial training currently serves only the QAVI method.
   and artifact-store settings. Do not commit `.env`, generated data, checkpoints,
   model outputs, or MLflow state.
 - Scripts expect `train.csv` and `test.csv` in the configured raw-data directory.
-  `generate-all` creates both single- and multi-scenario histories before training.
+  `generate-all` creates the multi-scenario histories before training.
 
 ## Code Testing
 
