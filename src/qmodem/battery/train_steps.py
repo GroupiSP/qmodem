@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
-from typing import Protocol
 
 import jax
 import jax.numpy as jnp
@@ -19,10 +18,6 @@ class StandardStepFactoryContext:
 
 
 type StandardStepFactory = Callable[[StandardStepFactoryContext], tuple[StepFn, StepFn]]
-
-
-class BayesianModel(Protocol):
-    def kl_divergence(self) -> jax.Array: ...
 
 
 def make_nll_steps(beta: float = 0.0) -> tuple[StepFn, StepFn]:
@@ -48,41 +43,6 @@ def make_nll_steps(beta: float = 0.0) -> tuple[StepFn, StepFn]:
         optimizer: nnx.Optimizer,
     ) -> jax.Array:
         return jnp.mean(nll_batched(model, batch, keys, beta=beta))
-
-    return train_step, eval_step
-
-
-def make_elbo_steps(
-    context: StandardStepFactoryContext,
-) -> tuple[StepFn, StepFn]:
-    def elbo_loss(
-        model: BayesianModel,
-        batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
-    ) -> jax.Array:
-        return jnp.mean(nll_batched(model, batch, keys)) + (
-            model.kl_divergence() / context.n_train_samples
-        )
-
-    @nnx.jit
-    def train_step(
-        model: nnx.Module,
-        batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
-        optimizer: nnx.Optimizer,
-    ) -> jax.Array:
-        loss, grads = nnx.value_and_grad(elbo_loss)(model, batch, keys)
-        optimizer.update(model, grads)
-        return loss
-
-    @nnx.jit
-    def eval_step(
-        model: nnx.Module,
-        batch: tuple[jax.Array, jax.Array],
-        keys: jax.Array,
-        optimizer: nnx.Optimizer,
-    ) -> jax.Array:
-        return elbo_loss(model, batch, keys)
 
     return train_step, eval_step
 

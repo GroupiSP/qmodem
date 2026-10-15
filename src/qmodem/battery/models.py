@@ -2,33 +2,17 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from enum import StrEnum, auto
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
-
 from stagereg.jax import Gamma, GammaHead
 
-from qmodem.module import (
-    ConvWeightGenerator,
-    GaussianBlock,
-    GeneratorConv1D,
-    StandardBayesConv1D,
-)
-from qmodem.module import (
-    mc_sample as _mc_sample,
-)
 from qmodem.pennylane_typing import Device
 from qmodem.quantum_circuits import (
     BinaryCircuitFactory,
     ContinuousCircuitFactory,
 )
-
-# TODO: There should be a single backbone CNN class that includes dropout (MCD only if mode=train during inference)
-# TODO: The final layer should be an input argument to the network initializer.
-# TODO: The convolutional layer should be an input argument to the network initializer (standard, bayesian, flipout, generator).
-
 
 IN_FEATURES = 2
 """Input channels of a battery window (load, voltage)."""
@@ -182,195 +166,6 @@ class Discriminator(nnx.Module):
         x = self.act_fn(self.l1(x))
         x = self.act_fn(self.l2(x))
         return nnx.sigmoid(self.l3(x))
-
-
-class ConvType(StrEnum):
-    DETERMINISTIC = auto()
-    BAYESIAN = auto()
-    QUANTUM_GENERATED = auto()
-
-
-class _DetConv1D(nnx.Module):
-    def __init__(self, **kwargs) -> None:
-        """Thin wrapper to filter the rngs at call time for the deterministic conv
-        layer."""
-        self._conv = nnx.Conv(**kwargs)
-
-    def __call__(self, x: jax.Array, rngs: nnx.Rngs | None = None) -> jax.Array:
-        return self._conv(x)
-
-
-def _conv_layer_factory(conv_type: ConvType, **kwargs) -> nnx.Module:
-    if conv_type == ConvType.DETERMINISTIC:
-        return _DetConv1D(**kwargs)
-    elif conv_type == ConvType.BAYESIAN:
-        return StandardBayesConv1D(**kwargs)
-    elif conv_type == ConvType.QUANTUM_GENERATED:
-        generator = kwargs.pop("generator")
-        return GeneratorConv1D(generator=generator, **kwargs)
-    else:
-        raise ValueError(f"Unsupported convolution type: {conv_type}")
-
-
-class CNN(nnx.Module):
-    def __init__(
-        self,
-        conv_type: ConvType = ConvType.DETERMINISTIC,
-        in_features: int = 1,
-        n_filters: int = 4,
-        kernel_size: int = 5,
-        dropout_rate: float = 0.1,
-        act_fn: nnx.Module = nnx.gelu,
-        generator: ConvWeightGenerator | None = None,
-        mcd: bool = False,
-        *,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """1D CNN for time-series RUL prediction with uncertainty.
-
-        Architecture: Conv1D -> Activation -> Dropout -> Global Average Pooling ->
-        GaussianBlock. Accepts variable-length input windows.
-
-        Args:
-            conv_type (ConvType, optional): Type of convolutional layer. Defaults to DETERMINISTIC.
-            input_dim (int, optional): Number of input features. Defaults to 1.
-            n_filters (int, optional): Number of convolutional filters. Defaults to 4.
-            kernel_size (int, optional): Size of the convolutional kernel. Defaults to 5.
-            dropout_rate (float, optional): Dropout rate. Defaults to 0.1.
-            act_fn (nnx.Module, optional): Activation function. Defaults to nnx.gelu.
-            generator (ConvWeightGenerator | None, optional): Weight generator for quantum-generated convolution.
-                Required if conv_type is QUANTUM_GENERATED, ignored otherwise.
-            mcd (bool, optional): Whether to use Monte Carlo Dropout. Defaults to False.
-            rngs (nnx.Rngs): RNGs for the flax internal modules.
-        """
-        if conv_type == ConvType.QUANTUM_GENERATED and generator is None:
-            raise ValueError(
-                "generator must be provided when conv_type is QUANTUM_GENERATED"
-            )
-
-        self.act_fn = act_fn
-        self.mcd = mcd
-
-        conv_kwargs = {
-            "in_features": in_features,
-            "out_features": n_filters,
-            "kernel_size": kernel_size,
-            "padding": "VALID",
-            "rngs": rngs,
-        }
-
-        if conv_type == ConvType.QUANTUM_GENERATED:
-            conv_kwargs["generator"] = generator
-
-        self.conv = _conv_layer_factory(conv_type, **conv_kwargs)
-        self.dropout = nnx.Dropout(dropout_rate)
-
-        # GaussianBlock to output mean and variance
-        self.gauss = GaussianBlock(n_filters, 1, rngs=rngs)
-
-    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        """Forward pass through the CNN.
-
-        Args:
-            x (jax.Array): Input with shape (batch, window_size, in_features).
-                           Accepts variable-length windows.
-            rngs (nnx.Rngs): RNGs for dropout sampling and weight sampling if applicable.
-
-        Returns:
-            jax.Array: Concatenated [mu, var_positive] with shape (batch, 2).
-        """
-        # Conv1D with activation and dropout
-        x = self.conv(x, rngs=rngs)
-        x = self.act_fn(x)
-        x = self.dropout(x, rngs=rngs)
-
-        # Global Average Pooling: (batch, window_size, n_filters) -> (batch, n_filters)
-        x = jnp.mean(x, axis=-2)
-
-        # GaussianBlock: (batch, n_filters) -> (batch, 2)
-        return self.gauss(x)
-
-    def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
-        """Draw ``n_samples`` Monte Carlo predictions for a single input window.
-
-        Args:
-            key: PRNG key.
-            X: Input with shape ``(1, window_size, in_features)``.
-            n_samples: Number of Monte Carlo samples.
-        """
-        splits = jax.random.split(key, num=2 * n_samples)
-        keys_weights = splits[:n_samples]
-        keys_noise = splits[n_samples:]
-        return _mc_sample(self, X, keys_weights, keys_noise)
-
-    def train(self, **attributes) -> CNN:
-        """Set the module to training mode.
-
-        Args:
-            **attributes: Additional attributes to set.
-
-        Returns:
-            The module itself.
-        """
-        return super().train(**attributes)
-
-    def eval(self, **attributes) -> CNN:
-        """Set the module to evaluation mode, unless Monte Carlo Dropout is enabled, in
-        which case the model remains in training mode to allow Monte Carlo sampling of
-        the activations.
-
-        Args:
-            **attributes: Additional attributes to set.
-
-        Returns:
-            The module itself.
-        """
-        if self.mcd:
-            # If Monte Carlo Dropout is enabled, keep the module in training mode during evaluation
-            return super().train(**attributes)
-
-        return super().eval(**attributes)
-
-
-class CNNForELBO(nnx.Module):
-    @staticmethod
-    def _validate_cnn(cnn: CNN) -> None:
-        if not hasattr(cnn.conv, "kl_divergence"):
-            raise ValueError("The provided CNN does not have a kl_divergence method. ")
-        if not hasattr(cnn.conv, "mean_posterior_variance"):
-            raise ValueError(
-                "The provided CNN does not have a mean_posterior_variance method."
-            )
-
-    def __init__(self, cnn: CNN) -> None:
-        """Wrapper around CNN to expose KL divergence for Bayesian layers.
-
-        Args:
-            cnn (CNN): An instance of the CNN class.
-        """
-        self._validate_cnn(cnn)
-        self.cnn = cnn
-
-    def __call__(self, x: jax.Array, rngs: nnx.Rngs) -> jax.Array:
-        return self.cnn(x, rngs=rngs)
-
-    def kl_divergence(self) -> jax.Array:
-        """Total KL divergence across all Bayesian layers in the CNN."""
-        return self.cnn.conv.kl_divergence()
-
-    def conv_mean_posterior_variance(self) -> jax.Array:
-        """Mean posterior variance of the convolutional layer in the CNN."""
-        return self.cnn.conv.mean_posterior_variance()
-
-    def mc_sample(self, key: jax.Array, X: jax.Array, n_samples: int) -> jax.Array:
-        """Draw ``n_samples`` Monte Carlo predictions for a single input window.
-
-        Args:
-            key: PRNG key.
-            X: Input with shape ``(1, window_size, in_features)``.
-            n_samples: Number of Monte Carlo samples.
-        """
-        return self.cnn.mc_sample(key, X, n_samples)
 
 
 class BaseConvGenerator(nnx.Module):

@@ -28,16 +28,18 @@ battery discharge with a probabilistic mixture of two possible variable loads ->
 3. The pipeline scales training data in `FIT_TRANSFORM` mode, then switches to
    `TRANSFORM` for validation so validation never fits its own scaler. Data is exposed
    through Grain `DataLoader` builders.
-4. `qmodem.train.train_loop` runs standard supervised training; Bayesian models use
-   ELBO/NLL step factories, while QAVI uses
-   `qmodem.train_adversarial.train_loop` with generator and discriminator steps.
+4. Backbone runs (`qmodem.battery.train.train_backbone`) train stagereg's
+   `MeanStage` and `GammaVarianceStage`; method runs
+   (`qmodem.battery.method_run.train_method_run`) restore them and train the shared
+   posterior stage (`qmodem.battery.posterior`) with the method's inference method.
+   Legacy QAVI training still uses `qmodem.train_adversarial.train_loop`.
 5. Training callbacks report/log losses and persist the best parameter state to MLflow.
 
-The shared model layer in `qmodem.battery.models` is a 1D CNN with convolution,
-activation, dropout, global-average pooling, and a Gaussian mean/positive-variance
-head. Convolutions may be deterministic, Bayesian, or quantum-generated. The
-quantum-generated path is built from PennyLane circuit factories and weight
-generators in `qmodem.quantum_circuits` and `qmodem.battery.models`.
+The networks in `qmodem.battery.models` are the mean network
+(`Conv1D -> activation -> GAP -> Linear`) and the variance network (same backbone,
+stagereg `GammaHead`). Posteriors are inferred over the conv layer only
+(`qmodem.battery.posterior.INFERRED_SUBNETWORK`). PennyLane circuit factories and
+weight generators live in `qmodem.quantum_circuits` and `qmodem.battery.models`.
 
 ### Hyperparameter tuning -> `scripts/battery_multiple_scenarios/run_{mean,variance}_study.py`
 Hyperparameter optimization (HPO) follows protocol §5: one Optuna study per stage (and per method for posterior studies). `qmodem.hpo.run_study` records a study as one `role=hpo_study` MLflow run (tags `stage`, `method`/`backbone_run_id` where applicable, `n_trials`; params `best.<name>`) with one `role=hpo_trial` child per trial (tag `hpo.trial=<n>`). The objectives in `qmodem.battery.hpo` train their stage through the same operations as backbone runs (`train_mean_stage`, `train_variance_stage`) and report the per-epoch validation loss to a median pruner. The legacy `run_hpo.py` / `run_hpo_qavi.py` are not maintained.
@@ -120,6 +122,6 @@ check-with-fixes, Ruff format, and docformatter configured from `pyproject.toml`
 - MLflow is the experiment-tracking boundary: training logs metrics and best model
   state there, while test scripts retrieve training setup/parameters using the
   run ID passed with `--run-id`, or select it by tags (`qmodem.tracking.RunSelector`).
-- Prefer typed protocols/dataclasses and existing factories (`ConvType`,
-  `Method`, step factories, data pipelines) over ad-hoc branching. Follow the
+- Prefer typed protocols/dataclasses and existing registries (`METHOD_CONFIGS`,
+  `Method`, data pipelines) over ad-hoc branching. Follow the
   existing Ruff, docformatter, and Google-style docstring configuration.
