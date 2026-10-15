@@ -15,6 +15,7 @@ from qmodem.battery.method_run import (
     BackboneHandle,
     BBBConfig,
     HNNConfig,
+    PSGLDConfig,
     TrackedMethodRun,
     evaluate_tracked_method_run,
     restore_method_run,
@@ -22,6 +23,8 @@ from qmodem.battery.method_run import (
 )
 from qmodem.battery.posterior import (
     COST_DRAWS_PER_SECOND,
+    COST_EPOCH_SECONDS,
+    COST_SECONDS_PER_EPOCH,
     COST_TRAINABLE_PARAMETERS,
     COST_WALL_CLOCK,
     PosteriorStageHyperparameters,
@@ -249,3 +252,73 @@ def test_a_bbb_method_run_is_evaluated_from_its_restored_posterior(
     assert metrics["evaluation/test/crps"] == pytest.approx(
         evaluation.aggregate.overall["crps"]
     )
+
+
+# --- pSGLD: a finite posterior, last epoch finalized -----------------------------
+
+TINY_PSGLD = PSGLDConfig(
+    burn_in_epochs=1,
+    num_samples=4,
+    stage=PosteriorStageHyperparameters(max_epochs=3),
+)
+
+
+@pytest.fixture(scope="module")
+def tracked_psgld(tracked, mlflow_backend, trained_backbone) -> TrackedMethodRun:
+    return track_method_run(
+        backbone_run_id=tracked.backbone.run_id,
+        data=trained_backbone.battery.data,
+        config=TINY_PSGLD,
+        seed=trained_backbone.seed,
+        setup=mlflow_backend.setup,
+    )
+
+
+def test_a_psgld_method_run_logs_its_schedule_and_time_per_epoch(
+    tracked_psgld, mlflow_backend
+) -> None:
+    client = mlflow_backend.client
+    data = client.get_run(tracked_psgld.run_id).data
+    epoch_seconds = client.get_metric_history(tracked_psgld.run_id, COST_EPOCH_SECONDS)
+
+    assert data.params["posterior/burn_in_epochs"] == "1"
+    assert data.params["posterior/num_samples"] == "4"
+    assert sorted(m.step for m in epoch_seconds) == [0, 1, 2]
+    assert data.metrics[COST_SECONDS_PER_EPOCH] > 0
+    assert [
+        a.path
+        for a in client.list_artifacts(tracked_psgld.run_id, "checkpoints/posterior")
+    ] == ["checkpoints/posterior/best"]
+
+
+def test_a_psgld_method_run_is_evaluated_on_all_its_retained_draws(
+    tracked, tracked_psgld, mlflow_backend
+) -> None:
+    histories = _test_histories()
+    rng = np.random.default_rng(3)
+    reference = {
+        f"test_case_{i}": rng.uniform(0, 250, (N_TIMESTAMPS, 7)) for i in range(2)
+    }
+    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_samples=20)
+
+    evaluation = evaluate_tracked_method_run(
+        tracked_psgld.run_id,
+        test_histories=histories,
+        reference_samples=reference,
+        parameters=parameters,
+        client=mlflow_backend.client,
+    )
+
+    expected = evaluate_predictive_model(
+        tracked_psgld.run,
+        test_histories=histories,
+        reference_samples=reference,
+        x_scaler=tracked.x_scaler,
+        y_scaler=tracked.y_scaler,
+        parameters=parameters,
+        key=tracked_psgld.run.evaluation_key,
+    )
+    for prediction in evaluation.predictions:
+        assert prediction.samples.predictive_samples.shape[1] == TINY_PSGLD.num_samples
+    for case, row in expected.table.items():
+        assert evaluation.table[case] == pytest.approx(row)
