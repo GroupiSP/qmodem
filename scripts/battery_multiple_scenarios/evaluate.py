@@ -26,9 +26,8 @@ import os
 import pathlib
 from collections.abc import Sequence
 
-import mlflow
+import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
 
 from qmodem.battery.backbone_data import backbone_data_generation_run_id
@@ -39,8 +38,8 @@ from qmodem.battery.data_generation import (
 )
 from qmodem.battery.evaluate import EvaluationParameters
 from qmodem.battery.method_run import PARENT_RUN_TAG, evaluate_tracked_method_run
-from qmodem.tracking import Role, MLFlowSetup, MLflowTracker, RunSelector
-from qmodem.utils import setup_script_logging
+from qmodem.tracking import Role, RunSelector
+from qmodem.script_session import script_session
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,44 @@ METHOD_RUN_SELECTOR = RunSelector(Role.METHOD)
 _DEFAULTS = EvaluationParameters()
 _EVENT_TIME = 900.0
 """Time after which the simulator's policy is known (two-scenarios event)."""
+
+
+def reference_samples(
+    run_id: str,
+    test_histories: pd.DataFrame,
+    *,
+    parameters: EvaluationParameters,
+    n_reference_samples: int,
+    client: MlflowClient,
+) -> dict[str, np.ndarray]:
+    """Simulate the reference samples of the method run's data-generation run.
+
+    Args:
+        run_id: The method run (its parent backbone names the data run).
+        test_histories: The test histories.
+        parameters: Evaluation parameters (timestamps per case).
+        n_reference_samples: Simulator samples per timestamp.
+        client: The MLflow client.
+
+    Returns:
+        Reference samples keyed ``test_case_<i>``.
+
+    Raises:
+        ValueError: If ``DATA_GEN_RUN_ID_MULTI`` disagrees with the backbone.
+    """
+    data_run_id = backbone_data_generation_run_id(
+        client.get_run(run_id).data.tags[PARENT_RUN_TAG],
+        expected=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
+        client=client,
+    )
+    return reconstruct_true_rul_distribution(
+        test_data=test_histories,
+        simulator_base_config=load_simulation_config(run_id=data_run_id),
+        n_soc0s=parameters.n_timestamps,
+        n_mc_samples=n_reference_samples,
+        simulator_updater=sim_updater_two_scenarios,
+        event_fn=lambda t0, soc0: t0 > _EVENT_TIME,
+    )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -89,49 +126,35 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Command-line arguments. Defaults to ``sys.argv[1:]``.
     """
     args = parse_args(argv)
-    load_dotenv()
-    log_stream = setup_script_logging()
-
-    setup = MLFlowSetup()
-    mlflow.set_tracking_uri(setup.backend_store)
-    client = MlflowClient()
-    experiment = client.get_experiment_by_name(setup.experiment_name)
-    if experiment is None:
-        raise SystemExit(f"No experiment {setup.experiment_name!r}.")
-    run_id = METHOD_RUN_SELECTOR.resolve(
-        args, experiment_ids=[experiment.experiment_id], client=client
-    )
-    logger.info("Evaluating method run %s", run_id)
-    data_run_id = backbone_data_generation_run_id(
-        client.get_run(run_id).data.tags[PARENT_RUN_TAG],
-        expected=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
-        client=client,
-    )
-
     parameters = EvaluationParameters(
         n_timestamps=args.n_timestamps, num_samples=args.num_samples
     )
-    test_histories = pd.read_csv(
-        pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]) / "test.csv"
-    )
-    reference_samples = reconstruct_true_rul_distribution(
-        test_data=test_histories,
-        simulator_base_config=load_simulation_config(run_id=data_run_id),
-        n_soc0s=parameters.n_timestamps,
-        n_mc_samples=args.n_reference_samples,
-        simulator_updater=sim_updater_two_scenarios,
-        event_fn=lambda t0, soc0: t0 > _EVENT_TIME,
-    )
-    evaluation = evaluate_tracked_method_run(
-        run_id,
-        test_histories=test_histories,
-        reference_samples=reference_samples,
-        parameters=parameters,
-        client=client,
-    )
-    for metric, value in evaluation.aggregate.overall.items():
-        logger.info("evaluation/test/%s = %.4f", metric, value)
-    MLflowTracker(run_id).log_artifact("evaluation_log.txt", log_stream.getvalue())
+    with script_session() as session:
+        run_id = METHOD_RUN_SELECTOR.resolve(
+            args,
+            experiment_ids=session.require_experiment_ids(),
+            client=session.client,
+        )
+        logger.info("Evaluating method run %s", run_id)
+        test_histories = pd.read_csv(
+            pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]) / "test.csv"
+        )
+        evaluation = evaluate_tracked_method_run(
+            run_id,
+            test_histories=test_histories,
+            reference_samples=reference_samples(
+                run_id,
+                test_histories,
+                parameters=parameters,
+                n_reference_samples=args.n_reference_samples,
+                client=session.client,
+            ),
+            parameters=parameters,
+            client=session.client,
+        )
+        for metric, value in evaluation.aggregate.overall.items():
+            logger.info("evaluation/test/%s = %.4f", metric, value)
+        session.attach_log(run_id, "evaluation_log.txt")
 
 
 if __name__ == "__main__":

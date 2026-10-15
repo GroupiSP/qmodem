@@ -32,11 +32,8 @@ import os
 import pathlib
 from collections.abc import Sequence
 
-import mlflow
-from dotenv import load_dotenv
-from mlflow.tracking import MlflowClient
 
-from qmodem.battery.backbone_data import prepare_backbone_data
+from qmodem.battery.backbone_data import load_backbone_context
 from qmodem.battery.hpo import (
     STUDY_SEED,
     VARIANCE_STUDY,
@@ -53,12 +50,10 @@ from qmodem.hpo import StudyLayout, run_study
 from qmodem.tracking import (
     Role,
     Stage,
-    MLFlowSetup,
     MLflowCheckpointStore,
-    MLflowTracker,
     RunSelector,
 )
-from qmodem.utils import setup_script_logging
+from qmodem.script_session import script_session
 
 logger = logging.getLogger(__name__)
 
@@ -103,58 +98,54 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Command-line arguments. Defaults to ``sys.argv[1:]``.
     """
     args = parse_args(argv)
-    load_dotenv()
-    log_stream = setup_script_logging()
-
-    setup = MLFlowSetup(run_name=args.run_name)
-    mlflow.set_tracking_uri(setup.backend_store)
-    client = MlflowClient()
-    experiment = client.get_experiment_by_name(setup.experiment_name)
-    experiment_ids = [experiment.experiment_id] if experiment is not None else []
-    backbone_run_id = _BACKBONE.resolve(args, experiment_ids=experiment_ids)
-    seed = int(client.get_run(backbone_run_id).data.tags["seed"])
-    mean_hp, variance_hp = load_backbone_hyperparameters(backbone_run_id)
-    mean_checkpoint = MLflowCheckpointStore(backbone_run_id).load(MEAN_CHECKPOINT_KEY)
-    logger.info("Backbone run %s (seed %d)", backbone_run_id, seed)
-
-    data = prepare_backbone_data(
-        backbone_run_id,
-        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-        expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
-        client=client,
-    )
-    logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
-
-    space = VarianceSearchSpace()
-    base = variance_hp
-    if args.max_epochs is not None:
-        base = VarianceHyperparameters(
-            optimizer=variance_hp.optimizer,
-            schedule=StageScheduleHyperparameters(
-                max_epochs=args.max_epochs, patience=variance_hp.schedule.patience
-            ),
+    with script_session() as session:
+        backbone_run_id = _BACKBONE.resolve(
+            args, experiment_ids=session.experiment_ids, client=session.client
         )
-    result = run_study(
-        variance_objective(
-            data=data,
-            mean_hp=mean_hp,
-            mean_checkpoint=mean_checkpoint,
-            space=space,
-            base=base,
-            seed=seed,
-        ),
-        config=dataclasses.replace(VARIANCE_STUDY, n_trials=args.n_trials),
-        layout=StudyLayout(stage=Stage.VARIANCE, backbone_run_id=backbone_run_id),
-        setup=setup,
-        storage=args.optuna_storage,
-    )
-    logger.info(
-        "Variance study %s: best value %.6g with %s",
-        result.run_id,
-        result.best_value,
-        space.apply(result.best_params, base).model_dump(),
-    )
-    MLflowTracker(result.run_id).log_artifact("study_log.txt", log_stream.getvalue())
+        mean_hp, variance_hp = load_backbone_hyperparameters(
+            backbone_run_id, client=session.client
+        )
+        mean_checkpoint = MLflowCheckpointStore(
+            backbone_run_id, client=session.client
+        ).load(MEAN_CHECKPOINT_KEY)
+        backbone = load_backbone_context(
+            backbone_run_id,
+            raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+            expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
+            client=session.client,
+        )
+        logger.info("Backbone run %s (seed %d)", backbone_run_id, backbone.seed)
+
+        space = VarianceSearchSpace()
+        base = variance_hp
+        if args.max_epochs is not None:
+            base = VarianceHyperparameters(
+                optimizer=variance_hp.optimizer,
+                schedule=StageScheduleHyperparameters(
+                    max_epochs=args.max_epochs, patience=variance_hp.schedule.patience
+                ),
+            )
+        result = run_study(
+            variance_objective(
+                data=backbone.data,
+                mean_hp=mean_hp,
+                mean_checkpoint=mean_checkpoint,
+                space=space,
+                base=base,
+                seed=backbone.seed,
+            ),
+            config=dataclasses.replace(VARIANCE_STUDY, n_trials=args.n_trials),
+            layout=StudyLayout(stage=Stage.VARIANCE, backbone_run_id=backbone_run_id),
+            setup=dataclasses.replace(session.setup, run_name=args.run_name),
+            storage=args.optuna_storage,
+        )
+        logger.info(
+            "Variance study %s: best value %.6g with %s",
+            result.run_id,
+            result.best_value,
+            space.apply(result.best_params, base).model_dump(),
+        )
+        session.attach_log(result.run_id, "study_log.txt")
 
 
 if __name__ == "__main__":

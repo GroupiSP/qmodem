@@ -8,6 +8,7 @@ into the backbone run), loaded, never refitted.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 
 from mlflow.tracking import MlflowClient
@@ -107,4 +108,51 @@ def prepare_backbone_data(
         data_run_id,
         backbone_data_pipeline(backbone_run_id),
         fit_scalers=False,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class BackboneContext:
+    """What a run consuming a backbone run takes from it besides its checkpoints.
+
+    Attributes:
+        seed: The backbone's protocol seed (its ``seed`` tag).
+        data: The backbone's windows, with its scalers.
+    """
+
+    seed: int
+    data: PreparedData
+
+
+def load_backbone_context(
+    backbone_run_id: str,
+    *,
+    raw_data_dir: pathlib.Path,
+    expected_data_generation_run_id: str | None = None,
+    client: MlflowClient | None = None,
+) -> BackboneContext:
+    """Return a backbone run's seed and its windows (see ``prepare_backbone_data``).
+
+    Args:
+        backbone_run_id: The backbone run.
+        raw_data_dir: Directory holding ``train.csv``.
+        expected_data_generation_run_id: The configured data-generation run, or
+            ``None``.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Returns:
+        The seed and the windows.
+
+    Raises:
+        ValueError: If the configured data-generation run is not the backbone's.
+    """
+    client = client if client is not None else MlflowClient()
+    return BackboneContext(
+        seed=int(client.get_run(backbone_run_id).data.tags["seed"]),
+        data=prepare_backbone_data(
+            backbone_run_id,
+            raw_data_dir=raw_data_dir,
+            expected_data_generation_run_id=expected_data_generation_run_id,
+            client=client,
+        ),
     )

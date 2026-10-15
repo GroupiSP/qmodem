@@ -38,14 +38,15 @@ import os
 import pathlib
 from collections.abc import Sequence
 
-import mlflow
-from dotenv import load_dotenv
-from mlflow.tracking import MlflowClient
 from stagereg.core import flatten_parameters
 
-from qmodem.battery.backbone_data import prepare_backbone_data
+from qmodem.battery.backbone_data import BackboneContext, load_backbone_context
 from qmodem.battery.hpo import STUDY_SEED
-from qmodem.battery.method_run import method_config, posterior_overrides
+from qmodem.battery.method_run import (
+    MethodConfig,
+    method_config,
+    posterior_overrides,
+)
 from qmodem.battery.posterior_hpo import (
     POSTERIOR_SEARCH_SPACES,
     POSTERIOR_STUDY,
@@ -56,12 +57,10 @@ from qmodem.battery.posterior_hpo import (
 from qmodem.battery.train import Method
 from qmodem.tracking import (
     Role,
-    MLFlowSetup,
-    MLflowTracker,
     RunSelector,
     protocol_override_tags,
 )
-from qmodem.utils import setup_script_logging
+from qmodem.script_session import ScriptSession, script_session
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +116,67 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def study_base(args: argparse.Namespace) -> tuple[MethodConfig, dict[str, str]]:
+    """Return the study's fixed settings and the tags of their protocol overrides.
+
+    Args:
+        args: The parsed arguments.
+
+    Returns:
+        The base configuration and its ``protocol_overrides`` tags.
+
+    Raises:
+        SystemExit: If an override is malformed.
+    """
+    try:
+        overrides = posterior_overrides(
+            args.posterior_param, max_epochs=args.max_epochs, patience=args.patience
+        )
+    except ValueError as error:
+        raise SystemExit(f"--posterior-param: {error}") from error
+    base = method_config(Method(args.method), overrides)
+    return base, protocol_override_tags(list(flatten_parameters(overrides)))
+
+
+def tuned_backbone(
+    args: argparse.Namespace, session: ScriptSession
+) -> tuple[str, BackboneContext]:
+    """Select the study's backbone run and load its data.
+
+    Args:
+        args: The parsed arguments.
+        session: The script session.
+
+    Returns:
+        The backbone run ID and its seed and windows.
+
+    Raises:
+        SystemExit: If no experiment exists or the backbone was not trained from
+            the variance study.
+    """
+    backbone_run_id = _BACKBONE.resolve(
+        args, experiment_ids=session.require_experiment_ids(), client=session.client
+    )
+    try:
+        require_tuned_backbone(backbone_run_id, client=session.client)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    backbone = load_backbone_context(
+        backbone_run_id,
+        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+        expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
+        client=session.client,
+    )
+    logger.info(
+        "Backbone run %s (seed %d): %d train, %d validation windows",
+        backbone_run_id,
+        backbone.seed,
+        len(backbone.data.train),
+        len(backbone.data.val),
+    )
+    return backbone_run_id, backbone
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Run one posterior study and record it in MLflow.
 
@@ -124,68 +184,38 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Command-line arguments. Defaults to ``sys.argv[1:]``.
 
     Raises:
-        SystemExit: If an override is malformed or no experiment exists.
+        SystemExit: If an override is malformed, no experiment exists or the
+            backbone is not tuned.
     """
     args = parse_args(argv)
-    load_dotenv()
-    log_stream = setup_script_logging()
-
     method = Method(args.method)
-    try:
-        overrides = posterior_overrides(
-            args.posterior_param, max_epochs=args.max_epochs, patience=args.patience
+    base, override_tags = study_base(args)
+    with script_session() as session:
+        backbone_run_id, backbone = tuned_backbone(args, session)
+        result = run_posterior_study(
+            backbone_run_id=backbone_run_id,
+            data=backbone.data,
+            base=base,
+            setup=dataclasses.replace(
+                session.setup,
+                run_name=args.run_name or f"posterior-study-{method.value}",
+                tags=override_tags,
+            ),
+            config=dataclasses.replace(POSTERIOR_STUDY, n_trials=args.n_trials),
+            seed=backbone.seed,
+            storage=args.optuna_storage,
+            client=session.client,
         )
-    except ValueError as error:
-        raise SystemExit(f"--posterior-param: {error}") from error
-    base = method_config(method, overrides)
-
-    setup = MLFlowSetup(
-        run_name=args.run_name or f"posterior-study-{method.value}",
-        tags=protocol_override_tags(list(flatten_parameters(overrides))),
-    )
-    mlflow.set_tracking_uri(setup.backend_store)  # prepare_data reads the data run
-    client = MlflowClient()
-    experiment = client.get_experiment_by_name(setup.experiment_name)
-    if experiment is None:
-        raise SystemExit(f"No experiment {setup.experiment_name!r}; train a backbone.")
-    backbone_run_id = _BACKBONE.resolve(
-        args, experiment_ids=[experiment.experiment_id], client=client
-    )
-    try:
-        require_tuned_backbone(backbone_run_id, client=client)
-    except ValueError as error:
-        raise SystemExit(str(error)) from error
-    seed = int(client.get_run(backbone_run_id).data.tags["seed"])
-    logger.info("Backbone run %s (seed %d)", backbone_run_id, seed)
-
-    data = prepare_backbone_data(
-        backbone_run_id,
-        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-        expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
-        client=client,
-    )
-    logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
-
-    result = run_posterior_study(
-        backbone_run_id=backbone_run_id,
-        data=data,
-        base=base,
-        setup=setup,
-        config=dataclasses.replace(POSTERIOR_STUDY, n_trials=args.n_trials),
-        seed=seed,
-        storage=args.optuna_storage,
-        client=client,
-    )
-    logger.info(
-        "Posterior study %s (%s): best value %.6g with %s",
-        result.run_id,
-        method.value,
-        result.best_value,
-        search_space(method)
-        .apply(result.best_params, base)
-        .posterior_hyperparameters(),
-    )
-    MLflowTracker(result.run_id).log_artifact("study_log.txt", log_stream.getvalue())
+        logger.info(
+            "Posterior study %s (%s): best value %.6g with %s",
+            result.run_id,
+            method.value,
+            result.best_value,
+            search_space(method)
+            .apply(result.best_params, base)
+            .posterior_hyperparameters(),
+        )
+        session.attach_log(result.run_id, "study_log.txt")
 
 
 if __name__ == "__main__":

@@ -44,12 +44,10 @@ import pathlib
 from collections.abc import Sequence
 from typing import Any
 
-import mlflow
-from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
 from stagereg.core import flatten_parameters
 
-from qmodem.battery.backbone_data import prepare_backbone_data
+from qmodem.battery.backbone_data import load_backbone_context
 from qmodem.battery.method_run import (
     METHOD_CONFIGS,
     MethodConfig,
@@ -61,12 +59,10 @@ from qmodem.battery.posterior_hpo import frozen_method_config
 from qmodem.battery.train import Method
 from qmodem.tracking import (
     Role,
-    MLFlowSetup,
-    MLflowTracker,
     RunSelector,
     protocol_override_tags,
 )
-from qmodem.utils import setup_script_logging
+from qmodem.script_session import script_session
 
 logger = logging.getLogger(__name__)
 
@@ -178,42 +174,37 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Command-line arguments. Defaults to ``sys.argv[1:]``.
     """
     args = parse_args(argv)
-    load_dotenv()
-    log_stream = setup_script_logging()
-
     method = Method(args.method)
-    setup = MLFlowSetup(run_name=args.run_name)
-    mlflow.set_tracking_uri(setup.backend_store)  # prepare_data reads the data run
-    client = MlflowClient()
-    experiment = client.get_experiment_by_name(setup.experiment_name)
-    if experiment is None:
-        raise SystemExit(f"No experiment {setup.experiment_name!r}; train a backbone.")
-    backbone_run_id = BACKBONE_SELECTOR.resolve(
-        args, experiment_ids=[experiment.experiment_id], client=client
-    )
-    seed = int(client.get_run(backbone_run_id).data.tags["seed"])
-    logger.info("Backbone run %s (seed %d)", backbone_run_id, seed)
-
-    data = prepare_backbone_data(
-        backbone_run_id,
-        raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-        expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
-        client=client,
-    )
-    run = track_method_run(
-        backbone_run_id=backbone_run_id,
-        data=data,
-        config=method_configuration(args, client),
-        seed=seed,
-        setup=dataclasses.replace(
-            setup,
-            run_name=args.run_name or f"{method.value}-seed-{seed}",
-            tags=protocol_override_tags(list(flatten_parameters(overrides_of(args)))),
-        ),
-        client=client,
-    )
-    logger.info("Method run %s (%s, seed %d)", run.run_id, method.value, seed)
-    MLflowTracker(run.run_id).log_artifact("training_log.txt", log_stream.getvalue())
+    with script_session() as session:
+        backbone_run_id = BACKBONE_SELECTOR.resolve(
+            args,
+            experiment_ids=session.require_experiment_ids(),
+            client=session.client,
+        )
+        backbone = load_backbone_context(
+            backbone_run_id,
+            raw_data_dir=pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+            expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
+            client=session.client,
+        )
+        run = track_method_run(
+            backbone_run_id=backbone_run_id,
+            data=backbone.data,
+            config=method_configuration(args, session.client),
+            seed=backbone.seed,
+            setup=dataclasses.replace(
+                session.setup,
+                run_name=args.run_name or f"{method.value}-seed-{backbone.seed}",
+                tags=protocol_override_tags(
+                    list(flatten_parameters(overrides_of(args)))
+                ),
+            ),
+            client=session.client,
+        )
+        logger.info(
+            "Method run %s (%s, seed %d)", run.run_id, method.value, backbone.seed
+        )
+        session.attach_log(run.run_id, "training_log.txt")
 
 
 if __name__ == "__main__":

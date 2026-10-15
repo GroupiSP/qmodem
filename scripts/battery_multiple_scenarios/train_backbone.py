@@ -35,15 +35,14 @@ Example:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import pathlib
 from collections.abc import Sequence
 
-import mlflow
 import numpy as np
 import sklearn.preprocessing as skpp
-from dotenv import load_dotenv
 
 from qmodem.battery.data_processing import (
     FEATURES,
@@ -60,12 +59,10 @@ from qmodem.battery.train import (
 )
 from qmodem.tracking import (
     Stage,
-    MLFlowSetup,
-    MLflowTracker,
     ScalerArtifact,
     protocol_override_tags,
 )
-from qmodem.utils import setup_script_logging
+from qmodem.script_session import script_session
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +112,56 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def backbone_hyperparameters(
+    args: argparse.Namespace,
+) -> tuple[MeanHyperparameters, VarianceHyperparameters]:
+    """Return the backbone's HPs: the CLI caps, then the studies' frozen HPs.
+
+    Args:
+        args: The parsed arguments.
+
+    Returns:
+        The mean and variance hyperparameters.
+    """
+    mean_hp = MeanHyperparameters(
+        schedule=StageScheduleHyperparameters(max_epochs=args.mean_epochs)
+    )
+    variance_hp = VarianceHyperparameters(
+        schedule=StageScheduleHyperparameters(max_epochs=args.variance_epochs)
+    )
+    if args.mean_study_run_id is None:
+        return mean_hp, variance_hp
+    mean_hp, variance_hp = frozen_backbone_hyperparameters(
+        mean_study_run_id=args.mean_study_run_id,
+        variance_study_run_id=args.variance_study_run_id,
+        mean_base=mean_hp,
+        variance_base=variance_hp,
+    )
+    logger.info("Frozen backbone HPs: %s, %s", mean_hp, variance_hp)
+    return mean_hp, variance_hp
+
+
+def override_tags(args: argparse.Namespace) -> dict[str, str]:
+    """Return the ``protocol_overrides`` tags of non-protocol epoch caps.
+
+    Args:
+        args: The parsed arguments.
+
+    Returns:
+        The tags (empty when both caps are the protocol's).
+    """
+    return protocol_override_tags(
+        [
+            f"{stage}/schedule/max_epochs"
+            for stage, epochs in (
+                (Stage.MEAN, args.mean_epochs),
+                (Stage.VARIANCE, args.variance_epochs),
+            )
+            if epochs != _DEFAULT_SCHEDULE.max_epochs
+        ]
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Train and record one backbone run.
 
@@ -122,68 +169,46 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Command-line arguments. Defaults to ``sys.argv[1:]``.
     """
     args = parse_args(argv)
-    load_dotenv()
-    log_stream = setup_script_logging()
-
-    overridden = [
-        f"{stage}/schedule/max_epochs"
-        for stage, epochs in (
-            (Stage.MEAN, args.mean_epochs),
-            (Stage.VARIANCE, args.variance_epochs),
+    with script_session() as session:
+        data_generation_run_id = os.environ["DATA_GEN_RUN_ID_MULTI"]
+        x_scaler = skpp.StandardScaler()
+        y_scaler = skpp.MinMaxScaler(feature_range=(0, 1))
+        data = prepare_data(
+            pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+            data_generation_run_id,
+            make_data_pipeline(WINDOW_SIZE, x_scaler=x_scaler, y_scaler=y_scaler),
         )
-        if epochs != _DEFAULT_SCHEDULE.max_epochs
-    ]
-    setup = MLFlowSetup(
-        run_name=args.run_name or f"backbone-seed-{args.seed}",
-        tags=protocol_override_tags(overridden),
-    )
-    data_generation_run_id = os.environ["DATA_GEN_RUN_ID_MULTI"]
-    mlflow.set_tracking_uri(setup.backend_store)  # prepare_data reads the data run
-
-    x_scaler = skpp.StandardScaler()
-    y_scaler = skpp.MinMaxScaler(feature_range=(0, 1))
-    data = prepare_data(
-        pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-        data_generation_run_id,
-        make_data_pipeline(WINDOW_SIZE, x_scaler=x_scaler, y_scaler=y_scaler),
-    )
-    logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
-
-    mean_hp = MeanHyperparameters(
-        schedule=StageScheduleHyperparameters(max_epochs=args.mean_epochs)
-    )
-    variance_hp = VarianceHyperparameters(
-        schedule=StageScheduleHyperparameters(max_epochs=args.variance_epochs)
-    )
-    if args.mean_study_run_id is not None:
-        mean_hp, variance_hp = frozen_backbone_hyperparameters(
+        logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
+        mean_hp, variance_hp = backbone_hyperparameters(args)
+        run = track_backbone_run(
+            data=data,
+            mean_hp=mean_hp,
+            variance_hp=variance_hp,
+            seed=args.seed,
+            data_generation_run_id=data_generation_run_id,
+            scalers=(
+                ScalerArtifact(
+                    "x_scaler", x_scaler, np.ones((WINDOW_SIZE, len(FEATURES)))
+                ),
+                ScalerArtifact(
+                    "y_scaler", y_scaler, np.ones((1, 1)), "inverse_transform"
+                ),
+            ),
+            setup=dataclasses.replace(
+                session.setup,
+                run_name=args.run_name or f"backbone-seed-{args.seed}",
+                tags=override_tags(args),
+            ),
             mean_study_run_id=args.mean_study_run_id,
             variance_study_run_id=args.variance_study_run_id,
-            mean_base=mean_hp,
-            variance_base=variance_hp,
         )
-        logger.info("Frozen backbone HPs: %s, %s", mean_hp, variance_hp)
-    run = track_backbone_run(
-        data=data,
-        mean_hp=mean_hp,
-        variance_hp=variance_hp,
-        seed=args.seed,
-        data_generation_run_id=data_generation_run_id,
-        scalers=(
-            ScalerArtifact("x_scaler", x_scaler, np.ones((WINDOW_SIZE, len(FEATURES)))),
-            ScalerArtifact("y_scaler", y_scaler, np.ones((1, 1)), "inverse_transform"),
-        ),
-        setup=setup,
-        mean_study_run_id=args.mean_study_run_id,
-        variance_study_run_id=args.variance_study_run_id,
-    )
-    logger.info(
-        "Backbone run %s finalized mean epoch %d and variance epoch %d",
-        run.run_id,
-        run.checkpoints.mean.epoch,
-        run.checkpoints.variance.epoch,
-    )
-    MLflowTracker(run.run_id).log_artifact("training_log.txt", log_stream.getvalue())
+        logger.info(
+            "Backbone run %s finalized mean epoch %d and variance epoch %d",
+            run.run_id,
+            run.checkpoints.mean.epoch,
+            run.checkpoints.variance.epoch,
+        )
+        session.attach_log(run.run_id, "training_log.txt")
 
 
 if __name__ == "__main__":

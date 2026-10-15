@@ -30,15 +30,13 @@ import os
 import pathlib
 from collections.abc import Sequence
 
-import mlflow
-from dotenv import load_dotenv
 
 from qmodem.battery.data_processing import WINDOW_SIZE, make_data_pipeline, prepare_data
 from qmodem.battery.hpo import MEAN_STUDY, STUDY_SEED, MeanSearchSpace, mean_objective
 from qmodem.battery.train import MeanHyperparameters, StageScheduleHyperparameters
 from qmodem.hpo import StudyLayout, run_study
-from qmodem.tracking import Stage, MLFlowSetup, MLflowTracker
-from qmodem.utils import setup_script_logging
+from qmodem.tracking import Stage
+from qmodem.script_session import script_session
 
 logger = logging.getLogger(__name__)
 
@@ -80,36 +78,31 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Command-line arguments. Defaults to ``sys.argv[1:]``.
     """
     args = parse_args(argv)
-    load_dotenv()
-    log_stream = setup_script_logging()
-
-    setup = MLFlowSetup(run_name=args.run_name)
-    mlflow.set_tracking_uri(setup.backend_store)  # prepare_data reads the data run
-    data = prepare_data(
-        pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
-        os.environ["DATA_GEN_RUN_ID_MULTI"],
-        make_data_pipeline(WINDOW_SIZE),
-    )
-    logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
-
-    space = MeanSearchSpace()
-    base = MeanHyperparameters(
-        schedule=StageScheduleHyperparameters(max_epochs=args.max_epochs)
-    )
-    result = run_study(
-        mean_objective(data=data, space=space, base=base, seed=STUDY_SEED),
-        config=dataclasses.replace(MEAN_STUDY, n_trials=args.n_trials),
-        layout=StudyLayout(stage=Stage.MEAN),
-        setup=setup,
-        storage=args.optuna_storage,
-    )
-    logger.info(
-        "Mean study %s: best value %.6g with %s",
-        result.run_id,
-        result.best_value,
-        space.apply(result.best_params, base).model_dump(),
-    )
-    MLflowTracker(result.run_id).log_artifact("study_log.txt", log_stream.getvalue())
+    with script_session() as session:
+        data = prepare_data(
+            pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"]),
+            os.environ["DATA_GEN_RUN_ID_MULTI"],
+            make_data_pipeline(WINDOW_SIZE),
+        )
+        logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
+        space = MeanSearchSpace()
+        base = MeanHyperparameters(
+            schedule=StageScheduleHyperparameters(max_epochs=args.max_epochs)
+        )
+        result = run_study(
+            mean_objective(data=data, space=space, base=base, seed=STUDY_SEED),
+            config=dataclasses.replace(MEAN_STUDY, n_trials=args.n_trials),
+            layout=StudyLayout(stage=Stage.MEAN),
+            setup=dataclasses.replace(session.setup, run_name=args.run_name),
+            storage=args.optuna_storage,
+        )
+        logger.info(
+            "Mean study %s: best value %.6g with %s",
+            result.run_id,
+            result.best_value,
+            space.apply(result.best_params, base).model_dump(),
+        )
+        session.attach_log(result.run_id, "study_log.txt")
 
 
 if __name__ == "__main__":
