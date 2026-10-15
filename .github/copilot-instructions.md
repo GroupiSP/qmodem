@@ -18,7 +18,7 @@ battery discharge with a probabilistic mixture of two possible variable loads ->
 - BNN: Bayesian Neural Network, a Bayesian neural network that uses mean-field variational inference to approximate the posterior distribution of the model parameters.
 - QAVI: Quantum Adversarial Variational Inference, a quantum-classical hybrid model that uses a quantum circuit and possibly classical postprocessing to generate samples from the posterior distribution of the model parameters. An adversarial training loop trains the quantum circuit to maximize the lieklihood of the data, while at the same time fooling a classical discriminator which tries to distinguish between the true and predicted distributions.
 
-### Training flow -> `scripts/battery_multiple_scenarios/run_train.py`
+### Training flow -> `scripts/battery_multiple_scenarios/train_backbone.py`, `train_method_run.py`
 
 1. Battery scripts load `.env`, construct model and hyperparameter objects, and set up
    an MLflow run.
@@ -32,7 +32,8 @@ battery discharge with a probabilistic mixture of two possible variable loads ->
    `MeanStage` and `GammaVarianceStage`; method runs
    (`qmodem.battery.method_run.train_method_run`) restore them and train the shared
    posterior stage (`qmodem.battery.posterior`) with the method's inference method.
-5. Training callbacks report/log losses and persist the best parameter state to MLflow.
+5. stagereg's `TrackerEventSink` logs every stage metric through `MLflowTracker`, and
+   finalized checkpoints go to the run's artifacts (`mlflow_checkpoint_store`).
 
 The networks in `qmodem.battery.models` are the mean network
 (`Conv1D -> activation -> GAP -> Linear`) and the variance network (same backbone,
@@ -41,8 +42,8 @@ discriminator (`WindowDiscriminator`). Posteriors are inferred over the conv lay
 only (`qmodem.battery.posterior.INFERRED_SUBNETWORK`). PennyLane circuit factories
 live in `qmodem.quantum_circuits`.
 
-### Hyperparameter tuning -> `scripts/battery_multiple_scenarios/run_{mean,variance}_study.py`
-Hyperparameter optimization (HPO) follows protocol §5: one Optuna study per stage (and per method for posterior studies). `qmodem.hpo.run_study` records a study as one `role=hpo_study` MLflow run (tags `stage`, `method`/`backbone_run_id` where applicable, `n_trials`; params `best.<name>`) with one `role=hpo_trial` child per trial (tag `hpo.trial=<n>`). The objectives in `qmodem.battery.hpo` train their stage through the same operations as backbone runs (`train_mean_stage`, `train_variance_stage`) and report the per-epoch validation loss to a median pruner. The legacy `run_hpo.py` is not maintained.
+### Hyperparameter tuning -> `scripts/battery_multiple_scenarios/run_{mean,variance,posterior}_study.py`
+Hyperparameter optimization (HPO) follows protocol §5: one Optuna study per stage (and per method for posterior studies). `qmodem.hpo.run_study` records a study as one `role=hpo_study` MLflow run (tags `stage`, `method`/`backbone_run_id` where applicable, `n_trials`; params `best.<name>`) with one `role=hpo_trial` child per trial (tag `hpo.trial=<n>`). The objectives in `qmodem.battery.hpo` train their stage through the same operations as backbone runs (`train_mean_stage`, `train_variance_stage`) and report the per-epoch validation loss to a median pruner. Posterior studies (`qmodem.battery.posterior_hpo`, one per method except HNN) train each trial as a method run on seed 0's backbone with the key `fold_in(0, method)`, minimize the finalized epoch's validation CRPS (best epoch; pSGLD: final retained chain) and search per-method `PosteriorSearchSpace` data containers (`POSTERIOR_SEARCH_SPACES`) named after the flattened `posterior/...` params. Protocol runs are always re-trained from a study run's frozen `best.*` params: `train_backbone.py --mean-study-run-id --variance-study-run-id` and `train_method_run.py --study-run-id` (`frozen_backbone_hyperparameters`, `frozen_method_config`).
 
 ### Method runs and evaluation -> `scripts/battery_multiple_scenarios/train_method_run.py`, `evaluate.py`
 

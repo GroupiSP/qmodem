@@ -819,28 +819,6 @@ def load_scaler(run_id: str, name: str) -> LoadedScaler:
     return LoadedScaler(mlflow.pyfunc.load_model(f"runs:/{run_id}/{name}"))
 
 
-def log_general(
-    num_model_params: int,
-    hyperparameters: dict[str, Any],
-    scalers: Sequence[ScalerArtifact],
-    log_stream: io.StringIO | None = None,
-) -> None:
-    """Log the parameter count, hyperparameters, scalers and log of the active run.
-
-    Args:
-        num_model_params: Number of trainable model parameters.
-        hyperparameters: Flat hyperparameters.
-        scalers: The fitted scalers.
-        log_stream: The script's in-memory log, logged as ``training_log.txt``.
-    """
-    mlflow.log_param("n_params", num_model_params)
-    mlflow.log_params(hyperparameters)
-    for artifact in scalers:
-        log_scaler(artifact)
-    if log_stream is not None:
-        mlflow.log_text(log_stream.getvalue(), "training_log.txt")
-
-
 # TODO: implement
 def get_tags_from_mlflow_run(run_id: str) -> dict[str, str]:
     pass
@@ -849,17 +827,3 @@ def get_tags_from_mlflow_run(run_id: str) -> dict[str, str]:
 def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
     dataset = mlflow.data.from_pandas(df, name=name)
     mlflow.log_input(dataset=dataset, context=context)
-
-
-def get_run_parameters(run_id: str, backend_store: str) -> dict[str, Any]:
-    """Retrieves the parameters of a specific MLflow run.
-
-    Args:
-        run_id (str): The ID of the MLflow run.
-
-    Returns:
-        dict[str, Any]: A dictionary containing the parameters of the run.
-    """
-    mlflow.set_tracking_uri(backend_store)
-    run = mlflow.get_run(run_id)
-    return run.data.params

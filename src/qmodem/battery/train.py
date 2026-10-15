@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import dataclasses
-import pathlib
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from enum import StrEnum
-from typing import Literal, TypeVar
+from typing import Literal
 
 import jax
 import optax
@@ -31,38 +30,18 @@ from stagereg.jax import (
     make_supervised_loss,
 )
 
-from qmodem.data import DataPipeline
 from qmodem.tracking import (
     MLFlowSetup,
     MLflowTracker,
     ScalerArtifact,
     backbone_tags,
-    get_run_parameters,
     log_scaler,
     mlflow_checkpoint_store,
     track_mlflow,
     unflatten_parameters,
 )
-from qmodem.train import (
-    LogReporter,
-    mlflow_track_losses,
-    train_loop,
-)
-from qmodem.train_base import Callback, mlflow_track_model_best_state
-from qmodem.train_base import EarlyStopper as LegacyEarlyStopper
-
-from .data_processing import (
-    PreparedData,
-    dataloader_builders,
-    make_loader,
-    prepare_data,
-)
+from .data_processing import PreparedData, make_loader
 from .models import MeanNet, VarianceNet
-from .train_steps import (
-    StandardStepFactory,
-    StandardStepFactoryContext,
-    make_nll_steps,
-)
 
 
 class Method(StrEnum):
@@ -77,126 +56,6 @@ class Method(StrEnum):
     PSGLD = "psgld"
     Q_AVI = "q-avi"
     C_AVI = "c-avi"
-
-
-class _TrainHyperparametersBase(BaseModel):
-    """Hyperparameters shared by every training method."""
-
-    model_config = ConfigDict(frozen=True)
-
-    conv_kernel_size: int = 5
-    conv_n_filters: int = 4
-    batch_size: int = 32
-    window_size: int = 20
-    stride: int = 1
-    normalize_rul: bool = True
-    net_init_seed: int = 0
-    train_rng_seed: int = 1
-    drop_remainder: bool = False
-    n_epochs: int = 500
-    beta_nll: float = 0.5
-    early_stopping_patience: int = 20
-    early_stopping_min_delta: float = 1e-4
-    n_samples_predictive_mean_variance: int = 100
-    activation_function: str = "gelu"
-    dropout_rate: float = 0.1
-
-
-class TrainHyperparameters(_TrainHyperparametersBase):
-    """Hyperparameters for standard supervised training (HNN, MCD, BNN)."""
-
-    method: Literal[Method.HNN, Method.MCD, Method.BBB] = Method.HNN
-    learning_rate: float = 1e-2
-    scheduler_alpha: float = 0.1
-
-
-TrainHpT = TypeVar("TrainHpT", bound=_TrainHyperparametersBase)
-
-
-def load_train_hyperparameters_from_mlflow(
-    model_cls: type[TrainHpT], run_id: str, backend_store: str
-) -> TrainHpT:
-    """Reload and validate a training hyperparameter set from a training run's logged
-    MLflow params.
-
-    MLflow always returns logged params as strings; pydantic's lax validation
-    coerces them back to the declared int/float/bool types.
-
-    Args:
-        model_cls: Concrete hyperparameter model to validate against
-            (``TrainHyperparameters``).
-        run_id: The ID of the MLflow training run to reload parameters from.
-        backend_store: SQLAlchemy URI for the MLflow backend store.
-
-    Returns:
-        A validated instance of ``model_cls`` populated from the run's logged
-        params.
-
-    Raises:
-        pydantic.ValidationError: If the logged params do not match the
-            schema of ``model_cls``.
-    """
-    raw_params = get_run_parameters(run_id, backend_store)
-    return model_cls.model_validate(raw_params)
-
-
-def run_training(
-    *,
-    model: nnx.Module,
-    hp: TrainHyperparameters,
-    raw_data_dir: pathlib.Path,
-    data_gen_run_id: str,
-    data_pipeline: DataPipeline,
-    step_factory: StandardStepFactory | None = None,
-    callbacks: Iterable[Callback] = (),
-) -> None:
-    data = prepare_data(
-        raw_data_dir,
-        data_gen_run_id,
-        data_pipeline,
-    )
-    train_dataloader_builder, val_dataloader_builder = dataloader_builders(
-        data,
-        batch_size=hp.batch_size,
-        drop_remainder=hp.drop_remainder,
-    )
-
-    # TODO Unify the arguments of the step factories to a single context
-    if step_factory is None:
-        train_batch_fn, eval_batch_fn = make_nll_steps(beta=hp.beta_nll)
-    else:
-        train_batch_fn, eval_batch_fn = step_factory(
-            StandardStepFactoryContext(n_train_samples=len(data.train))
-        )
-
-    schedule = optax.cosine_decay_schedule(
-        init_value=hp.learning_rate,
-        decay_steps=hp.n_epochs * (len(data.train) // hp.batch_size),
-        alpha=hp.scheduler_alpha,
-    )
-    optimizer = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
-    early_stopper = LegacyEarlyStopper(
-        patience=hp.early_stopping_patience,
-        min_delta=hp.early_stopping_min_delta,
-    )
-
-    train_loop(
-        n_epochs=hp.n_epochs,
-        train_dataloader_builder=train_dataloader_builder,
-        val_dataloader_builder=val_dataloader_builder,
-        initial_key=jax.random.key(hp.train_rng_seed),
-        model=model,
-        optimizer=optimizer,
-        train_batch_fn=train_batch_fn,
-        eval_batch_fn=eval_batch_fn,
-        callbacks=(
-            LogReporter(log_every=10),
-            mlflow_track_model_best_state,
-            mlflow_track_losses,
-            *callbacks,
-        ),
-        early_stopper=early_stopper,
-    )
 
 
 # --- Backbone run (stagereg) ---------------------------------------------------
