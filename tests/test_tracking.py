@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import importlib.metadata
 import pathlib
@@ -25,8 +26,12 @@ from stagereg.core import (
 from qmodem.tracking import (
     MLflowCheckpointStore,
     MLflowTracker,
+    RunCriteria,
+    RunSelectionError,
+    RunSelector,
     backbone_tags,
     mlflow_checkpoint_store,
+    resolve_run_id,
     stagereg_version,
     track_mlflow,
 )
@@ -307,4 +312,177 @@ def test_the_mlflow_store_persists_only_finalized_checkpoints(
     store.save("mean/best", trained_backbone.checkpoints.mean)
     assert is_finalized(
         MLflowCheckpointStore(run_id, client=mlflow_backend.client).load("mean/best")
+    )
+
+
+# --- Run selection --------------------------------------------------------------
+
+
+def test_an_explicit_run_id_selects_that_exact_run(make_run) -> None:
+    older = make_run(start_time=1, role="backbone", seed=0)
+    make_run(start_time=2, role="backbone", seed=0)
+
+    assert (
+        resolve_run_id(
+            run_id=older,
+            criteria=RunCriteria(role="backbone", seed=0),
+            experiment_ids=[make_run.experiment_id],
+            client=make_run.client,
+        )
+        == older
+    )
+
+
+def test_an_unknown_run_id_raises(make_run) -> None:
+    with pytest.raises(RunSelectionError, match="0123456789abcdef"):
+        resolve_run_id(
+            run_id="0123456789abcdef",
+            criteria=None,
+            experiment_ids=[make_run.experiment_id],
+            client=make_run.client,
+        )
+
+
+def _select(make_run, criteria: RunCriteria) -> str:
+    return resolve_run_id(
+        run_id=None,
+        criteria=criteria,
+        experiment_ids=[make_run.experiment_id],
+        client=make_run.client,
+    )
+
+
+_LATER = 2_000_000
+
+
+@_MLFLOW_SETTINGS
+@given(
+    start_times=st.lists(
+        st.integers(min_value=1, max_value=1_000_000),
+        min_size=1,
+        max_size=4,
+        unique=True,
+    ),
+    statuses=st.lists(
+        st.sampled_from(["FINISHED", "FAILED", "KILLED"]), min_size=4, max_size=4
+    ),
+)
+def test_tag_selection_returns_the_newest_finished_match(
+    make_run, start_times: list[int], statuses: list[str]
+) -> None:
+    make_run = make_run.fresh()
+    statuses = ["FINISHED", *statuses[1:]]  # at least one finished match
+    runs = {
+        make_run(start_time=t, status=status, role="backbone", seed=3): (t, status)
+        for t, status in zip(start_times, statuses, strict=False)
+    }
+    # Newer runs that differ in one tag never match.
+    make_run(start_time=_LATER, role="backbone", seed=4)
+    make_run(start_time=_LATER + 1, role="method", method="hnn", seed=3)
+
+    newest_finished = max(
+        (t, run_id) for run_id, (t, status) in runs.items() if status == "FINISHED"
+    )[1]
+    assert _select(make_run, RunCriteria(role="backbone", seed=3)) == newest_finished
+
+
+def test_tag_selection_without_a_finished_match_raises(make_run) -> None:
+    make_run(start_time=1, status="FAILED", role="method", method="q-avi", seed=0)
+    make_run(start_time=2, role="method", method="c-avi", seed=0)
+
+    with pytest.raises(RunSelectionError, match="No finished run"):
+        _select(make_run, RunCriteria(role="method", method="q-avi", seed=0))
+
+
+@pytest.mark.parametrize(
+    "criteria",
+    [
+        RunCriteria(role="backbone"),
+        RunCriteria(role="method", seed=0),
+        RunCriteria(role="method", method="q-avi"),
+    ],
+)
+def test_criteria_that_leave_an_identity_tag_open_are_ambiguous(
+    make_run, criteria: RunCriteria
+) -> None:
+    make_run(start_time=1, role="backbone", seed=0)
+    make_run(start_time=2, role="method", method="q-avi", seed=0)
+
+    with pytest.raises(RunSelectionError, match="Ambiguous"):
+        _select(make_run, criteria)
+
+
+def test_newest_matches_with_equal_start_times_are_ambiguous(make_run) -> None:
+    make_run(start_time=1, role="backbone", seed=0)
+    make_run(start_time=5, role="backbone", seed=0)
+    make_run(start_time=5, role="backbone", seed=0)
+
+    with pytest.raises(RunSelectionError, match="Ambiguous"):
+        _select(make_run, RunCriteria(role="backbone", seed=0))
+
+
+def test_an_older_tie_does_not_make_the_newest_match_ambiguous(make_run) -> None:
+    make_run(start_time=1, role="backbone", seed=0)
+    make_run(start_time=1, role="backbone", seed=0)
+    newest = make_run(start_time=2, role="backbone", seed=0)
+
+    assert _select(make_run, RunCriteria(role="backbone", seed=0)) == newest
+
+
+@pytest.mark.parametrize("role", ["hpo_trial", "hpo_study"])
+def test_tag_selection_refuses_hpo_roles(make_run, role: str) -> None:
+    make_run(start_time=1, role=role, method="q-avi", seed=0)
+
+    with pytest.raises(ValueError, match=role):
+        _select(make_run, RunCriteria(role=role, method="q-avi", seed=0))
+
+
+def test_resolving_without_run_id_or_criteria_raises(make_run) -> None:
+    with pytest.raises(ValueError, match="run ID or tag criteria"):
+        resolve_run_id(
+            run_id=None,
+            criteria=None,
+            experiment_ids=[make_run.experiment_id],
+            client=make_run.client,
+        )
+
+
+@pytest.mark.parametrize(
+    ("selector", "argv_tags"),
+    [
+        (RunSelector(role="backbone"), ["--seed", "0"]),
+        (
+            RunSelector(role="backbone", run_id_flag="--backbone-run-id"),
+            ["--seed", "0"],
+        ),
+        (RunSelector(role="method"), ["--method", "q-avi", "--seed", "0"]),
+    ],
+)
+def test_a_selector_resolves_the_command_line_by_run_id_or_tags(
+    make_run, selector: RunSelector, argv_tags: list[str]
+) -> None:
+    role = selector.role
+    older = make_run(start_time=1, role=role, method="q-avi", seed=0)
+    newest = make_run(start_time=2, role=role, method="q-avi", seed=0)
+    parser = argparse.ArgumentParser()
+    selector.add_arguments(parser)
+
+    def resolve(argv: list[str]) -> str:
+        return selector.resolve(
+            parser.parse_args(argv),
+            experiment_ids=[make_run.experiment_id],
+            client=make_run.client,
+        )
+
+    assert resolve([selector.run_id_flag, older]) == older
+    assert resolve(argv_tags) == newest
+
+
+def test_an_hpo_trial_is_never_selected_even_when_newest(make_run) -> None:
+    protocol_run = make_run(start_time=1, role="method", method="q-avi", seed=0)
+    make_run(start_time=2, role="hpo_trial", method="q-avi", seed=0)
+
+    assert (
+        _select(make_run, RunCriteria(role="method", method="q-avi", seed=0))
+        == protocol_run
     )

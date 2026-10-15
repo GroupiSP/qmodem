@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import types
+import uuid
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -380,3 +381,75 @@ def trained_backbone(synthetic_battery: SyntheticBattery) -> TrainedBackbone:
         persistent=persistent,
         checkpoints=checkpoints,
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class RunFactory:
+    """Creates terminated runs with chosen tags, status and start time.
+
+    Each instance owns a fresh experiment, so runs of one test never leak into
+    another test's selection.
+
+    Attributes:
+        client: Client bound to the file-backed backend.
+        experiment_id: The experiment the runs are created in.
+    """
+
+    client: MlflowClient
+    experiment_id: str
+
+    def __call__(
+        self,
+        *,
+        start_time: int,
+        status: str = "FINISHED",
+        **tags: str | int,
+    ) -> str:
+        """Create a run and terminate it.
+
+        Args:
+            start_time: Run start time in milliseconds.
+            status: Terminal status, e.g. ``"FINISHED"`` or ``"FAILED"``.
+            **tags: Run tags; values are stringified.
+
+        Returns:
+            The run's ID.
+        """
+        run = self.client.create_run(
+            self.experiment_id,
+            start_time=start_time,
+            tags={key: str(value) for key, value in tags.items()},
+        )
+        self.client.set_terminated(
+            run.info.run_id, status=status, end_time=start_time + 1
+        )
+        return run.info.run_id
+
+    def fresh(self) -> RunFactory:
+        """Return a factory over a new, empty experiment of the same backend.
+
+        Hypothesis examples share one fixture instance; each example calls this.
+
+        Returns:
+            The new factory.
+        """
+        return _run_factory(self.client)
+
+
+def _run_factory(client: MlflowClient) -> RunFactory:
+    """Create a run factory over a new experiment.
+
+    Args:
+        client: Client bound to the file-backed backend.
+
+    Returns:
+        The factory.
+    """
+    name = f"selection-{uuid.uuid4().hex}"
+    return RunFactory(client, client.create_experiment(name))
+
+
+@pytest.fixture
+def make_run(mlflow_backend: MLflowBackend) -> RunFactory:
+    """A run factory over a fresh experiment of the file-backed backend."""
+    return _run_factory(mlflow_backend.client)
