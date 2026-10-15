@@ -42,14 +42,15 @@ generators in `qmodem.quantum_circuits` and `qmodem.battery.models`.
 ### Hyperparameter tuning -> `scripts/battery_multiple_scenarios/run_hpo.py`
 Hyperparameter optimization (HPO) is implemented as an Optuna study, where the objective function is essentially a wrapper around the training main function. The main difference is that the HPO's objective also takes care of computing the score of the HPO iteration, which is the average CRPS across validation histories.
 
-### Testing flow -> `scripts/battery_multiple_scenarios/run_test.py`
+### Method runs and evaluation -> `scripts/battery_multiple_scenarios/train_method_run.py`, `evaluate.py`
 
-Testing is always meant to happen after a training run has happened.
+A method run is an MLflow child (`mlflow.parentRunId`) of a backbone run, tagged `role=method`, `method` and `seed` (`qmodem.battery.method_run`). It restores the backbone's finalized `mean`/`variance` checkpoints and adds the method's posterior stage (none for HNN). Methods are registered in `METHOD_CONFIGS`, keyed by `Method`.
 
-1. Environment loading and logging setup happen as for training.
-2. Since the training run is already complete, the test script takes the training run ID via `--run-id` and reloads that run. This allows to load the training run parameters. the data scalers and the trained model state, as well as to log test metrics to the same MLflow run.
-3. Because the data is generated, the test phase also takes care of reconstreconstrucing the true RUL distribution (`qmodem.battery.data_processing:reconstruct_rul_distribution`) for each test history. It does that by selecing a grid of intermediate state of charges (SoCs) and running Monte Carlo simulations from each intermediate SoC to the end of discharge.
-4. The bulk of the test phase is to run `qmodem.battery.evaluate:run_evaluation`, which uploads the data of each test history (`test_case`s), selects the evaluation time windows and RUL targets, predicts with the trained model and computes all the metrics of interest. The metrics computed are: RMSE, coverage, weighted spread of uncertainty (WSU) and continuous-ranked probability score (CRPS). The metrics are computed and logged both per test case and averaged across test cases to provide a global view of the model performance.
+Evaluation always happens after a method run exists, in a separate process:
+
+1. The evaluate script selects the method run (`--run-id`, or `--method` + `--seed`), restores it and loads the scalers from its parent backbone run.
+2. It reconstructs the simulator's reference RUL samples for each test history (`qmodem.battery.data_generation:reconstruct_true_rul_distribution`) at `n_timestamps` intermediate SoCs.
+3. `qmodem.battery.evaluate` draws M = 100 predictive samples per timestamp and computes, per test case and with stagereg metric functions only, expected CRPS, RMSE, coverage and WSU. The first timestamp (t0) is dropped from every metric and is only WSU's origin. Metrics are logged into the method run per case (`evaluation/test/<case>/<metric>`), as unweighted means over cases (`evaluation/test/<metric>`) and per policy (`evaluation/test/policy_<p>/<metric>`).
 
 ### Standard vs adversarial training
 

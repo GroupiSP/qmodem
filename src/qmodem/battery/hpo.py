@@ -3,11 +3,8 @@ from __future__ import annotations
 import pathlib
 from collections.abc import Sequence
 
-import numpy as np
 import pandas as pd
 from pydantic import BaseModel, model_validator
-
-from qmodem.battery.scoring import TestCaseResults
 
 
 class HPOHyperparameters(BaseModel):
@@ -104,13 +101,3 @@ def get_validation_data(path: pathlib.Path, ids: Sequence[int]) -> pd.DataFrame:
     """Returns the validation data from the training data."""
     df = pd.read_csv(path)
     return df[df["run_id"].isin(ids)]
-
-
-def get_average_crps(
-    test_case_results: Sequence[TestCaseResults], x_grid: np.ndarray
-) -> float:
-    """Computes the average CRPS over all test cases."""
-    crps_values = []
-    for test_case in test_case_results:
-        crps_values.append(test_case.average_crps(x_grid))
-    return np.mean(crps_values)
