@@ -9,12 +9,15 @@ from typing import Literal, TypeVar
 import jax
 import optax
 from flax import nnx
+from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, ConfigDict, Field
 from stagereg.core import (
     Checkpoint,
     CheckpointStore,
     EarlyStopper,
+    EventSink,
     ExperimentTracker,
+    LoaderFactory,
     SquaredErrorLoss,
     TrackerEventSink,
     TrainingState,
@@ -38,6 +41,7 @@ from qmodem.tracking import (
     log_scaler,
     mlflow_checkpoint_store,
     track_mlflow,
+    unflatten_parameters,
 )
 from qmodem.train import (
     LogReporter,
@@ -461,43 +465,29 @@ def _early_stopper(schedule: StageScheduleHyperparameters) -> EarlyStopper:
     )
 
 
-def train_backbone(
+def _mean_stage(
     *,
-    data: PreparedData,
     mean_hp: MeanHyperparameters,
-    variance_hp: VarianceHyperparameters,
-    seed: int,
-    tracker: ExperimentTracker,
+    keys: BackboneKeys,
+    loader: LoaderFactory,
+    event_sinks: Sequence[EventSink],
     store: CheckpointStore,
-) -> BackboneCheckpoints:
-    """Train a backbone run: ``MeanStage`` then ``GammaVarianceStage``.
-
-    Both stages early-stop on their validation loss (MSE, then Gamma NLL) and
-    finalize their best epoch into ``store``. Every RNG key derives from
-    ``seed``, so the same seed gives bit-identical checkpoints.
+) -> MeanStage:
+    """Build the mean stage of a backbone run.
 
     Args:
-        data: Prepared train and validation windows.
-        mean_hp: Mean-stage hyperparameters (they also size the variance net).
-        variance_hp: Variance-stage hyperparameters.
-        seed: The protocol seed r.
-        tracker: Receives the hyperparameters and every stage metric.
-        store: Receives the stage checkpoints.
+        mean_hp: Mean-stage hyperparameters.
+        keys: The backbone run's keys.
+        loader: The backbone run's loader.
+        event_sinks: Receive the stage's training events.
+        store: Receives the ``mean/best`` checkpoints.
 
     Returns:
-        The finalized ``mean`` and ``variance`` checkpoints.
+        The mean stage, on a freshly initialized mean network.
     """
-    tracker.log_params(
-        {"mean": mean_hp.model_dump(), "variance": variance_hp.model_dump()}
-    )
-    keys = backbone_keys(seed)
-    loader = make_loader(data, batch_size=mean_hp.batch_size, key=keys.loader)
-    event_sinks = (TrackerEventSink(tracker),)
-    state = TrainingState(rng_state=keys.training)
-
     mean_net = build_mean_net(mean_hp.network, keys.mean_init)
     mean_loss = make_supervised_loss(SquaredErrorLoss())
-    mean_stage = MeanStage(
+    return MeanStage(
         model=mean_net,
         optimizer=create_optimizer(
             mean_net, optax.adam(mean_hp.optimizer.learning_rate)
@@ -513,10 +503,31 @@ def train_backbone(
         ),
         loss=mean_loss,
     )
-    mean_stage.prepare(state)
-    mean_stage.train(state)
 
-    variance_net = build_variance_net(mean_hp.network, keys.variance_init)
+
+def _variance_stage(
+    *,
+    network: MeanNetworkHyperparameters,
+    variance_hp: VarianceHyperparameters,
+    keys: BackboneKeys,
+    loader: LoaderFactory,
+    event_sinks: Sequence[EventSink],
+    store: CheckpointStore,
+) -> GammaVarianceStage:
+    """Build the variance stage of a backbone run.
+
+    Args:
+        network: Backbone sizes, taken from the mean network's configuration.
+        variance_hp: Variance-stage hyperparameters.
+        keys: The backbone run's keys.
+        loader: The backbone run's loader (the residuals' source).
+        event_sinks: Receive the stage's training events.
+        store: Receives the ``variance/best`` checkpoints.
+
+    Returns:
+        The variance stage, on a freshly initialized variance network.
+    """
+    variance_net = build_variance_net(network, keys.variance_init)
     variance_stage = GammaVarianceStage(
         model=variance_net,
         optimizer=create_optimizer(
@@ -534,13 +545,144 @@ def train_backbone(
             model=variance_net, loader=residuals, loss=variance_stage.loss
         ),
     )
-    variance_stage.prepare(state)
-    variance_stage.train(state)
+    return variance_stage
 
-    return BackboneCheckpoints(
-        mean=store.load(MEAN_CHECKPOINT_KEY),
-        variance=store.load(VARIANCE_CHECKPOINT_KEY),
+
+def train_mean_stage(
+    *,
+    data: PreparedData,
+    mean_hp: MeanHyperparameters,
+    seed: int,
+    tracker: ExperimentTracker,
+    store: CheckpointStore,
+    event_sinks: Sequence[EventSink] = (),
+) -> Checkpoint:
+    """Train the mean stage of a backbone run on its own (a mean-study trial).
+
+    It is the first half of ``train_backbone``: the same seed and hyperparameters
+    give the backbone run's ``mean/best`` checkpoint bit for bit.
+
+    Args:
+        data: Prepared train and validation windows.
+        mean_hp: Mean-stage hyperparameters.
+        seed: The protocol seed r.
+        tracker: Receives the mean hyperparameters and the stage metrics.
+        store: Receives the ``mean/best`` checkpoints.
+        event_sinks: Extra sinks of the stage's training events, e.g. an HPO
+            pruner.
+
+    Returns:
+        The finalized ``mean/best`` checkpoint.
+    """
+    tracker.log_params({"mean": mean_hp.model_dump()})
+    keys = backbone_keys(seed)
+    stage = _mean_stage(
+        mean_hp=mean_hp,
+        keys=keys,
+        loader=make_loader(data, batch_size=mean_hp.batch_size, key=keys.loader),
+        event_sinks=(TrackerEventSink(tracker), *event_sinks),
+        store=store,
     )
+    state = TrainingState(rng_state=keys.training)
+    stage.prepare(state)
+    stage.train(state)
+    return store.load(MEAN_CHECKPOINT_KEY)
+
+
+def train_variance_stage(
+    *,
+    data: PreparedData,
+    mean_hp: MeanHyperparameters,
+    mean_checkpoint: Checkpoint,
+    variance_hp: VarianceHyperparameters,
+    seed: int,
+    tracker: ExperimentTracker,
+    store: CheckpointStore,
+    event_sinks: Sequence[EventSink] = (),
+) -> Checkpoint:
+    """Train the variance stage on a frozen mean checkpoint (a variance-study trial).
+
+    It is the second half of ``train_backbone``: on the backbone run's ``mean/best``
+    checkpoint, the same seed and hyperparameters give its ``variance/best``
+    checkpoint bit for bit.
+
+    Args:
+        data: Prepared train and validation windows.
+        mean_hp: The mean-stage hyperparameters ``mean_checkpoint`` was trained
+            with (they size both networks and fix the batch size).
+        mean_checkpoint: The finalized ``mean/best`` checkpoint to restore.
+        variance_hp: Variance-stage hyperparameters.
+        seed: The protocol seed r of the mean checkpoint.
+        tracker: Receives the variance hyperparameters and the stage metrics.
+        store: Receives the ``variance/best`` checkpoints.
+        event_sinks: Extra sinks of the stage's training events, e.g. an HPO
+            pruner.
+
+    Returns:
+        The finalized ``variance/best`` checkpoint.
+    """
+    tracker.log_params({"variance": variance_hp.model_dump()})
+    keys = backbone_keys(seed)
+    loader = make_loader(data, batch_size=mean_hp.batch_size, key=keys.loader)
+    state = TrainingState()
+    mean_stage = _mean_stage(
+        mean_hp=mean_hp, keys=keys, loader=loader, event_sinks=(), store=store
+    )
+    mean_stage.restore(state, mean_checkpoint)
+    stage = _variance_stage(
+        network=mean_hp.network,
+        variance_hp=variance_hp,
+        keys=keys,
+        loader=loader,
+        event_sinks=(TrackerEventSink(tracker), *event_sinks),
+        store=store,
+    )
+    stage.prepare(state)
+    stage.train(state)
+    return store.load(VARIANCE_CHECKPOINT_KEY)
+
+
+def train_backbone(
+    *,
+    data: PreparedData,
+    mean_hp: MeanHyperparameters,
+    variance_hp: VarianceHyperparameters,
+    seed: int,
+    tracker: ExperimentTracker,
+    store: CheckpointStore,
+) -> BackboneCheckpoints:
+    """Train a backbone run: ``MeanStage`` then ``GammaVarianceStage``.
+
+    Both stages early-stop on their validation loss (MSE, then Gamma NLL) and
+    finalize their best epoch into ``store``. Every RNG key derives from
+    ``seed``, so the same seed gives bit-identical checkpoints. It is
+    ``train_mean_stage`` followed by ``train_variance_stage`` on its result, the
+    same operations the mean and variance HPO trials run.
+
+    Args:
+        data: Prepared train and validation windows.
+        mean_hp: Mean-stage hyperparameters (they also size the variance net).
+        variance_hp: Variance-stage hyperparameters.
+        seed: The protocol seed r.
+        tracker: Receives the hyperparameters and every stage metric.
+        store: Receives the stage checkpoints.
+
+    Returns:
+        The finalized ``mean`` and ``variance`` checkpoints.
+    """
+    mean = train_mean_stage(
+        data=data, mean_hp=mean_hp, seed=seed, tracker=tracker, store=store
+    )
+    variance = train_variance_stage(
+        data=data,
+        mean_hp=mean_hp,
+        mean_checkpoint=mean,
+        variance_hp=variance_hp,
+        seed=seed,
+        tracker=tracker,
+        store=store,
+    )
+    return BackboneCheckpoints(mean=mean, variance=variance)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -599,3 +741,26 @@ def track_backbone_run(
         for scaler in scalers:
             log_scaler(scaler)
     return TrackedBackbone(run_id=run_id, checkpoints=checkpoints)
+
+
+def load_backbone_hyperparameters(
+    run_id: str, client: MlflowClient | None = None
+) -> tuple[MeanHyperparameters, VarianceHyperparameters]:
+    """Reload the mean and variance hyperparameters a backbone run logged.
+
+    Args:
+        run_id: The backbone run.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Returns:
+        The validated mean and variance hyperparameters.
+
+    Raises:
+        pydantic.ValidationError: If the logged params do not match the schemas.
+    """
+    client = client if client is not None else MlflowClient()
+    nested = unflatten_parameters(client.get_run(run_id).data.params)
+    return (
+        MeanHyperparameters.model_validate(nested["mean"]),
+        VarianceHyperparameters.model_validate(nested["variance"]),
+    )

@@ -20,6 +20,7 @@ from stagereg.core import (
     EarlyStoppingState,
     StageState,
     TrainingState,
+    flatten_parameters,
     is_finalized,
 )
 
@@ -34,6 +35,7 @@ from qmodem.tracking import (
     resolve_run_id,
     stagereg_version,
     track_mlflow,
+    unflatten_parameters,
 )
 
 _MLFLOW_SETTINGS = settings(
@@ -90,6 +92,18 @@ def test_params_are_flattened_and_grouped_by_stage(mlflow_backend) -> None:
         "mean/batch_size": "32",
         "variance/optimizer/learning_rate": "0.0005",
     }
+
+
+_nested_params = st.recursive(
+    st.text(min_size=1, max_size=5),
+    lambda children: st.dictionaries(_names, children, min_size=1, max_size=3),
+    max_leaves=6,
+).filter(lambda tree: isinstance(tree, dict))
+
+
+@given(params=_nested_params)
+def test_unflattening_inverts_the_stage_flattening(params) -> None:
+    assert unflatten_parameters(flatten_parameters(params)) == params
 
 
 def test_a_run_aborted_by_an_exception_is_marked_failed(mlflow_backend) -> None:
