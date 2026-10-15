@@ -14,10 +14,13 @@ the environment win over ``.env``, so a run can be pointed at another backend.
 Protocol backbones (seed 0 included) are re-trained from the frozen HPs of the mean
 and variance studies, passed as ``--mean-study-run-id`` and
 ``--variance-study-run-id`` (their ``best.*`` params); epoch caps and patience
-stay as configured here. Without them, the defaults are used.
+stay as configured here. Without them, the defaults are used. The seed-0 backbone
+the variance study runs on takes ``--mean-study-run-id`` alone (default variance LR).
 
 Example:
     uv run scripts/battery_multiple_scenarios/train_backbone.py --seed 0
+    uv run scripts/battery_multiple_scenarios/train_backbone.py --seed 0 \
+        --mean-study-run-id <ID>
     uv run scripts/battery_multiple_scenarios/train_backbone.py --seed 1 \
         --mean-study-run-id <ID> --variance-study-run-id <ID>
 """
@@ -87,12 +90,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--variance-study-run-id",
         default=None,
-        help="Variance study run whose frozen best.* params set the variance LR.",
+        help=(
+            "Variance study run whose frozen best.* params set the variance LR "
+            "(omit it for the seed-0 backbone the variance study runs on)."
+        ),
     )
     parser.add_argument("--run-name", default=None, help="MLflow run name.")
     args = parser.parse_args(argv)
-    if (args.mean_study_run_id is None) != (args.variance_study_run_id is None):
-        parser.error("--mean-study-run-id and --variance-study-run-id go together.")
+    if args.variance_study_run_id is not None and args.mean_study_run_id is None:
+        parser.error("--variance-study-run-id needs --mean-study-run-id.")
     return args
 
 

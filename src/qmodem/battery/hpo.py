@@ -284,16 +284,21 @@ def variance_objective(
 def frozen_backbone_hyperparameters(
     *,
     mean_study_run_id: str,
-    variance_study_run_id: str,
+    variance_study_run_id: str | None,
     mean_base: MeanHyperparameters,
     variance_base: VarianceHyperparameters,
     client: MlflowClient | None = None,
 ) -> tuple[MeanHyperparameters, VarianceHyperparameters]:
-    """Configure a protocol backbone run from the two studies' frozen ``best.*``.
+    """Configure a backbone run from the studies' frozen ``best.*``.
+
+    Protocol backbone runs take both studies. The seed-0 backbone the variance study
+    runs on takes only the mean study (``variance_study_run_id=None``), so its
+    variance stage keeps ``variance_base``.
 
     Args:
         mean_study_run_id: The ``stage=mean`` study run.
-        variance_study_run_id: The ``stage=variance`` study run.
+        variance_study_run_id: The ``stage=variance`` study run, or ``None`` to keep
+            ``variance_base``.
         mean_base: The fixed mean settings (batch size, cap, patience).
         variance_base: The fixed variance settings (cap, patience).
         client: The MLflow client. Defaults to one on the current tracking URI.
@@ -305,10 +310,10 @@ def frozen_backbone_hyperparameters(
         ValueError: If a run is not a study of the expected stage.
     """
     mean_params = load_best_params(mean_study_run_id, stage="mean", client=client)
+    mean_hp = MeanSearchSpace().apply(mean_params, mean_base)
+    if variance_study_run_id is None:
+        return mean_hp, variance_base
     variance_params = load_best_params(
         variance_study_run_id, stage="variance", client=client
     )
-    return (
-        MeanSearchSpace().apply(mean_params, mean_base),
-        VarianceSearchSpace().apply(variance_params, variance_base),
-    )
+    return mean_hp, VarianceSearchSpace().apply(variance_params, variance_base)

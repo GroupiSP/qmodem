@@ -233,3 +233,22 @@ def test_swapped_backbone_studies_are_refused(
             variance_base=trained_backbone.variance_hp,
             client=mlflow_backend.client,
         )
+
+
+def test_the_variance_study_backbone_takes_the_frozen_mean_and_default_variance(
+    backbone_studies, mlflow_backend, trained_backbone
+) -> None:
+    mean, _ = backbone_studies
+
+    mean_hp, variance_hp = frozen_backbone_hyperparameters(
+        mean_study_run_id=mean.run_id,
+        variance_study_run_id=None,
+        mean_base=trained_backbone.mean_hp,
+        variance_base=trained_backbone.variance_hp,
+        client=mlflow_backend.client,
+    )
+
+    assert mean_hp == MeanSearchSpace().apply(
+        mean.best_params, trained_backbone.mean_hp
+    )
+    assert variance_hp == trained_backbone.variance_hp
