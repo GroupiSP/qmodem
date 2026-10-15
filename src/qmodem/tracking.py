@@ -6,8 +6,10 @@ import io
 import os
 import pathlib
 import pickle
+import sys
 import tempfile
 import time
+import types
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -158,17 +160,78 @@ _PICKLE_FILE = "checkpoint.pkl"
 _ARRAYS_DIR = "arrays"
 
 
+def _import_attribute(module: str, qualname: str) -> Any:
+    """Look up ``module.qualname`` (the unpickling side of ``_importable_reference``).
+
+    Args:
+        module: Name of the module holding the object.
+        qualname: Dotted qualified name of the object inside the module.
+
+    Returns:
+        The object.
+    """
+    obj: Any = importlib.import_module(module)
+    for part in qualname.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def _importable_reference(obj: Any) -> tuple[str, str] | None:
+    """Return ``(module, qualname)`` if a callable object can be imported back.
+
+    Plain functions and classes are left to cloudpickle. Other callables, such as
+    JAX's jitted or ``custom_jvp`` activations (``nnx.relu``, ``nnx.tanh``), would be
+    pickled by value and load as a different object, which breaks graph equality
+    when a stage restores a checkpoint.
+
+    Args:
+        obj: Any object reached while pickling.
+
+    Returns:
+        The reference, or ``None`` if ``obj`` must be pickled normally.
+    """
+    if isinstance(obj, (type, types.FunctionType)) or not callable(obj):
+        return None
+    module = getattr(obj, "__module__", None)
+    qualname = getattr(obj, "__qualname__", None)
+    if not isinstance(module, str) or not isinstance(qualname, str):
+        return None
+    if module not in sys.modules or "<locals>" in qualname:
+        return None
+    try:
+        found = _import_attribute(module, qualname)
+    except AttributeError:
+        return None
+    return (module, qualname) if found is obj else None
+
+
 class _ArrayExtractingPickler(cloudpickle.CloudPickler):
     """Cloudpickler that moves every JAX array out of the pickle stream.
 
     Non-empty arrays are replaced by persistent IDs and collected in ``arrays``, so
     that they can be written with Orbax. Typed PRNG keys are stored as their key data
-    plus the name of their implementation.
+    plus the name of their implementation. Importable callables that are not plain
+    functions (e.g. jitted activations) are pickled by reference, so that they load
+    as the same object.
     """
 
     def __init__(self, file: io.BufferedIOBase, arrays: list[jax.Array]) -> None:
         super().__init__(file)
         self.arrays = arrays
+
+    def reducer_override(self, obj: Any) -> Any:
+        """Pickle importable non-function callables by reference.
+
+        Args:
+            obj: The object being pickled.
+
+        Returns:
+            A reduce tuple, or whatever cloudpickle would do otherwise.
+        """
+        reference = _importable_reference(obj)
+        if reference is not None:
+            return (_import_attribute, reference)
+        return super().reducer_override(obj)
 
     def persistent_id(self, obj: Any) -> tuple[str, int, str] | None:
         # Orbax refuses zero-size arrays; those stay in the pickle stream.

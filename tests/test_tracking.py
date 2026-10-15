@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from flax import nnx
 from matplotlib.figure import Figure
 from stagereg.core import (
     Checkpoint,
@@ -24,6 +25,7 @@ from stagereg.core import (
     is_finalized,
 )
 
+from qmodem.battery.train import MeanNetworkHyperparameters, build_mean_net
 from qmodem.tracking import (
     MLflowCheckpointStore,
     MLflowTracker,
@@ -268,6 +270,26 @@ def test_a_finalized_backbone_checkpoint_round_trips(
     store.save("mean/best", checkpoint)
 
     exactly_equal(store.load("mean/best"), checkpoint)
+
+
+@pytest.mark.parametrize("activation", ["gelu", "relu", "silu", "tanh"])
+def test_a_network_graph_round_trips_for_every_searched_activation(
+    mlflow_backend, activation: str
+) -> None:
+    """Restoring a stage compares graphs, so importable callables keep identity."""
+    network = build_mean_net(
+        MeanNetworkHyperparameters(activation=activation), jax.random.key(0)
+    )
+    graph = nnx.graphdef(network)
+    store = MLflowCheckpointStore(
+        mlflow_backend.new_run(), client=mlflow_backend.client
+    )
+
+    store.save(
+        "mean/best", Checkpoint(state=TrainingState(), epoch=0, metadata={"g": graph})
+    )
+
+    assert store.load("mean/best").metadata["g"] == graph
 
 
 def test_checkpoint_artifacts_follow_the_checkpoint_key(
