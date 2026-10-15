@@ -13,10 +13,13 @@ QMoDeM currently considers a single use case, available from the `scripts/` dire
 battery discharge with a probabilistic mixture of two possible variable loads -> `scripts/battery_multiple_scenarios`.
 
 ### Uncertainty modeling techniques
-- HNN: Heteroscedastic Neural Network, a deterministic neural network with a Gaussian head that predicts both the mean and variance of the target distribution.
-- MCD: Monte Carlo Dropout, a Bayesian neural network that uses dropout at inference time to sample from the posterior distribution of the model parameters.
-- BNN: Bayesian Neural Network, a Bayesian neural network that uses mean-field variational inference to approximate the posterior distribution of the model parameters.
-- QAVI: Quantum Adversarial Variational Inference, a quantum-classical hybrid model that uses a quantum circuit and possibly classical postprocessing to generate samples from the posterior distribution of the model parameters. An adversarial training loop trains the quantum circuit to maximize the lieklihood of the data, while at the same time fooling a classical discriminator which tries to distinguish between the true and predicted distributions.
+Method tag values (`qmodem.battery.train.Method`) are in parentheses; terms are defined in `GLOSSARY.md`.
+- HNN (`hnn`): heteroscedastic network with no posterior stage (mean and aleatoric variance only), the baseline without epistemic uncertainty.
+- MCD (`mcd`): Monte Carlo dropout, dropout kept active at inference so each dropout mask is one draw.
+- BBB (`bbb`): Bayes by Backprop, a mean-field Gaussian posterior over the conv layer fitted by minimizing the negative ELBO.
+- pSGLD (`psgld`): preconditioned stochastic-gradient Langevin dynamics, a finite posterior of the retained chain samples.
+- Q-AVI (`q-avi`): adversarial variational inference whose generator has a quantum latent map (a parametrized circuit), fitted against a classical discriminator.
+- C-AVI (`c-avi`): the same AVI method with a parameter-matched classical latent map, the ablation arm isolating Q-AVI's circuit.
 
 ### Training flow -> `scripts/battery_multiple_scenarios/train_backbone.py`, `train_method_run.py`
 
@@ -26,8 +29,8 @@ battery discharge with a probabilistic mixture of two possible variable loads ->
    data-generation MLflow run's `n_histories_train` parameter to split histories into
    train/validation sets, and applies a `DataPipeline`.
 3. The pipeline scales training data in `FIT_TRANSFORM` mode, then switches to
-   `TRANSFORM` for validation so validation never fits its own scaler. Data is exposed
-   through Grain `DataLoader` builders.
+   `TRANSFORM` for validation so validation never fits its own scaler. Grain
+   `DataLoader` builders are adapted to stagereg's `LoaderFactory` by `make_loader`.
 4. Backbone runs (`qmodem.battery.train.train_backbone`) train stagereg's
    `MeanStage` and `GammaVarianceStage`; method runs
    (`qmodem.battery.method_run.train_method_run`) restore them and train the shared
