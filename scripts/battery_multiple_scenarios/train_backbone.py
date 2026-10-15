@@ -15,7 +15,14 @@ Protocol backbones (seed 0 included) are re-trained from the frozen HPs of the m
 and variance studies, passed as ``--mean-study-run-id`` and
 ``--variance-study-run-id`` (their ``best.*`` params); epoch caps and patience
 stay as configured here. Without them, the defaults are used. The seed-0 backbone
-the variance study runs on takes ``--mean-study-run-id`` alone (default variance LR).
+the variance study runs on takes ``--mean-study-run-id`` alone (default variance LR);
+it is then re-trained with both studies before the posterior studies, which refuse a
+backbone without a ``variance_study_run_id`` tag. The study run IDs are recorded as
+the tags ``mean_study_run_id`` / ``variance_study_run_id``.
+
+Epoch caps other than the protocol's (``--mean-epochs`` / ``--variance-epochs``) tag
+the run ``protocol_overrides=true`` (with ``protocol_overrides.params``), so tag
+selection skips it unless ``--include-overridden`` is passed.
 
 Example:
     uv run scripts/battery_multiple_scenarios/train_backbone.py --seed 0
@@ -51,7 +58,12 @@ from qmodem.battery.train import (
     VarianceHyperparameters,
     track_backbone_run,
 )
-from qmodem.tracking import MLFlowSetup, MLflowTracker, ScalerArtifact
+from qmodem.tracking import (
+    MLFlowSetup,
+    MLflowTracker,
+    ScalerArtifact,
+    protocol_override_tags,
+)
 from qmodem.utils import setup_script_logging
 
 logger = logging.getLogger(__name__)
@@ -112,7 +124,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     load_dotenv()
     log_stream = setup_script_logging()
 
-    setup = MLFlowSetup(run_name=args.run_name or f"backbone-seed-{args.seed}")
+    overridden = [
+        f"{stage}/schedule/max_epochs"
+        for stage, epochs in (
+            ("mean", args.mean_epochs),
+            ("variance", args.variance_epochs),
+        )
+        if epochs != _DEFAULT_SCHEDULE.max_epochs
+    ]
+    setup = MLFlowSetup(
+        run_name=args.run_name or f"backbone-seed-{args.seed}",
+        tags=protocol_override_tags(overridden),
+    )
     data_generation_run_id = os.environ["DATA_GEN_RUN_ID_MULTI"]
     mlflow.set_tracking_uri(setup.backend_store)  # prepare_data reads the data run
 
@@ -150,6 +173,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             ScalerArtifact("y_scaler", y_scaler, np.ones((1, 1)), "inverse_transform"),
         ),
         setup=setup,
+        mean_study_run_id=args.mean_study_run_id,
+        variance_study_run_id=args.variance_study_run_id,
     )
     logger.info(
         "Backbone run %s finalized mean epoch %d and variance epoch %d",

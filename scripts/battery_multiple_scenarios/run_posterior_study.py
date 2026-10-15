@@ -16,8 +16,11 @@ Protocol method runs are then re-trained from these with
 ``train_method_run.py --study-run-id``.
 
 The backbone run is selected by ``--backbone-run-id`` or by tags (``--seed``,
-default 0). ``--max-epochs``, ``--patience`` and ``--posterior-param NAME=VALUE``
-change the fixed settings, e.g. for a smoke run. Configuration comes from the
+default 0); it must have been re-trained from both the mean and the variance study
+(tag ``variance_study_run_id``), so the trials see the tuned aleatoric variance.
+``--max-epochs``, ``--patience`` and ``--posterior-param NAME=VALUE`` change the
+fixed settings, e.g. for a smoke run, and tag the study run
+``protocol_overrides=true``. Configuration comes from the
 environment, falling back to ``.env`` (see ``train_backbone.py``).
 
 Example:
@@ -38,6 +41,7 @@ from collections.abc import Sequence
 import mlflow
 from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
+from stagereg.core import flatten_parameters
 
 from qmodem.battery.backbone_data import prepare_backbone_data
 from qmodem.battery.hpo import STUDY_SEED
@@ -45,11 +49,17 @@ from qmodem.battery.method_run import method_config, posterior_overrides
 from qmodem.battery.posterior_hpo import (
     POSTERIOR_SEARCH_SPACES,
     POSTERIOR_STUDY,
+    require_tuned_backbone,
     run_posterior_study,
     search_space,
 )
 from qmodem.battery.train import Method
-from qmodem.tracking import MLFlowSetup, MLflowTracker, RunSelector
+from qmodem.tracking import (
+    MLFlowSetup,
+    MLflowTracker,
+    RunSelector,
+    protocol_override_tags,
+)
 from qmodem.utils import setup_script_logging
 
 logger = logging.getLogger(__name__)
@@ -128,7 +138,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(f"--posterior-param: {error}") from error
     base = method_config(method, overrides)
 
-    setup = MLFlowSetup(run_name=args.run_name or f"posterior-study-{method.value}")
+    setup = MLFlowSetup(
+        run_name=args.run_name or f"posterior-study-{method.value}",
+        tags=protocol_override_tags(list(flatten_parameters(overrides))),
+    )
     mlflow.set_tracking_uri(setup.backend_store)  # prepare_data reads the data run
     client = MlflowClient()
     experiment = client.get_experiment_by_name(setup.experiment_name)
@@ -137,6 +150,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     backbone_run_id = _BACKBONE.resolve(
         args, experiment_ids=[experiment.experiment_id], client=client
     )
+    try:
+        require_tuned_backbone(backbone_run_id, client=client)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     seed = int(client.get_run(backbone_run_id).data.tags["seed"])
     logger.info("Backbone run %s (seed %d)", backbone_run_id, seed)
 

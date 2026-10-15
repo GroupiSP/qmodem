@@ -477,6 +477,8 @@ def track_backbone_run(
     data_generation_run_id: str,
     scalers: Sequence[ScalerArtifact],
     setup: MLFlowSetup,
+    mean_study_run_id: str | None = None,
+    variance_study_run_id: str | None = None,
 ) -> TrackedBackbone:
     """Train a backbone run inside an MLflow run.
 
@@ -493,11 +495,20 @@ def track_backbone_run(
         scalers: The scalers fitted on the training histories.
         setup: Tracking backend, experiment and run name. Its tags are extended
             with the backbone tags.
+        mean_study_run_id: The mean study the mean HPs come from, if any
+            (recorded as a tag).
+        variance_study_run_id: The variance study the variance LR comes from, if
+            any (recorded as a tag; posterior studies require it).
 
     Returns:
         The run ID and the finalized checkpoints.
     """
-    tags = backbone_tags(seed=seed, data_generation_run_id=data_generation_run_id)
+    tags = backbone_tags(
+        seed=seed,
+        data_generation_run_id=data_generation_run_id,
+        mean_study_run_id=mean_study_run_id,
+        variance_study_run_id=variance_study_run_id,
+    )
     with track_mlflow(dataclasses.replace(setup, tags={**setup.tags, **tags})) as run:
         run_id = run.info.run_id
         checkpoints = train_backbone(

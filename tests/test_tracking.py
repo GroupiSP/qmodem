@@ -27,6 +27,8 @@ from stagereg.core import (
 
 from qmodem.battery.train import MeanNetworkHyperparameters, build_mean_net
 from qmodem.tracking import (
+    PROTOCOL_OVERRIDES_PARAMS_TAG,
+    PROTOCOL_OVERRIDES_TAG,
     MLflowCheckpointStore,
     MLflowTracker,
     RunCriteria,
@@ -34,6 +36,7 @@ from qmodem.tracking import (
     RunSelector,
     backbone_tags,
     mlflow_checkpoint_store,
+    protocol_override_tags,
     resolve_run_id,
     stagereg_version,
     track_mlflow,
@@ -522,3 +525,75 @@ def test_an_hpo_trial_is_never_selected_even_when_newest(make_run) -> None:
         _select(make_run, RunCriteria(role="method", method="q-avi", seed=0))
         == protocol_run
     )
+
+
+# --- protocol overrides and backbone provenance ----------------------------------
+
+
+def test_backbone_tags_record_the_studies_the_backbone_was_configured_from() -> None:
+    tags = backbone_tags(
+        seed=0,
+        data_generation_run_id="abc",
+        mean_study_run_id="mean-study",
+        variance_study_run_id="variance-study",
+    )
+
+    assert tags["mean_study_run_id"] == "mean-study"
+    assert tags["variance_study_run_id"] == "variance-study"
+    assert "variance_study_run_id" not in backbone_tags(
+        seed=0, data_generation_run_id="abc", mean_study_run_id="mean-study"
+    )
+
+
+@given(names=st.lists(_names, max_size=4, unique=True))
+def test_protocol_override_tags_flag_and_list_exactly_the_overridden_settings(
+    names: list[str],
+) -> None:
+    tags = protocol_override_tags(names)
+
+    if not names:
+        assert tags == {}
+    else:
+        assert tags[PROTOCOL_OVERRIDES_TAG] == "true"
+        assert tags[PROTOCOL_OVERRIDES_PARAMS_TAG].split(",") == sorted(names)
+
+
+def test_tag_selection_skips_runs_with_protocol_overrides(make_run) -> None:
+    protocol_run = make_run(start_time=1, role="method", method="bbb", seed=0)
+    smoke = make_run(
+        start_time=2,
+        role="method",
+        method="bbb",
+        seed=0,
+        **protocol_override_tags(["stage/max_epochs"]),
+    )
+
+    assert (
+        _select(make_run, RunCriteria(role="method", method="bbb", seed=0))
+        == protocol_run
+    )
+    assert (
+        _select(
+            make_run,
+            RunCriteria(role="method", method="bbb", seed=0, include_overridden=True),
+        )
+        == smoke
+    )
+
+
+def test_a_selector_includes_overridden_runs_only_when_asked(make_run) -> None:
+    make_run(start_time=1, role="backbone", seed=0)
+    smoke = make_run(
+        start_time=2, role="backbone", seed=0, **protocol_override_tags(["x"])
+    )
+    selector = RunSelector(role="backbone")
+    parser = argparse.ArgumentParser()
+    selector.add_arguments(parser)
+
+    resolved = selector.resolve(
+        parser.parse_args(["--seed", "0", "--include-overridden"]),
+        experiment_ids=[make_run.experiment_id],
+        client=make_run.client,
+    )
+
+    assert resolved == smoke

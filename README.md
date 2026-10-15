@@ -56,6 +56,7 @@ backbone run          role=backbone  seed=r  data_generation_run_id
 │     checkpoints/mean/best, checkpoints/variance/best, x_scaler, y_scaler
 └── method run        role=method    method=m  seed=r   (mlflow.parentRunId = backbone run)
       checkpoints/posterior/best, evaluation/test/... metrics
+      [mean_study_run_id, variance_study_run_id, protocol_overrides]
 HPO study run         role=hpo_study stage=mean|variance|posterior [method, backbone_run_id, seed]
 └── trial run         role=hpo_trial hpo.trial=n  hpo.state=complete|pruned|fail
       params best.<name> on the study run, e.g. best.mean/network/kernel_size
@@ -70,25 +71,27 @@ Scripts that consume a run take either an exact run ID or tag criteria:
 | `train_method_run.py`, `run_variance_study.py`, `run_posterior_study.py` | `--backbone-run-id <id>` | `--seed r` (backbone run of seed r) |
 | `evaluate.py` | `--run-id <id>` | `--method m --seed r` (method run) |
 
-Tag selection returns the newest `FINISHED` match in the configured experiment. It raises if nothing matches, if a criterion the role needs is missing, or if two matches share the newest start time. HPO runs are never selected by tags: pass study runs by ID (`--mean-study-run-id`, `--variance-study-run-id`, `--study-run-id`).
+Tag selection returns the newest `FINISHED` match in the configured experiment, skipping runs tagged `protocol_overrides=true` unless `--include-overridden` is passed. It raises if nothing matches, if a criterion the role needs is missing, or if two matches share the newest start time. HPO runs are never selected by tags: pass study runs by ID (`--mean-study-run-id`, `--variance-study-run-id`, `--study-run-id`).
 
 ## Running the protocol
 
 Set `S=scripts/battery_multiple_scenarios`. `<MEAN>`, `<VAR>`, `<POST_m>` stand for study run IDs printed by the scripts (and visible in MLflow).
 
 1. **Data.** Set `RAW_DATA_DIR_MULTI` and `MLFLOW_EXPERIMENT_NAME`, run `uv run python $S/generate_discharge_histories.py`, then copy its run ID to `DATA_GEN_RUN_ID_MULTI`.
-2. **HPO** (protocol §5), all on protocol seed 0, in this order: mean → variance → posterior studies.
+2. **HPO** (protocol §5), all on protocol seed 0, in this order: mean study → seed-0 backbone (tuned mean) → variance study → seed-0 backbone re-trained with **both** studies → posterior studies.
 
    ```bash
    uv run python $S/run_mean_study.py                                # mean study <MEAN>
    uv run python $S/train_backbone.py --seed 0 --mean-study-run-id <MEAN> \
        --run-name hpo-backbone-seed-0                                # tuned mean, default variance LR
    uv run python $S/run_variance_study.py --seed 0                   # variance study <VAR>
+   uv run python $S/train_backbone.py --seed 0 --mean-study-run-id <MEAN> \
+       --variance-study-run-id <VAR> --run-name hpo-backbone-seed-0-tuned  # tuned mean and variance LR
    uv run python $S/run_posterior_study.py --method mcd --seed 0     # posterior study <POST_mcd>
    # ... likewise for bbb, psgld, q-avi and c-avi
    ```
 
-   The variance study and the posterior studies select seed 0's newest finished backbone run; pass `--backbone-run-id` to pin one.
+   The variance study and the posterior studies select seed 0's newest finished backbone run; pass `--backbone-run-id` to pin one. Backbone runs record the studies they were trained from as tags (`mean_study_run_id`, `variance_study_run_id`), and `run_posterior_study.py` refuses a backbone without `variance_study_run_id`, so posterior trials always see the tuned variance.
 3. **Protocol runs**, for every protocol seed r (0 included), re-trained from the frozen `best.*` params of the studies:
 
    ```bash
@@ -103,19 +106,23 @@ Each study is one `role=hpo_study` run whose selected hyperparameters are params
 
 ### Smoke tests
 
-Shrink the budgets, never the code. Point `MLFLOW_BACKEND_STORE`, `MLFLOW_ARTIFACT_STORE` and `MLFLOW_EXPERIMENT_NAME` at a scratch store so the campaign's runs stay clean:
+Shrink the budgets, never the code. Point `MLFLOW_BACKEND_STORE`, `MLFLOW_ARTIFACT_STORE` and `MLFLOW_EXPERIMENT_NAME` at a scratch store so the campaign's runs stay clean. Shrunk budgets are protocol overrides, so pass `--include-overridden` wherever a run is selected by tags:
 
 ```bash
 uv run python $S/run_mean_study.py --n-trials 2 --max-epochs 3
 uv run python $S/train_backbone.py --seed 0 --mean-epochs 3 --variance-epochs 3 --mean-study-run-id <MEAN>
-uv run python $S/run_variance_study.py --seed 0 --n-trials 2 --max-epochs 3
-uv run python $S/run_posterior_study.py --method psgld --seed 0 --n-trials 2 --max-epochs 4 \
-    --posterior-param burn_in_epochs=2
-uv run python $S/train_method_run.py --method bbb --seed 0 --max-epochs 5
-uv run python $S/evaluate.py --method bbb --seed 0
+uv run python $S/run_variance_study.py --seed 0 --include-overridden --n-trials 2 --max-epochs 3
+uv run python $S/train_backbone.py --seed 0 --mean-epochs 3 --variance-epochs 3 \
+    --mean-study-run-id <MEAN> --variance-study-run-id <VAR>
+uv run python $S/run_posterior_study.py --method psgld --seed 0 --include-overridden \
+    --n-trials 2 --max-epochs 4 --posterior-param burn_in_epochs=2
+uv run python $S/train_method_run.py --method bbb --seed 0 --include-overridden --max-epochs 5
+uv run python $S/evaluate.py --method bbb --seed 0 --include-overridden
 ```
 
-`--posterior-param NAME=VALUE` (repeatable, nested with `/`, e.g. `avi/n_qubits=3`) overrides one posterior hyperparameter; `--max-epochs` / `--patience` override the posterior stage's schedule.
+`--posterior-param NAME=VALUE` (repeatable, nested with `/`, e.g. `avi/n_qubits=3`) overrides one posterior hyperparameter; `--max-epochs` / `--patience` override the posterior stage's schedule, and `train_backbone.py --mean-epochs` / `--variance-epochs` the backbone's caps. Any such override tags the run `protocol_overrides=true` and lists the overridden settings in `protocol_overrides.params`; tag selection skips these runs unless `--include-overridden` is given, so a smoke run is never picked as a protocol run.
+
+Method runs, the variance study and posterior studies take the data-generation run from their backbone's `data_generation_run_id` tag (a different `DATA_GEN_RUN_ID_MULTI` is refused) and window the data with the backbone's logged scalers, never refitted.
 
 ## Development
 

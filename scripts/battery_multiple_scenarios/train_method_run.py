@@ -14,7 +14,10 @@ falling back to ``.env`` (see ``train_backbone.py``).
 Methods with a posterior stage take the protocol's schedule (300 epochs, patience
 60) unless ``--max-epochs`` / ``--patience`` override it, e.g. for a smoke run. Any
 other posterior hyperparameter is overridden by ``--posterior-param NAME=VALUE``
-(e.g. pSGLD's ``burn_in_epochs``, which must stay below ``--max-epochs``).
+(e.g. pSGLD's ``burn_in_epochs``, which must stay below ``--max-epochs``). Any
+override tags the run ``protocol_overrides=true`` and lists the overridden settings
+in ``protocol_overrides.params``; tag selection (``evaluate.py --method --seed``)
+skips such runs unless ``--include-overridden`` is passed.
 
 Protocol runs (seed 0 included) are re-trained from the method's posterior study:
 ``--study-run-id`` applies the study run's frozen ``best.*`` params (the study's
@@ -39,9 +42,12 @@ import logging
 import os
 import pathlib
 from collections.abc import Sequence
+from typing import Any
+
 import mlflow
 from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
+from stagereg.core import flatten_parameters
 
 from qmodem.battery.backbone_data import prepare_backbone_data
 from qmodem.battery.method_run import (
@@ -57,6 +63,7 @@ from qmodem.tracking import (
     MLFlowSetup,
     MLflowTracker,
     RunSelector,
+    protocol_override_tags,
 )
 from qmodem.utils import setup_script_logging
 
@@ -117,6 +124,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def overrides_of(args: argparse.Namespace) -> dict[str, Any]:
+    """Return the posterior overrides given on the command line, nested.
+
+    Args:
+        args: The parsed arguments.
+
+    Returns:
+        The overrides (empty if none were given).
+
+    Raises:
+        SystemExit: If an override is malformed.
+    """
+    try:
+        return posterior_overrides(
+            args.posterior_param, max_epochs=args.max_epochs, patience=args.patience
+        )
+    except ValueError as error:
+        raise SystemExit(f"--posterior-param: {error}") from error
+
+
 def method_configuration(
     args: argparse.Namespace, client: MlflowClient
 ) -> MethodConfig:
@@ -134,12 +161,7 @@ def method_configuration(
             or an override is malformed.
     """
     method = Method(args.method)
-    try:
-        overrides = posterior_overrides(
-            args.posterior_param, max_epochs=args.max_epochs, patience=args.patience
-        )
-    except ValueError as error:
-        raise SystemExit(f"--posterior-param: {error}") from error
+    overrides = overrides_of(args)
     if overrides and METHOD_CONFIGS[method]().posterior_spec() is None:
         raise SystemExit(f"Method {args.method!r} has no posterior stage.")
     base = method_config(method, overrides)
@@ -183,7 +205,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         config=method_configuration(args, client),
         seed=seed,
         setup=dataclasses.replace(
-            setup, run_name=args.run_name or f"{method.value}-seed-{seed}"
+            setup,
+            run_name=args.run_name or f"{method.value}-seed-{seed}",
+            tags=protocol_override_tags(list(flatten_parameters(overrides_of(args)))),
         ),
         client=client,
     )

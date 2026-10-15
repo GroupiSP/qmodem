@@ -34,7 +34,7 @@ from qmodem.hpo import (
     load_best_params,
     run_study,
 )
-from qmodem.tracking import MLFlowSetup
+from qmodem.tracking import VARIANCE_STUDY_TAG, MLFlowSetup
 
 from .data_processing import PreparedData
 from .hpo import SAMPLER_SEED, STUDY_SEED
@@ -343,6 +343,31 @@ def search_space(method: Method) -> PosteriorSearchSpace:
     if method not in POSTERIOR_SEARCH_SPACES:
         raise ValueError(f"{method.value} has no posterior study.")
     return POSTERIOR_SEARCH_SPACES[method]
+
+
+def require_tuned_backbone(
+    backbone_run_id: str, *, client: MlflowClient | None = None
+) -> None:
+    """Refuse a backbone whose variance LR was not set by the variance study.
+
+    Posterior studies run on the seed-0 backbone re-trained from both the mean and
+    the variance study (protocol §5), so their trials see the tuned aleatoric
+    variance.
+
+    Args:
+        backbone_run_id: The backbone run hosting the study.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Raises:
+        ValueError: If the backbone has no ``VARIANCE_STUDY_TAG``.
+    """
+    client = client if client is not None else MlflowClient()
+    if VARIANCE_STUDY_TAG not in client.get_run(backbone_run_id).data.tags:
+        raise ValueError(
+            f"Backbone run {backbone_run_id} was not trained from a variance study "
+            f"(no {VARIANCE_STUDY_TAG!r} tag); re-train it with "
+            "--mean-study-run-id and --variance-study-run-id first."
+        )
 
 
 def run_posterior_study(

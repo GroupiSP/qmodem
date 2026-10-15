@@ -31,6 +31,7 @@ from qmodem.battery.posterior_hpo import (
     IntRange,
     frozen_method_config,
     posterior_objective,
+    require_tuned_backbone,
     run_posterior_study,
 )
 from qmodem.battery.train import Method, track_backbone_run
@@ -378,3 +379,34 @@ def test_frozen_params_are_refused_for_another_method(
         frozen_method_config(
             result.run_id, _STUDY_BASES[other], client=mlflow_backend.client
         )
+
+
+# --- the backbone of posterior studies ------------------------------------------
+
+
+def test_a_backbone_with_a_tuned_variance_lr_may_host_posterior_studies(
+    make_run,
+) -> None:
+    tuned = make_run(
+        start_time=1,
+        role="backbone",
+        seed=0,
+        mean_study_run_id="mean-study",
+        variance_study_run_id="variance-study",
+    )
+
+    require_tuned_backbone(tuned, client=make_run.client)
+
+
+@pytest.mark.parametrize(
+    "studies",
+    [{}, {"mean_study_run_id": "mean-study"}],
+    ids=["untuned", "mean-only"],
+)
+def test_a_backbone_without_a_tuned_variance_lr_is_refused(
+    make_run, studies: dict[str, str]
+) -> None:
+    backbone = make_run(start_time=1, role="backbone", seed=0, **studies)
+
+    with pytest.raises(ValueError, match="variance study"):
+        require_tuned_backbone(backbone, client=make_run.client)
