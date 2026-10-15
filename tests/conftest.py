@@ -8,12 +8,17 @@ slices can restore method runs from.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+import types
+from collections.abc import Iterator, Mapping
 from typing import Any
 
+import jax
+import mlflow
 import numpy as np
 import pandas as pd
 import pytest
+from flax import nnx
+from mlflow.tracking import MlflowClient
 from stagereg.core import (
     CachedCheckpointStore,
     InMemoryCheckpointStore,
@@ -35,6 +40,7 @@ from qmodem.battery.train import (
     VarianceHyperparameters,
     train_backbone,
 )
+from qmodem.tracking import MLFlowSetup
 
 SYNTHETIC_TRAIN_LENGTHS: tuple[int, ...] = (23, 31, 27, 40)
 SYNTHETIC_VAL_LENGTHS: tuple[int, ...] = (25, 19)
@@ -199,6 +205,119 @@ def make_store(
 def store_factory() -> Any:
     """A factory of in-memory checkpoint stores wrapped as in production."""
     return make_store
+
+
+def assert_exactly_equal(actual: Any, expected: Any, path: str = "") -> None:
+    """Assert that two checkpoint-like trees are equal, arrays compared exactly.
+
+    Dataclasses, mappings, sequences and NNX variables are compared field by field.
+    Arrays must agree in type, dtype, shape and every element. PRNG keys must agree
+    in implementation and key data.
+
+    Args:
+        actual: The value under test.
+        expected: The reference value.
+        path: Location inside the tree, used in failure messages.
+
+    Raises:
+        AssertionError: If the trees differ anywhere.
+    """
+    assert type(actual) is type(expected), f"{path}: {type(actual)} != {type(expected)}"
+    if isinstance(expected, jax.Array) and jax.dtypes.issubdtype(
+        expected.dtype, jax.dtypes.prng_key
+    ):
+        assert jax.random.key_impl(actual) == jax.random.key_impl(expected), path
+        assert_exactly_equal(
+            jax.random.key_data(actual), jax.random.key_data(expected), path
+        )
+    elif isinstance(expected, (jax.Array, np.ndarray)):
+        assert actual.dtype == expected.dtype, f"{path}: dtype"
+        assert actual.shape == expected.shape, f"{path}: shape"
+        assert np.array_equal(np.asarray(actual), np.asarray(expected)), path
+    elif isinstance(expected, types.FunctionType):
+        # Closures (e.g. optax's init/update functions) only compare by identity,
+        # so compare their code and captured values instead.
+        assert actual.__qualname__ == expected.__qualname__, path
+        assert actual.__code__.co_code == expected.__code__.co_code, path
+        assert_exactly_equal(
+            [c.cell_contents for c in actual.__closure__ or ()],
+            [c.cell_contents for c in expected.__closure__ or ()],
+            f"{path}.__closure__",
+        )
+    elif isinstance(expected, nnx.Variable):
+        assert_exactly_equal(actual.get_value(), expected.get_value(), path)
+    elif dataclasses.is_dataclass(expected):
+        for f in dataclasses.fields(expected):
+            assert_exactly_equal(
+                getattr(actual, f.name), getattr(expected, f.name), f"{path}.{f.name}"
+            )
+    elif isinstance(expected, Mapping):
+        assert set(actual) == set(expected), f"{path}: keys"
+        for key in expected:
+            assert_exactly_equal(actual[key], expected[key], f"{path}[{key!r}]")
+    elif isinstance(expected, (list, tuple)):
+        assert len(actual) == len(expected), f"{path}: length"
+        for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
+            assert_exactly_equal(a, e, f"{path}[{i}]")
+    else:
+        assert actual == expected, f"{path}: {actual!r} != {expected!r}"
+
+
+@pytest.fixture(scope="session")
+def exactly_equal() -> Any:
+    """The exact tree comparison ``assert_exactly_equal``."""
+    return assert_exactly_equal
+
+
+@dataclasses.dataclass(frozen=True)
+class MLflowBackend:
+    """A file-backed MLflow tracking backend under a temporary directory.
+
+    Attributes:
+        setup: Points at the temporary backend store, artifact store and a
+            test experiment.
+        experiment_id: ID of the test experiment.
+    """
+
+    setup: MLFlowSetup
+    experiment_id: str
+
+    @property
+    def client(self) -> MlflowClient:
+        """A client bound to the temporary backend store."""
+        return MlflowClient(tracking_uri=self.setup.backend_store)
+
+    def new_run(self) -> str:
+        """Create a run in the test experiment.
+
+        Returns:
+            The new run's ID.
+        """
+        return self.client.create_run(self.experiment_id).info.run_id
+
+
+@pytest.fixture(scope="session")
+def mlflow_backend(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[MLflowBackend]:
+    """A file-backed MLflow backend, isolated from the repository's ``mlflow.db``.
+
+    The global tracking URI points at the backend for the session and is restored
+    afterwards.
+    """
+    root = tmp_path_factory.mktemp("mlflow")
+    setup = MLFlowSetup(
+        experiment_name="qmodem-tests",
+        backend_store=f"sqlite:///{root / 'mlflow.db'}",
+        artifact_store=str(root / "artifacts"),
+    )
+    previous_uri = mlflow.get_tracking_uri()
+    mlflow.set_tracking_uri(setup.backend_store)
+    experiment_id = mlflow.create_experiment(
+        setup.experiment_name, artifact_location=str(setup.artifact_store)
+    )
+    yield MLflowBackend(setup=setup, experiment_id=experiment_id)
+    mlflow.set_tracking_uri(previous_uri)
 
 
 TINY_MEAN_HP = MeanHyperparameters(
