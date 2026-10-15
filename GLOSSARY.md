@@ -66,6 +66,10 @@ _Avoid_: Child run, posterior run, evaluation run
 The index that fixes one backbone run and the method runs restored from it; methods are compared paired by protocol seed.
 _Avoid_: Repetition, trial (a trial is an HPO term)
 
+**HPO study**:
+The search that fixes one stage's hyperparameters for one method on protocol seed 0, made of trials whose winning hyperparameters are then frozen for every protocol seed.
+_Avoid_: Tuning run, sweep
+
 **Validation criterion**:
 The single score on held-out validation data that selects a posterior stage's best checkpoint, stops it early and serves as its HPO objective, shared by every method of the comparison protocol.
 _Avoid_: Validation loss (training losses differ by method), monitored metric (the stopper's mechanism, not the protocol's choice)

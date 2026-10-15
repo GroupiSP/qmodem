@@ -9,7 +9,7 @@ comparison protocol
 ├─ backbone    one backbone run per protocol seed, shared; conv layer inferred
 ├─ seeds       R = 5, dataset fixed, keys derived from r, paired by seed
 ├─ posterior   N = #windows; M = 100 draws × 1 aleatoric noise sample
-├─ tuning      equal Optuna budget per posterior stage on seed 0, HPs frozen
+├─ tuning      50 TPE trials per posterior stage on seed 0, HPs frozen; fixed prior
 │              one shared validation criterion: validation CRPS, M_val = 100
 ├─ metrics     expected CRPS (grid-free), RMSE, coverage@0.95, WSU per trajectory
 │              sample-based; t0 dropped; mean over test cases (+ per policy)
@@ -66,7 +66,24 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
   | pSGLD | — (last epoch: a stopper would truncate the chain) | — | validation CRPS of the final retained chain |
 
 - **Patience**: one shared patience for every method that early-stops, generous (≈ 20% of the max-epoch cap) so that it covers Q-AVI's adversarial oscillations, with `min_delta = 0`. It is fixed and never tuned. Method-specific patience is ruled out as unequal treatment.
-- The budget size, search spaces, max-epoch caps and the patience value are decided per stage in the per-stage HPO ticket.
+- **Prior**: one fixed prior for every method, stagereg's `IsotropicGaussianPrior(precision=1.0)`. It is part of the shared posterior problem and is never tuned.
+- **Budget**: **50 trials** per posterior study, `TPESampler` with a fixed sampler seed, and a `MedianPruner` with `n_startup_trials = 5` and `n_warmup_steps = 60`. Every method reports per-epoch validation CRPS. pSGLD reports the CRPS of its running chain after burn-in. HNN has no study.
+- **Caps**: MCD, BBB, Q-AVI and C-AVI train for at most **300 epochs**, with a shared **patience of 60** and `min_delta = 0`. pSGLD runs a fixed **300 epochs**. The first 100 epochs are burn-in, and `thinning` is derived so that exactly M = 100 samples are retained.
+- **Shared, untuned settings**: batch size 32; Adam at a constant learning rate, with no schedule.
+- **Search spaces** (ranges on a log scale are marked *log*):
+
+  | Method | Tuned HPs |
+  |---|---|
+  | MCD | dropout rate 0.01–0.5; LR 1e-5–1e-2 *log* |
+  | BBB | LR 1e-5–1e-2 *log*; `initial_std` 1e-4–1e-1 *log* |
+  | pSGLD | `step_size` 1e-6–1e-2 *log*; `decay` 0.99 and `stability` 1e-5 fixed |
+  | Q-AVI | λ 1e-4–1 *log*; S ∈ {1, 4, 8, 16}; k ∈ {1, 2, 3, 5}; q 3–6; L 1–4; generator LR and discriminator LR, each 1e-5–1e-2 *log*; discriminator fixed (64-64 LeakyReLU MLP) |
+  | C-AVI | as Q-AVI; h derived from (q, L) |
+
+- **Variance stage**: a variance-only study (20 trials, TPE, median pruning) runs on seed 0's frozen mean checkpoint after the mean study ([#99](https://github.com/GroupiSP/qmodem/issues/99)). It tunes only the variance LR (1e-4–1e-2, *log*) and minimizes best-epoch validation Gamma NLL, the stage's own loss. Cap, patience and batch size are inherited from the mean study.
+- **Study runs**: there is one top-level `role=hpo_study` run per (stage, method), tagged `stage`, `method`, `backbone_run_id` (the seed-0 backbone) and `n_trials`. It logs the selected params as `best.*`. Its trials are `role=hpo_trial` children. They restore that backbone and all use the same key, `fold_in(0, method)`. Method runs, seed 0 included, are always **re-trained** from the frozen HPs and never reuse a trial.
+
+Decided in [How are the variance and posterior stages tuned under an equal budget? (#102)](https://github.com/GroupiSP/qmodem/issues/102).
 
 ## 6. Evaluation
 
