@@ -443,6 +443,7 @@ def hpo_study_tags(
     n_trials: int,
     method: str | None = None,
     backbone_run_id: str | None = None,
+    seed: int | None = None,
 ) -> dict[str, str]:
     """Return the tags of an HPO study run.
 
@@ -453,12 +454,18 @@ def hpo_study_tags(
             stage, in which case no ``method`` tag is set.
         backbone_run_id: The backbone run the trials restore, or ``None`` if they
             restore none (mean study), in which case no tag is set.
+        seed: The protocol seed the trials' keys derive from, or ``None`` to set
+            no ``seed`` tag.
 
     Returns:
         The ``role``, ``stage``, ``n_trials``, ``stagereg_version`` and, where
-        applicable, ``method`` and ``backbone_run_id`` tags.
+        applicable, ``method``, ``backbone_run_id`` and ``seed`` tags.
     """
-    optional = {"method": method, "backbone_run_id": backbone_run_id}
+    optional = {
+        "method": method,
+        "backbone_run_id": backbone_run_id,
+        "seed": None if seed is None else str(seed),
+    }
     return {
         "role": HPO_STUDY_ROLE,
         "stage": stage,
@@ -469,7 +476,13 @@ def hpo_study_tags(
 
 
 def hpo_trial_tags(
-    *, study_run_id: str, number: int, stage: str, method: str | None = None
+    *,
+    study_run_id: str,
+    number: int,
+    stage: str,
+    method: str | None = None,
+    backbone_run_id: str | None = None,
+    seed: int | None = None,
 ) -> dict[str, str]:
     """Return the tags of an HPO trial run, a child of its study run.
 
@@ -478,18 +491,25 @@ def hpo_trial_tags(
         number: The Optuna trial number.
         stage: The tuned stage.
         method: The tuned method, or ``None`` for a backbone stage.
+        backbone_run_id: The backbone run the trial restores, or ``None``.
+        seed: The protocol seed the trial's key derives from, or ``None``.
 
     Returns:
         The ``role``, ``hpo.trial``, ``stage``, parent-run and, where applicable,
-        ``method`` tags.
+        ``method``, ``backbone_run_id`` and ``seed`` tags.
     """
-    tags = {
+    optional = {
+        "method": method,
+        "backbone_run_id": backbone_run_id,
+        "seed": None if seed is None else str(seed),
+    }
+    return {
         "role": HPO_TRIAL_ROLE,
         HPO_TRIAL_TAG: str(number),
         "stage": stage,
         PARENT_RUN_TAG: study_run_id,
+        **{key: value for key, value in optional.items() if value is not None},
     }
-    return tags if method is None else {**tags, "method": method}
 
 
 IDENTITY_TAGS: Mapping[str, tuple[str, ...]] = {

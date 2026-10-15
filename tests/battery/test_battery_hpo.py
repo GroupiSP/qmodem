@@ -15,6 +15,7 @@ from qmodem.battery.hpo import (
     VARIANCE_STUDY,
     MeanSearchSpace,
     VarianceSearchSpace,
+    frozen_backbone_hyperparameters,
     mean_objective,
     variance_objective,
 )
@@ -164,3 +165,71 @@ def test_a_variance_study_trains_on_the_frozen_mean_and_keeps_only_variance(
         _min_history(client, t.info.run_id, "variance/validation/loss") for t in trials
     )
     assert result.best_value == pytest.approx(best)
+
+
+@pytest.fixture(scope="module")
+def backbone_studies(mlflow_backend, trained_backbone):
+    """A two-trial mean study and a two-trial variance study, in one experiment."""
+    setup = dataclasses.replace(
+        mlflow_backend.setup, experiment_name=f"backbone-{uuid.uuid4().hex}"
+    )
+    data = trained_backbone.battery.data
+    mean = run_study(
+        mean_objective(
+            data=data, space=MeanSearchSpace(), base=trained_backbone.mean_hp
+        ),
+        config=_TWO_TRIALS,
+        layout=StudyLayout(stage="mean"),
+        setup=setup,
+    )
+    variance = run_study(
+        variance_objective(
+            data=data,
+            mean_hp=trained_backbone.mean_hp,
+            mean_checkpoint=trained_backbone.checkpoints.mean,
+            space=VarianceSearchSpace(),
+            base=trained_backbone.variance_hp,
+        ),
+        config=_TWO_TRIALS,
+        layout=StudyLayout(stage="variance", backbone_run_id="backbone"),
+        setup=setup,
+    )
+    return mean, variance
+
+
+def test_a_protocol_backbone_is_configured_from_both_studies_frozen_params(
+    backbone_studies, mlflow_backend, trained_backbone
+) -> None:
+    mean, variance = backbone_studies
+
+    mean_hp, variance_hp = frozen_backbone_hyperparameters(
+        mean_study_run_id=mean.run_id,
+        variance_study_run_id=variance.run_id,
+        mean_base=trained_backbone.mean_hp,
+        variance_base=trained_backbone.variance_hp,
+        client=mlflow_backend.client,
+    )
+
+    assert mean_hp == MeanSearchSpace().apply(
+        mean.best_params, trained_backbone.mean_hp
+    )
+    assert variance_hp == VarianceSearchSpace().apply(
+        variance.best_params, trained_backbone.variance_hp
+    )
+    assert mean_hp.schedule == trained_backbone.mean_hp.schedule
+    assert variance_hp.schedule == trained_backbone.variance_hp.schedule
+
+
+def test_swapped_backbone_studies_are_refused(
+    backbone_studies, mlflow_backend, trained_backbone
+) -> None:
+    mean, variance = backbone_studies
+
+    with pytest.raises(ValueError):
+        frozen_backbone_hyperparameters(
+            mean_study_run_id=variance.run_id,
+            variance_study_run_id=mean.run_id,
+            mean_base=trained_backbone.mean_hp,
+            variance_base=trained_backbone.variance_hp,
+            client=mlflow_backend.client,
+        )

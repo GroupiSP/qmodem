@@ -20,6 +20,7 @@ from mlflow.tracking import MlflowClient
 from stagereg.core import CheckpointStore, ExperimentTracker, TrainingEvent
 
 from .tracking import (
+    HPO_STUDY_ROLE,
     MLFlowSetup,
     MLflowTracker,
     hpo_study_tags,
@@ -31,6 +32,7 @@ from .tracking import (
 HPO_STATE_TAG = "hpo.state"
 BEST_PARAM_PREFIX = "best."
 BEST_VALUE_METRIC = "best.value"
+BEST_TRIAL_PARAM = f"{BEST_PARAM_PREFIX}trial"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -58,11 +60,13 @@ class StudyLayout:
         stage: The tuned stage (``"mean"``, ``"variance"`` or ``"posterior"``).
         method: The tuned method, or ``None`` for a backbone stage.
         backbone_run_id: The backbone run every trial restores, or ``None``.
+        seed: The protocol seed every trial's key derives from, or ``None``.
     """
 
     stage: str
     method: str | None = None
     backbone_run_id: str | None = None
+    seed: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -207,6 +211,7 @@ def run_study(
         n_trials=config.n_trials,
         method=layout.method,
         backbone_run_id=layout.backbone_run_id,
+        seed=layout.seed,
     )
     with track_mlflow(dataclasses.replace(setup, tags={**setup.tags, **tags})) as run:
         study_run_id = run.info.run_id
@@ -257,6 +262,8 @@ def _run_trial(
             number=trial.number,
             stage=layout.stage,
             method=layout.method,
+            backbone_run_id=layout.backbone_run_id,
+            seed=layout.seed,
         ),
     ).info.run_id
     trial_run = TrialRun(
@@ -304,7 +311,7 @@ def _log_best(
     """
     params: Mapping[str, Any] = {
         **{f"{BEST_PARAM_PREFIX}{key}": value for key, value in best.params.items()},
-        f"{BEST_PARAM_PREFIX}trial": best.number,
+        BEST_TRIAL_PARAM: best.number,
     }
     client.log_batch(
         run_id,
@@ -313,3 +320,44 @@ def _log_best(
             Metric(BEST_VALUE_METRIC, float(best.value), int(time.time() * 1000), 0)
         ],
     )
+
+
+def load_best_params(
+    run_id: str,
+    *,
+    stage: str,
+    method: str | None = None,
+    client: MlflowClient | None = None,
+) -> dict[str, str]:
+    """Read the frozen hyperparameters a study run selected.
+
+    Protocol runs are re-trained from these, never taken from a trial.
+
+    Args:
+        run_id: A ``role=hpo_study`` run.
+        stage: The stage the study must have tuned.
+        method: The method the study must have tuned, ``None`` for a backbone
+            stage (whose study carries no ``method`` tag).
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Returns:
+        The ``best.<name>`` params keyed by ``<name>`` (strings, as MLflow keeps
+        them), without ``best.trial``.
+
+    Raises:
+        ValueError: If the run is not a study of that stage and method.
+    """
+    client = client if client is not None else MlflowClient()
+    run = client.get_run(run_id)
+    tags = run.data.tags
+    found = (tags.get("role"), tags.get("stage"), tags.get("method"))
+    if found != (HPO_STUDY_ROLE, stage, method):
+        raise ValueError(
+            f"Run {run_id} is (role, stage, method) = {found}, not a "
+            f"{(HPO_STUDY_ROLE, stage, method)}."
+        )
+    return {
+        key.removeprefix(BEST_PARAM_PREFIX): value
+        for key, value in run.data.params.items()
+        if key.startswith(BEST_PARAM_PREFIX) and key != BEST_TRIAL_PARAM
+    }

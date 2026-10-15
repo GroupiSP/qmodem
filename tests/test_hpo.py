@@ -14,6 +14,7 @@ from qmodem.hpo import (
     StudyConfig,
     StudyLayout,
     TrialRun,
+    load_best_params,
     run_study,
 )
 from qmodem.tracking import MLFlowSetup, RunCriteria, RunSelectionError, select_run
@@ -143,3 +144,63 @@ def test_backbone_stage_studies_carry_no_method_or_backbone_tag(
     assert {"method", "backbone_run_id"}.isdisjoint(study.data.tags)
     assert (study.data.tags["stage"], trial.data.tags["stage"]) == ("mean", "mean")
     assert "method" not in trial.data.tags
+
+
+def test_trials_of_a_posterior_study_carry_its_backbone_and_seed(
+    mlflow_backend, setup
+) -> None:
+    layout = StudyLayout("posterior", method="bbb", backbone_run_id="abc", seed=0)
+
+    run_study(_quadratic, config=StudyConfig(n_trials=2), layout=layout, setup=setup)
+
+    (study,) = _runs(mlflow_backend.client, setup, "hpo_study")
+    trials = _runs(mlflow_backend.client, setup, "hpo_trial")
+    assert study.data.tags["seed"] == "0"
+    assert {(t.data.tags["backbone_run_id"], t.data.tags["seed"]) for t in trials} == {
+        ("abc", "0")
+    }
+
+
+def test_the_best_params_of_a_study_run_are_read_back_without_prefix(
+    mlflow_backend, setup
+) -> None:
+    layout = StudyLayout(stage="posterior", method="mcd", backbone_run_id="abc")
+    result = run_study(
+        _quadratic, config=StudyConfig(n_trials=3), layout=layout, setup=setup
+    )
+
+    params = load_best_params(
+        result.run_id, stage="posterior", method="mcd", client=mlflow_backend.client
+    )
+
+    assert params == {
+        "mean/optimizer/learning_rate": str(
+            result.best_params["mean/optimizer/learning_rate"]
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    ("stage", "method"), [("mean", "mcd"), ("posterior", "bbb"), ("posterior", None)]
+)
+def test_best_params_are_refused_from_a_study_of_another_stage_or_method(
+    mlflow_backend, setup, stage, method
+) -> None:
+    layout = StudyLayout(stage="posterior", method="mcd", backbone_run_id="abc")
+    result = run_study(
+        _quadratic, config=StudyConfig(n_trials=1), layout=layout, setup=setup
+    )
+
+    with pytest.raises(ValueError):
+        load_best_params(
+            result.run_id, stage=stage, method=method, client=mlflow_backend.client
+        )
+
+
+def test_best_params_are_refused_from_a_run_that_is_not_a_study(
+    mlflow_backend, make_run
+) -> None:
+    run_id = make_run(start_time=1, role="backbone", seed="0")
+
+    with pytest.raises(ValueError):
+        load_best_params(run_id, stage="mean", client=mlflow_backend.client)

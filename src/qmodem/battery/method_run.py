@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import jax
@@ -27,6 +27,7 @@ from stagereg.core import (
     Batch,
     Checkpoint,
     CheckpointStore,
+    EventSink,
     ExperimentTracker,
     TrackerEventSink,
     TrainingState,
@@ -349,6 +350,7 @@ def train_method_run(
     tracker: ExperimentTracker,
     store: CheckpointStore,
     dataset_size: int | None = None,
+    event_sinks: Sequence[EventSink] = (),
 ) -> MethodRun:
     """Train a method run on a restored backbone.
 
@@ -370,6 +372,8 @@ def train_method_run(
         store: Receives the method run's ``posterior`` checkpoints.
         dataset_size: The posterior's dataset size N. Defaults to the number of
             training windows.
+        event_sinks: Extra receivers of the posterior stage's events, e.g. an
+            HPO pruner. Unused by HNN.
 
     Returns:
         The method run, with its finalized ``posterior`` checkpoint (``None`` for
@@ -412,7 +416,7 @@ def train_method_run(
         keys=keys,
         loader=make_loader(data, batch_size=spec.stage.batch_size, key=keys.loader),
         dataset_size=dataset_size,
-        event_sinks=(TrackerEventSink(tracker), timer),
+        event_sinks=(TrackerEventSink(tracker), timer, *event_sinks),
         store=store,
     )
     start = time.perf_counter()

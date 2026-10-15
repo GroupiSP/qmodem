@@ -15,10 +15,17 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 import optuna
+from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, ConfigDict
 from stagereg.core import Checkpoint
 
-from qmodem.hpo import PruningEventSink, StudyConfig, TrialObjective, TrialRun
+from qmodem.hpo import (
+    PruningEventSink,
+    StudyConfig,
+    TrialObjective,
+    TrialRun,
+    load_best_params,
+)
 
 from .data_processing import PreparedData
 from .train import (
@@ -272,3 +279,36 @@ def variance_objective(
         return best_epoch_value(checkpoint)
 
     return objective
+
+
+def frozen_backbone_hyperparameters(
+    *,
+    mean_study_run_id: str,
+    variance_study_run_id: str,
+    mean_base: MeanHyperparameters,
+    variance_base: VarianceHyperparameters,
+    client: MlflowClient | None = None,
+) -> tuple[MeanHyperparameters, VarianceHyperparameters]:
+    """Configure a protocol backbone run from the two studies' frozen ``best.*``.
+
+    Args:
+        mean_study_run_id: The ``stage=mean`` study run.
+        variance_study_run_id: The ``stage=variance`` study run.
+        mean_base: The fixed mean settings (batch size, cap, patience).
+        variance_base: The fixed variance settings (cap, patience).
+        client: The MLflow client. Defaults to one on the current tracking URI.
+
+    Returns:
+        The mean and variance hyperparameters with the selected values.
+
+    Raises:
+        ValueError: If a run is not a study of the expected stage.
+    """
+    mean_params = load_best_params(mean_study_run_id, stage="mean", client=client)
+    variance_params = load_best_params(
+        variance_study_run_id, stage="variance", client=client
+    )
+    return (
+        MeanSearchSpace().apply(mean_params, mean_base),
+        VarianceSearchSpace().apply(variance_params, variance_base),
+    )
