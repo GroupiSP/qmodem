@@ -56,7 +56,7 @@ backbone run          role=backbone  seed=r  data_generation_run_id
 │     checkpoints/mean/best, checkpoints/variance/best, x_scaler, y_scaler
 └── method run        role=method    method=m  seed=r   (mlflow.parentRunId = backbone run)
       checkpoints/posterior/best, evaluation/test/... metrics
-      [mean_study_run_id, variance_study_run_id, protocol_overrides]
+      [mean_study_run_id, variance_study_run_id (backbone), posterior_study_run_id (method), protocol_overrides]
 HPO study run         role=hpo_study stage=mean|variance|posterior [method, backbone_run_id, seed]
 └── trial run         role=hpo_trial hpo.trial=n  hpo.state=complete|pruned|fail
       params best.<name> on the study run, e.g. best.mean/network/kernel_size
@@ -120,7 +120,7 @@ uv run python $S/train_method_run.py --method bbb --seed 0 --include-overridden 
 uv run python $S/evaluate.py --method bbb --seed 0 --include-overridden
 ```
 
-`--posterior-param NAME=VALUE` (repeatable, nested with `/`, e.g. `avi/n_qubits=3`) overrides one posterior hyperparameter; `--max-epochs` / `--patience` override the posterior stage's schedule, and `train_backbone.py --mean-epochs` / `--variance-epochs` the backbone's caps. Any such override tags the run `protocol_overrides=true` and lists the overridden settings in `protocol_overrides.params`; tag selection skips these runs unless `--include-overridden` is given, so a smoke run is never picked as a protocol run.
+`--posterior-param NAME=VALUE` (repeatable, nested with `/`, e.g. `avi/n_qubits=3`) overrides one posterior hyperparameter; `--max-epochs` / `--patience` override the posterior stage's schedule, and `train_backbone.py --mean-epochs` / `--variance-epochs` the backbone's caps. Any such override tags the run `protocol_overrides=true` and lists the overridden settings in `protocol_overrides.params`; so does `train_method_run.py` for a method with a posterior stage run without `--study-run-id` (untuned defaults, listed as `posterior_study`). Tag selection skips these runs unless `--include-overridden` is given, so a smoke run is never picked as a protocol run.
 
 Method runs, the variance study and posterior studies take the data-generation run from their backbone's `data_generation_run_id` tag (a different `DATA_GEN_RUN_ID_MULTI` is refused) and window the data with the backbone's logged scalers, never refitted.
 

@@ -47,6 +47,7 @@ from qmodem.tracking import (
     Stage,
     load_scaler,
     mlflow_checkpoint_store,
+    protocol_override_tags,
     stagereg_version,
     track_mlflow,
     unflatten_parameters,
@@ -584,25 +585,67 @@ def restore_method_run(
 PARENT_RUN_TAG = "mlflow.parentRunId"
 
 
-def method_tags(*, method: Method, seed: int, backbone_run_id: str) -> dict[str, str]:
+POSTERIOR_STUDY_TAG = "posterior_study_run_id"
+"""Method-run tag: the posterior study whose ``best.*`` configured the run."""
+
+UNTUNED_POSTERIOR = "posterior_study"
+"""Override name of a posterior method run trained without its posterior study."""
+
+
+def method_tags(
+    *,
+    method: Method,
+    seed: int,
+    backbone_run_id: str,
+    study_run_id: str | None = None,
+) -> dict[str, str]:
     """Return the tags of a method run.
 
     Args:
         method: The inference method.
         seed: The protocol seed r.
         backbone_run_id: The MLflow run ID of the backbone run (the parent).
+        study_run_id: The posterior study the run's HPs come from, or ``None``.
 
     Returns:
         The ``role``, ``method``, ``seed``, ``stagereg_version`` and
-        ``mlflow.parentRunId`` tags.
+        ``mlflow.parentRunId`` tags, plus ``POSTERIOR_STUDY_TAG`` when given.
     """
-    return {
+    tags = {
         "role": Role.METHOD,
         "method": method.value,
         "seed": str(seed),
         "stagereg_version": stagereg_version(),
         PARENT_RUN_TAG: backbone_run_id,
     }
+    if study_run_id is not None:
+        tags[POSTERIOR_STUDY_TAG] = study_run_id
+    return tags
+
+
+def method_override_tags(
+    method: Method, overridden: Sequence[str], study_run_id: str | None
+) -> dict[str, str]:
+    """Return the protocol-override tags of a method run.
+
+    A method with a posterior stage trained without its posterior study runs on
+    untuned defaults, so it is marked overridden (``UNTUNED_POSTERIOR``) and tag
+    selection skips it like any other non-protocol run.
+
+    Args:
+        method: The inference method.
+        overridden: The overridden posterior settings (flattened names).
+        study_run_id: The posterior study the run's HPs come from, or ``None``.
+
+    Returns:
+        The ``protocol_override_tags`` of the overridden settings, plus
+        ``UNTUNED_POSTERIOR`` for a posterior method without a study.
+    """
+    names = list(overridden)
+    has_posterior = METHOD_CONFIGS[method]().posterior_spec() is not None
+    if study_run_id is None and has_posterior:
+        names.append(UNTUNED_POSTERIOR)
+    return protocol_override_tags(names)
 
 
 def _unflatten(params: Mapping[str, str], stage: str) -> dict[str, Any]:
@@ -672,6 +715,7 @@ def track_method_run(
     setup: MLFlowSetup,
     client: MlflowClient | None = None,
     dataset_size: int | None = None,
+    study_run_id: str | None = None,
 ) -> TrackedMethodRun:
     """Train a method run inside an MLflow run, as a child of its backbone run.
 
@@ -691,11 +735,18 @@ def track_method_run(
         client: The MLflow client. Defaults to one on the setup's backend.
         dataset_size: The posterior's dataset size N. Defaults to the number of
             training windows.
+        study_run_id: The posterior study ``config``'s HPs come from, if any
+            (recorded as ``POSTERIOR_STUDY_TAG``).
 
     Returns:
         The run ID and the trained method run.
     """
-    tags = method_tags(method=config.method, seed=seed, backbone_run_id=backbone_run_id)
+    tags = method_tags(
+        method=config.method,
+        seed=seed,
+        backbone_run_id=backbone_run_id,
+        study_run_id=study_run_id,
+    )
     with track_mlflow(dataclasses.replace(setup, tags={**setup.tags, **tags})) as run:
         client = client if client is not None else MlflowClient()
         run_id = run.info.run_id

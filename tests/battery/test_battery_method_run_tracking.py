@@ -22,6 +22,7 @@ from qmodem.battery.method_run import (
     TrackedMethodRun,
     evaluate_tracked_method_run,
     load_backbone_handle,
+    method_override_tags,
     method_tags,
     restore_method_run,
     track_method_run,
@@ -43,7 +44,12 @@ from qmodem.battery.train import (
     VarianceHyperparameters,
     track_backbone_run,
 )
-from qmodem.tracking import MLflowTracker, ScalerArtifact
+from qmodem.tracking import (
+    PROTOCOL_OVERRIDES_PARAMS_TAG,
+    PROTOCOL_OVERRIDES_TAG,
+    MLflowTracker,
+    ScalerArtifact,
+)
 
 N_TIMESTAMPS = 5
 
@@ -409,6 +415,47 @@ def test_method_tags_identify_the_run_and_its_backbone_parent(
 
     assert (tags["role"], tags["method"], tags["seed"]) == ("method", method, str(seed))
     assert tags["mlflow.parentRunId"] == backbone_run_id
+
+
+@given(
+    method=st.sampled_from(list(Method)),
+    seed=st.integers(0, 99),
+    study_run_id=st.one_of(st.none(), st.text("0123456789abcdef", min_size=1)),
+)
+def test_method_tags_record_the_posterior_study_only_when_given(
+    method: Method, seed: int, study_run_id: str | None
+) -> None:
+    tags = method_tags(
+        method=method, seed=seed, backbone_run_id="abc", study_run_id=study_run_id
+    )
+
+    assert tags.get("posterior_study_run_id") == study_run_id
+
+
+_override_names = st.lists(st.sampled_from(["max_epochs", "patience", "a/b"]))
+
+
+@given(method=st.sampled_from(list(Method)), names=_override_names)
+def test_a_posterior_method_run_without_a_study_is_marked_overridden(
+    method: Method, names: list[str]
+) -> None:
+    tags = method_override_tags(method, names, study_run_id=None)
+
+    if method is Method.HNN:
+        assert tags.get(PROTOCOL_OVERRIDES_TAG) == ("true" if names else None)
+    else:
+        assert tags[PROTOCOL_OVERRIDES_TAG] == "true"
+        assert "posterior_study" in tags[PROTOCOL_OVERRIDES_PARAMS_TAG].split(",")
+
+
+@given(method=st.sampled_from(list(Method)), names=_override_names)
+def test_a_method_run_from_a_study_is_marked_overridden_only_by_its_overrides(
+    method: Method, names: list[str]
+) -> None:
+    tags = method_override_tags(method, names, study_run_id="abc")
+
+    assert tags.get(PROTOCOL_OVERRIDES_TAG) == ("true" if names else None)
+    assert "posterior_study" not in tags.get(PROTOCOL_OVERRIDES_PARAMS_TAG, "")
 
 
 @settings(max_examples=10, deadline=None)

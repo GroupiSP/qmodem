@@ -16,13 +16,16 @@ Methods with a posterior stage take the protocol's schedule (300 epochs, patienc
 other posterior hyperparameter is overridden by ``--posterior-param NAME=VALUE``
 (e.g. pSGLD's ``burn_in_epochs``, which must stay below ``--max-epochs``). Any
 override tags the run ``protocol_overrides=true`` and lists the overridden settings
-in ``protocol_overrides.params``; tag selection (``evaluate.py --method --seed``)
-skips such runs unless ``--include-overridden`` is passed.
+in ``protocol_overrides.params``; so does training a method with a posterior stage
+without ``--study-run-id`` (untuned defaults, listed as ``posterior_study``). Tag
+selection (``evaluate.py --method --seed``) skips such runs unless
+``--include-overridden`` is passed.
 
 Protocol runs (seed 0 included) are re-trained from the method's posterior study:
 ``--study-run-id`` applies the study run's frozen ``best.*`` params (the study's
 fixed settings, e.g. its epoch cap, must be passed again as overrides if they were
-changed). A trial run is never reused.
+changed) and is recorded as the tag ``posterior_study_run_id``. A trial run is
+never reused.
 
 Example:
     uv run scripts/battery_multiple_scenarios/train_method_run.py --method hnn --seed 0
@@ -52,17 +55,14 @@ from qmodem.battery.method_run import (
     METHOD_CONFIGS,
     MethodConfig,
     method_config,
+    method_override_tags,
     posterior_overrides,
     track_method_run,
 )
 from qmodem.battery.posterior_hpo import frozen_method_config
 from qmodem.battery.train import Method
 from qmodem.script_session import script_session
-from qmodem.tracking import (
-    Role,
-    RunSelector,
-    protocol_override_tags,
-)
+from qmodem.tracking import Role, RunSelector
 
 logger = logging.getLogger(__name__)
 
@@ -195,11 +195,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             setup=dataclasses.replace(
                 session.setup,
                 run_name=args.run_name or f"{method.value}-seed-{backbone.seed}",
-                tags=protocol_override_tags(
-                    list(flatten_parameters(overrides_of(args)))
+                tags=method_override_tags(
+                    method,
+                    list(flatten_parameters(overrides_of(args))),
+                    study_run_id=args.study_run_id,
                 ),
             ),
             client=session.client,
+            study_run_id=args.study_run_id,
         )
         logger.info(
             "Method run %s (%s, seed %d)", run.run_id, method.value, backbone.seed
