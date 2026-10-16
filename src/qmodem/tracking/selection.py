@@ -11,7 +11,6 @@ from mlflow.tracking import MlflowClient
 
 from .tags import PROTOCOL_OVERRIDES_TAG, Role
 
-
 IDENTITY_TAGS: Mapping[str, tuple[str, ...]] = {
     Role.BACKBONE: ("seed",),
     Role.METHOD: ("method", "seed"),

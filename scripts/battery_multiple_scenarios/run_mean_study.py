@@ -30,13 +30,12 @@ import os
 import pathlib
 from collections.abc import Sequence
 
-
 from qmodem.battery.data_processing import WINDOW_SIZE, make_data_pipeline, prepare_data
 from qmodem.battery.hpo import MEAN_STUDY, STUDY_SEED, MeanSearchSpace, mean_objective
 from qmodem.battery.train import MeanHyperparameters, StageScheduleHyperparameters
 from qmodem.hpo import StudyLayout, run_study
-from qmodem.tracking import Stage
 from qmodem.script_session import script_session
+from qmodem.tracking import Stage
 
 logger = logging.getLogger(__name__)
 

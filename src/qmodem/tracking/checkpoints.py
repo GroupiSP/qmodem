@@ -19,7 +19,6 @@ import orbax.checkpoint as ocp
 from mlflow.tracking import MlflowClient
 from stagereg.core import CachedCheckpointStore, Checkpoint, finalized_only
 
-
 CHECKPOINT_ARTIFACT_ROOT = "checkpoints"
 _PICKLE_FILE = "checkpoint.pkl"
 _ARRAYS_DIR = "arrays"

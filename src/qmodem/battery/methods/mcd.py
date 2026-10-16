@@ -12,7 +12,7 @@ from stagereg.jax import InferenceMethod, MCDropout
 
 from ..models import MCDropoutNet
 from ..posterior import PosteriorSpec, PosteriorStageHyperparameters, PyTree
-from ..train import Method, MeanNetworkHyperparameters, OptimizerHyperparameters
+from ..train import MeanNetworkHyperparameters, Method, OptimizerHyperparameters
 from .base import MethodConfigBase
 
 

@@ -55,12 +55,12 @@ from qmodem.battery.posterior_hpo import (
     search_space,
 )
 from qmodem.battery.train import Method
+from qmodem.script_session import ScriptSession, script_session
 from qmodem.tracking import (
     Role,
     RunSelector,
     protocol_override_tags,
 )
-from qmodem.script_session import ScriptSession, script_session
 
 logger = logging.getLogger(__name__)
 

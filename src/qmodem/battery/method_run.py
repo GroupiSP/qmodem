@@ -41,10 +41,10 @@ from stagereg.jax import (
 )
 
 from qmodem.tracking import (
-    Role,
-    Stage,
     MLFlowSetup,
     MLflowTracker,
+    Role,
+    Stage,
     load_scaler,
     mlflow_checkpoint_store,
     stagereg_version,

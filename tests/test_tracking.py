@@ -12,9 +12,9 @@ import jax.numpy as jnp
 import mlflow
 import numpy as np
 import pytest
+from flax import nnx
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from flax import nnx
 from matplotlib.figure import Figure
 from stagereg.core import (
     Checkpoint,

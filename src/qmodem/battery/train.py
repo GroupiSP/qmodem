@@ -31,16 +31,17 @@ from stagereg.jax import (
 )
 
 from qmodem.tracking import (
-    Stage,
     MLFlowSetup,
     MLflowTracker,
     ScalerArtifact,
+    Stage,
     backbone_tags,
     log_scaler,
     mlflow_checkpoint_store,
     track_mlflow,
     unflatten_parameters,
 )
+
 from .data_processing import PreparedData, make_loader
 from .models import MeanNet, VarianceNet
 

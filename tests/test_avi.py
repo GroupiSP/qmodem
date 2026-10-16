@@ -17,9 +17,9 @@ import numpy as np
 import optax
 import pytest
 from flax import nnx
-from jax.flatten_util import ravel_pytree
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from jax.flatten_util import ravel_pytree
 from stagereg.core import Batch
 from stagereg.jax import IsotropicGaussianPrior, PosteriorProblem
 

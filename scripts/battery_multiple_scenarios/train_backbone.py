@@ -57,12 +57,12 @@ from qmodem.battery.train import (
     VarianceHyperparameters,
     track_backbone_run,
 )
+from qmodem.script_session import script_session
 from qmodem.tracking import (
-    Stage,
     ScalerArtifact,
+    Stage,
     protocol_override_tags,
 )
-from qmodem.script_session import script_session
 
 logger = logging.getLogger(__name__)
 

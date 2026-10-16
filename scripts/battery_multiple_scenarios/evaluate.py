@@ -38,8 +38,8 @@ from qmodem.battery.data_generation import (
 )
 from qmodem.battery.evaluate import EvaluationParameters
 from qmodem.battery.method_run import PARENT_RUN_TAG, evaluate_tracked_method_run
-from qmodem.tracking import Role, RunSelector
 from qmodem.script_session import script_session
+from qmodem.tracking import Role, RunSelector
 
 logger = logging.getLogger(__name__)
 

@@ -32,7 +32,6 @@ import os
 import pathlib
 from collections.abc import Sequence
 
-
 from qmodem.battery.backbone_data import load_backbone_context
 from qmodem.battery.hpo import (
     STUDY_SEED,
@@ -47,13 +46,13 @@ from qmodem.battery.train import (
     load_backbone_hyperparameters,
 )
 from qmodem.hpo import StudyLayout, run_study
-from qmodem.tracking import (
-    Role,
-    Stage,
-    MLflowCheckpointStore,
-    RunSelector,
-)
 from qmodem.script_session import script_session
+from qmodem.tracking import (
+    MLflowCheckpointStore,
+    Role,
+    RunSelector,
+    Stage,
+)
 
 logger = logging.getLogger(__name__)
 

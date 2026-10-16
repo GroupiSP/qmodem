@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 import simbat as sb
-from simbat.simulate import ConstantCurrentDischarge
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from simbat.simulate import ConstantCurrentDischarge
 
 from qmodem.battery.data_generation import (
     gaussian_noise,

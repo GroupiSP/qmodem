@@ -38,7 +38,7 @@ from qmodem.hpo import (
     load_best_params,
     run_study,
 )
-from qmodem.tracking import Stage, VARIANCE_STUDY_TAG, MLFlowSetup
+from qmodem.tracking import VARIANCE_STUDY_TAG, MLFlowSetup, Stage
 
 from .data_processing import PreparedData
 from .hpo import SAMPLER_SEED, STUDY_SEED

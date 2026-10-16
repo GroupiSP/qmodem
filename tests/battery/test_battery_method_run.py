@@ -5,9 +5,9 @@ from __future__ import annotations
 import jax
 import numpy as np
 import pytest
+from flax import nnx
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from flax import nnx
 from stagereg.core import InMemoryCheckpointStore, is_finalized
 
 from qmodem.battery.method_run import (

@@ -57,12 +57,12 @@ from qmodem.battery.method_run import (
 )
 from qmodem.battery.posterior_hpo import frozen_method_config
 from qmodem.battery.train import Method
+from qmodem.script_session import script_session
 from qmodem.tracking import (
     Role,
     RunSelector,
     protocol_override_tags,
 )
-from qmodem.script_session import script_session
 
 logger = logging.getLogger(__name__)
 
