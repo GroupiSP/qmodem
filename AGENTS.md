@@ -5,7 +5,7 @@ This document contains informations for the agents about general coding guidelin
 ## Interactions with the users
 
 - Keep a polite and professional tone.
-- Keep your replies concise.
+- Be extremely concise. Sacrifice grammar for the sake of concision.
 - Where possible, provide examples to illustrate your points.
 - Where possible, provide schematics, diagrams, code snippets, tables or other visual aids to illustrate your points.
 

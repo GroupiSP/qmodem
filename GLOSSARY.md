@@ -59,7 +59,7 @@ The run that trains the mean and variance stages once per seed of the comparison
 _Avoid_: Base run, parent run (a parent is an MLflow relation, not a role)
 
 **Method run**:
-The run that restores a backbone run and adds one inference method's posterior stage (none for HNN), and that holds that method's evaluation.
+The run that restores a backbone run and adds one inference method's posterior stage (none for HNN), and that holds that method's evaluation. Its method is named by one tag value: `hnn` (HNN), `mcd` (MCD), `bbb` (BBB), `psgld` (pSGLD), `q-avi` (Q-AVI) or `c-avi` (C-AVI).
 _Avoid_: Child run, posterior run, evaluation run
 
 **Protocol seed**:
@@ -67,7 +67,7 @@ The index that fixes one backbone run and the method runs restored from it; meth
 _Avoid_: Repetition, trial (a trial is an HPO term)
 
 **HPO study**:
-The search that fixes one stage's hyperparameters for one method on protocol seed 0, made of trials whose winning hyperparameters are then frozen for every protocol seed.
+The search that fixes one stage's hyperparameters on protocol seed 0 (the mean and variance stages once for all methods, the posterior stage once per method), made of trials whose winning hyperparameters are then frozen for every protocol seed.
 _Avoid_: Tuning run, sweep
 
 **Validation criterion**:

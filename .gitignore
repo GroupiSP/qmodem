@@ -46,7 +46,6 @@ mlruns/
 *.log
 
 # Last training run data
-.last_trained.json
 /chats
 
 # Claude Code agent worktrees and personal settings
