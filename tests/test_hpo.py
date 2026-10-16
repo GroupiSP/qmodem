@@ -221,6 +221,32 @@ def test_best_params_are_refused_from_a_run_that_is_not_a_study(
         load_best_params(run_id, stage="mean", client=mlflow_backend.client)
 
 
+def _failing(run: TrialRun) -> float:
+    raise RuntimeError("trial crashed")
+
+
+def _pruned(run: TrialRun) -> float:
+    raise optuna.TrialPruned
+
+
+@pytest.mark.parametrize("objective", [_failing, _pruned])
+def test_best_params_are_refused_from_a_study_that_logged_no_best_trial(
+    mlflow_backend, setup, objective
+) -> None:
+    layout = StudyLayout(stage="posterior", method="mcd", backbone_run_id="abc")
+    with pytest.raises((RuntimeError, ValueError)):
+        run_study(objective, config=StudyConfig(n_trials=1), layout=layout, setup=setup)
+    (study,) = _runs(mlflow_backend.client, setup, "hpo_study")
+
+    with pytest.raises(ValueError, match="best trial"):
+        load_best_params(
+            study.info.run_id,
+            stage="posterior",
+            method="mcd",
+            client=mlflow_backend.client,
+        )
+
+
 # --- pure properties ---------------------------------------------------------------
 
 _optional_text = st.one_of(st.none(), st.text("abcdef-", min_size=1, max_size=8))

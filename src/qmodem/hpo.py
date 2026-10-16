@@ -452,7 +452,9 @@ def load_best_params(
         them), without ``best.trial``.
 
     Raises:
-        ValueError: If the run is not a study of that stage and method.
+        ValueError: If the run is not a study of that stage and method, or did not
+            finish with a best trial (e.g. it was interrupted or every trial
+            failed).
     """
     client = client if client is not None else MlflowClient()
     run = client.get_run(run_id)
@@ -462,6 +464,10 @@ def load_best_params(
         raise ValueError(
             f"Run {run_id} is (role, stage, method) = {found}, not a "
             f"{(HPO_STUDY_ROLE, stage, method)}."
+        )
+    if run.info.status != "FINISHED" or BEST_TRIAL_PARAM not in run.data.params:
+        raise ValueError(
+            f"Study run {run_id} ({run.info.status}) did not finish with a best trial."
         )
     return {
         key.removeprefix(BEST_PARAM_PREFIX): value
