@@ -3,10 +3,11 @@ from __future__ import annotations
 import dataclasses
 import functools
 import pathlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import jax
 import jax.numpy as jnp
+import jaxtyping
 import mlflow
 import numpy as np
 import pandas as pd
@@ -66,23 +67,36 @@ def _split_train_val(
     )
 
 
+def _to_batch(features: jaxtyping.ArrayLike, targets: jaxtyping.ArrayLike) -> Batch:
+    """Move one batch of windows and targets to the device.
+
+    Args:
+        features: The batch's windows.
+        targets: The batch's targets.
+
+    Returns:
+        The stagereg batch.
+    """
+    return Batch(inputs=jnp.asarray(features), targets=jnp.asarray(targets))
+
+
 def _shuffled_batches(
-    features: np.ndarray, targets: np.ndarray, batch_size: int, seed: int
+    windows: ArrayDataSource, batch_size: int, seed: int
 ) -> list[Batch]:
     """Split one epoch's shuffled training windows into batches.
 
     Args:
-        features: Training windows, one per row.
-        targets: Training targets, one per row.
+        windows: Training windows and targets, backed by NumPy arrays so that
+            fancy indexing stays on the host.
         batch_size: Batch size (the last batch may be smaller).
         seed: Seed of this epoch's shuffle.
 
     Returns:
         The batches, every window appearing exactly once.
     """
-    order = np.random.default_rng(seed).permutation(len(targets))
+    order = np.random.default_rng(seed).permutation(len(windows))
     return [
-        Batch(inputs=jnp.asarray(features[idx]), targets=jnp.asarray(targets[idx]))
+        _to_batch(*windows[idx])
         for idx in np.split(order, range(batch_size, len(order), batch_size))
     ]
 
@@ -205,11 +219,17 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
         A loader ``loader(*, split, epoch) -> list[Batch]``.
     """
     # Converted once: indexing NumPy is far cheaper than indexing device arrays.
-    train_features = np.asarray(data.train.features)
-    train_targets = np.asarray(data.train.targets)
-    val_batch = Batch(
-        inputs=jnp.asarray(data.val.features), targets=jnp.asarray(data.val.targets)
+    train = ArrayDataSource(
+        features=np.asarray(data.train.features),
+        targets=np.asarray(data.train.targets),
     )
+    val_batch = _to_batch(data.val.features, data.val.targets)
+    batches_of: dict[str, Callable[[int], list[Batch]]] = {
+        TRAIN_SPLIT: lambda epoch: _shuffled_batches(
+            train, batch_size, _shuffle_seed(key, epoch)
+        ),
+        VALIDATION_SPLIT: lambda epoch: [val_batch],
+    }
 
     def loader(*, split: str, epoch: int) -> list[Batch]:
         """Return the batches of one split and epoch.
@@ -224,16 +244,13 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
         Raises:
             ValueError: If the split is unknown.
         """
-        if split == TRAIN_SPLIT:
-            return _shuffled_batches(
-                train_features, train_targets, batch_size, _shuffle_seed(key, epoch)
-            )
-        if split == VALIDATION_SPLIT:
-            return [val_batch]
-        raise ValueError(
-            f"Unknown split {split!r}; expected {TRAIN_SPLIT!r} or "
-            f"{VALIDATION_SPLIT!r}."
-        )
+        try:
+            build = batches_of[split]
+        except KeyError:
+            raise ValueError(
+                f"Unknown split {split!r}; expected one of {sorted(batches_of)}."
+            ) from None
+        return build(epoch)
 
     return loader
 
