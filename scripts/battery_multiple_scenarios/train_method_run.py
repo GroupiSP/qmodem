@@ -187,10 +187,17 @@ def main(argv: Sequence[str] | None = None) -> None:
             expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
             client=session.client,
         )
+        config = method_configuration(args, session.client)
+        if config.posterior_spec() is None:
+            logger.info(
+                "%s has no posterior stage: nothing to train, the run only holds "
+                "the evaluation logged later by evaluate.py",
+                method.value.upper(),
+            )
         run = track_method_run(
             backbone_run_id=backbone_run_id,
             data=backbone.data,
-            config=method_configuration(args, session.client),
+            config=config,
             seed=backbone.seed,
             setup=dataclasses.replace(
                 session.setup,
