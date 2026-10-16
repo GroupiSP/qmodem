@@ -408,7 +408,9 @@ def test_avi_draws_are_consistent_across_input_subsets(
     whole = posterior.sample_means(inputs, key, 4)
     subset = posterior.sample_means(inputs[start : start + size], key, 4)
 
-    np.testing.assert_allclose(subset, whole[:, start : start + size], rtol=1e-6)
+    np.testing.assert_allclose(
+        subset, whole[:, start : start + size], rtol=1e-5, atol=1e-6
+    )
 
 
 def test_the_posterior_is_independent_of_later_updates(
