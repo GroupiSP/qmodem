@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import jax
 import numpy as np
 from hypothesis import given, settings
@@ -123,6 +125,6 @@ def test_train_batches_are_full_except_the_last(
 
     sizes = [len(b.targets) for b in loader(split="train", epoch=epoch)]
 
-    assert len(sizes) == -(-n_windows // batch_size)
+    assert len(sizes) == math.ceil(n_windows / batch_size)
     assert all(size == batch_size for size in sizes[:-1])
     assert 0 < sizes[-1] <= batch_size

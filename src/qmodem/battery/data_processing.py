@@ -176,7 +176,7 @@ def posterior_dataset_size(data: PreparedData) -> int:
 
 
 def _shuffle_seed(key: jax.Array, epoch: int) -> int:
-    """Derive the integer sampler seed of one epoch from the loader key.
+    """Derive the integer shuffle seed of one epoch from the loader key.
 
     Args:
         key: The loader's typed PRNG key.
@@ -190,7 +190,7 @@ def _shuffle_seed(key: jax.Array, epoch: int) -> int:
 
 
 def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFactory:
-    """Adapt the dataloader builders to stagereg's ``LoaderFactory``.
+    """Build stagereg's ``LoaderFactory`` over the prepared windows.
 
     The training split is reshuffled every epoch with a seed derived from
     ``key`` and the epoch, so the same epoch always gives the same batch order.
