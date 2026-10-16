@@ -382,6 +382,50 @@ def test_an_unknown_run_id_raises(make_run) -> None:
         )
 
 
+_ROLES = ["backbone", "method", "hpo_study", "hpo_trial"]
+
+
+@_MLFLOW_SETTINGS
+@given(
+    run_role=st.sampled_from([*_ROLES, None]),
+    expected_role=st.sampled_from(_ROLES),
+)
+def test_an_explicit_run_id_is_accepted_iff_its_role_matches_the_criteria(
+    make_run, run_role: str | None, expected_role: str
+) -> None:
+    make_run = make_run.fresh()
+    tags = {"role": run_role} if run_role is not None else {}
+    run_id = make_run(start_time=1, method="hnn", seed=0, **tags)
+
+    def resolve() -> str:
+        return resolve_run_id(
+            run_id=run_id,
+            criteria=RunCriteria(role=expected_role, method="hnn", seed=0),
+            experiment_ids=[make_run.experiment_id],
+            client=make_run.client,
+        )
+
+    if run_role == expected_role:
+        assert resolve() == run_id
+    else:
+        with pytest.raises(RunSelectionError, match=f"expected {expected_role!r}"):
+            resolve()
+
+
+def test_an_explicit_run_id_without_criteria_skips_the_role_check(make_run) -> None:
+    run_id = make_run(start_time=1, role="backbone", seed=0)
+
+    assert (
+        resolve_run_id(
+            run_id=run_id,
+            criteria=None,
+            experiment_ids=[make_run.experiment_id],
+            client=make_run.client,
+        )
+        == run_id
+    )
+
+
 def _select(make_run, criteria: RunCriteria) -> str:
     return resolve_run_id(
         run_id=None,

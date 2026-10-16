@@ -54,7 +54,8 @@ def resolve_run_id(
     """Return the run a script consumes: the explicit ``run_id`` or a tag selection.
 
     Args:
-        run_id: An exact run ID (``--run-id``). It wins over ``criteria``.
+        run_id: An exact run ID (``--run-id``). It wins over ``criteria``, but its
+            ``role`` tag must still equal ``criteria.role`` when criteria are given.
         criteria: Tag criteria, used when ``run_id`` is ``None``.
         experiment_ids: Experiments searched by tag selection.
         client: The MLflow client. Defaults to one on the current tracking URI.
@@ -65,15 +66,22 @@ def resolve_run_id(
     Raises:
         ValueError: If neither ``run_id`` nor ``criteria`` is given, or the role is
             not selectable (see ``select_run``).
-        RunSelectionError: If ``run_id`` does not exist, or tag selection finds no
-            run or an ambiguous one (see ``select_run``).
+        RunSelectionError: If ``run_id`` does not exist or has a role other than
+            ``criteria.role``, or tag selection finds no run or an ambiguous one
+            (see ``select_run``).
     """
     client = client if client is not None else MlflowClient()
     if run_id is not None:
         try:
-            return client.get_run(run_id).info.run_id
+            run = client.get_run(run_id)
         except MlflowException as error:
             raise RunSelectionError(f"No run with ID {run_id!r}.") from error
+        role = run.data.tags.get("role")
+        if criteria is not None and role != criteria.role:
+            raise RunSelectionError(
+                f"Run {run_id} has role {role!r}, expected {str(criteria.role)!r}."
+            )
+        return run.info.run_id
     if criteria is None:
         raise ValueError("Pass a run ID or tag criteria to select a run.")
     return select_run(criteria, experiment_ids=experiment_ids, client=client)
