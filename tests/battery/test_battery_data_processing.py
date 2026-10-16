@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import math
+
 import jax
 import numpy as np
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from qmodem.battery.data_processing import (
+    TRAIN_SPLIT,
+    VALIDATION_SPLIT,
     WINDOW_SIZE,
     make_loader,
     posterior_dataset_size,
@@ -109,3 +114,29 @@ def test_posterior_dataset_size_is_the_number_of_training_windows(
 
     assert posterior_dataset_size(synthetic_battery.data) == expected
     assert sum(len(b.targets) for b in loader(split="train", epoch=0)) == expected
+
+
+@settings(deadline=None, max_examples=25)
+@given(seed=seeds, epoch=epochs, batch_size=batch_sizes)
+def test_train_batches_are_full_except_the_last(
+    synthetic_battery, seed: int, epoch: int, batch_size: int
+) -> None:
+    n_windows = len(synthetic_battery.data.train)
+    loader = make_loader(
+        synthetic_battery.data, batch_size=batch_size, key=jax.random.key(seed)
+    )
+
+    sizes = [len(b.targets) for b in loader(split="train", epoch=epoch)]
+
+    assert len(sizes) == math.ceil(n_windows / batch_size)
+    assert all(size == batch_size for size in sizes[:-1])
+    assert 0 < sizes[-1] <= batch_size
+
+
+@settings(deadline=None, max_examples=25)
+@given(split=st.text().filter(lambda s: s not in (TRAIN_SPLIT, VALIDATION_SPLIT)))
+def test_an_unknown_split_is_rejected(synthetic_battery, split: str) -> None:
+    loader = make_loader(synthetic_battery.data, batch_size=8, key=jax.random.key(0))
+
+    with pytest.raises(ValueError, match="Unknown split"):
+        loader(split=split, epoch=0)

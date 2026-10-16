@@ -78,7 +78,7 @@ def _make_windows(
 
 
 class DataSource(Protocol):
-    """Protocol for data sources that can be used with Grain DataLoaders."""
+    """Protocol for indexable sources of ``(features, targets)`` records."""
 
     def __len__(self) -> int:
         """Returns the number of records in the dataset."""

@@ -5,10 +5,11 @@ import functools
 import pathlib
 from collections.abc import Callable, Iterable
 
-import grain
 import jax
 import jax.numpy as jnp
+import jaxtyping
 import mlflow
+import numpy as np
 import pandas as pd
 import sklearn.preprocessing as skpp
 from stagereg.core import Batch, LoaderFactory
@@ -66,76 +67,38 @@ def _split_train_val(
     )
 
 
-def _train_dataloader_builder(
-    sampler_seed: int,
-    ds_train: ArrayDataSource,
-    batch_size: int,
-    drop_remainder: bool,
-) -> grain.DataLoader:
-    """Build one epoch's shuffled training loader.
+def _to_batch(features: jaxtyping.ArrayLike, targets: jaxtyping.ArrayLike) -> Batch:
+    """Move one batch of windows and targets to the device.
 
     Args:
-        sampler_seed: Seed of this epoch's shuffle.
-        ds_train: The training windows.
-        batch_size: Batch size.
-        drop_remainder: Whether to drop a smaller last batch.
+        features: The batch's windows.
+        targets: The batch's targets.
 
     Returns:
-        The Grain loader.
+        The stagereg batch.
     """
-    sampler = grain.samplers.IndexSampler(
-        num_records=len(ds_train),
-        num_epochs=1,
-        shuffle=True,
-        seed=sampler_seed,
-    )
-    return grain.DataLoader(
-        data_source=ds_train,
-        sampler=sampler,
-        operations=[
-            grain.transforms.Batch(
-                batch_size=batch_size,
-                drop_remainder=drop_remainder,
-            )
-        ],
-        worker_count=0,
-    )
+    return Batch(inputs=jnp.asarray(features), targets=jnp.asarray(targets))
 
 
-def dataloader_builders(
-    data: PreparedData, batch_size: int, drop_remainder: bool
-) -> tuple[Callable[[int], Iterable], Callable[[int], Iterable]]:
-    """Return per-epoch builders of the training and validation loaders.
+def _shuffled_batches(
+    windows: ArrayDataSource, batch_size: int, seed: int
+) -> list[Batch]:
+    """Split one epoch's shuffled training windows into batches.
 
     Args:
-        data: The prepared windows.
-        batch_size: Training batch size.
-        drop_remainder: Whether to drop a smaller last training batch.
+        windows: Training windows and targets, backed by NumPy arrays so that
+            fancy indexing stays on the host.
+        batch_size: Batch size (the last batch may be smaller).
+        seed: Seed of this epoch's shuffle.
 
     Returns:
-        ``(train_builder, val_builder)``: the training builder takes the epoch's
-        shuffle seed, the validation builder the epoch (one batch of every
-        validation window).
+        The batches, every window appearing exactly once.
     """
-    train_builder = functools.partial(
-        _train_dataloader_builder,
-        ds_train=data.train,
-        batch_size=batch_size,
-        drop_remainder=drop_remainder,
-    )
-
-    def val_builder(epoch: int) -> list[tuple[jax.Array, jax.Array]]:
-        """Return the whole validation set as a single batch.
-
-        Args:
-            epoch: The epoch (unused; the validation set never changes).
-
-        Returns:
-            One ``(features, targets)`` batch.
-        """
-        return [(data.val.features, data.val.targets)]
-
-    return train_builder, val_builder
+    order = np.random.default_rng(seed).permutation(len(windows))
+    return [
+        _to_batch(*windows[idx])
+        for idx in np.split(order, range(batch_size, len(order), batch_size))
+    ]
 
 
 def make_data_pipeline(
@@ -227,7 +190,7 @@ def posterior_dataset_size(data: PreparedData) -> int:
 
 
 def _shuffle_seed(key: jax.Array, epoch: int) -> int:
-    """Derive the integer sampler seed of one epoch from the loader key.
+    """Derive the integer shuffle seed of one epoch from the loader key.
 
     Args:
         key: The loader's typed PRNG key.
@@ -241,7 +204,7 @@ def _shuffle_seed(key: jax.Array, epoch: int) -> int:
 
 
 def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFactory:
-    """Adapt the dataloader builders to stagereg's ``LoaderFactory``.
+    """Build stagereg's ``LoaderFactory`` over the prepared windows.
 
     The training split is reshuffled every epoch with a seed derived from
     ``key`` and the epoch, so the same epoch always gives the same batch order.
@@ -255,9 +218,18 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
     Returns:
         A loader ``loader(*, split, epoch) -> list[Batch]``.
     """
-    train_builder, val_builder = dataloader_builders(
-        data, batch_size=batch_size, drop_remainder=False
+    # Converted once: indexing NumPy is far cheaper than indexing device arrays.
+    train = ArrayDataSource(
+        features=np.asarray(data.train.features),
+        targets=np.asarray(data.train.targets),
     )
+    val_batch = _to_batch(data.val.features, data.val.targets)
+    batches_of: dict[str, Callable[[int], list[Batch]]] = {
+        TRAIN_SPLIT: lambda epoch: _shuffled_batches(
+            train, batch_size, _shuffle_seed(key, epoch)
+        ),
+        VALIDATION_SPLIT: lambda epoch: [val_batch],
+    }
 
     def loader(*, split: str, epoch: int) -> list[Batch]:
         """Return the batches of one split and epoch.
@@ -272,18 +244,13 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
         Raises:
             ValueError: If the split is unknown.
         """
-        if split == TRAIN_SPLIT:
-            batches = train_builder(_shuffle_seed(key, epoch))
-        elif split == VALIDATION_SPLIT:
-            batches = val_builder(epoch)
-        else:
+        try:
+            build = batches_of[split]
+        except KeyError:
             raise ValueError(
-                f"Unknown split {split!r}; expected {TRAIN_SPLIT!r} or "
-                f"{VALIDATION_SPLIT!r}."
-            )
-        return [
-            Batch(inputs=jnp.asarray(x), targets=jnp.asarray(y)) for x, y in batches
-        ]
+                f"Unknown split {split!r}; expected one of {sorted(batches_of)}."
+            ) from None
+        return build(epoch)
 
     return loader
 
