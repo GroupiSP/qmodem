@@ -11,8 +11,8 @@ metric and serves only as the time origin of WSU.
 
 Around the core, ``evaluate_predictive_model`` builds the samples from a predictive
 model (M posterior draws, each with one aleatoric noise sample), and
-``log_evaluation`` logs the result into a method run through an
-``ExperimentTracker``.
+``log_evaluation`` logs the result, with one RUL-over-time figure per test case,
+into a method run through an ``ExperimentTracker``.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from stagereg.core import (
 from stagereg.jax import PosteriorPredictive
 
 from .data_processing import FEATURES, WINDOW_SIZE
+from .rul_plot import central_band, plot_rul_over_time
 
 PRIMARY_COVERAGE_LEVEL = 0.95
 """The protocol's primary coverage level, also the band WSU integrates."""
@@ -90,21 +91,6 @@ def coverage_key(level: float) -> str:
     return f"coverage_{100 * level:g}"
 
 
-def _band(samples: np.ndarray, level: float) -> tuple[np.ndarray, np.ndarray]:
-    """Return the empirical central band of each row of ``samples``.
-
-    Args:
-        samples: Samples ``(U, M)``.
-        level: Nominal coverage level in ``(0, 1)``.
-
-    Returns:
-        The lower and upper empirical percentiles ``(U,)`` each.
-    """
-    tail = 100 * (1 - level) / 2
-    lower, upper = np.percentile(samples, [tail, 100 - tail], axis=1)
-    return lower, upper
-
-
 def case_metrics(
     case: CaseSamples,
     coverage_levels: Sequence[float] = (PRIMARY_COVERAGE_LEVEL,),
@@ -140,8 +126,10 @@ def case_metrics(
         "rmse": rmse(targets, predictive.mean(axis=1)),
     }
     for level in coverage_levels:
-        metrics[coverage_key(level)] = coverage(targets, *_band(predictive, level))
-    lower, upper = _band(predictive, wsu_level)
+        metrics[coverage_key(level)] = coverage(
+            targets, *central_band(predictive, level)
+        )
+    lower, upper = central_band(predictive, wsu_level)
     # stagereg's wsu takes the origin from x[0] and never reads lower[0]/upper[0].
     metrics["wsu"] = wsu(
         np.concatenate([lower[:1], lower]),
@@ -601,18 +589,25 @@ def evaluate_predictive_model(
     )
 
 
-def log_evaluation(evaluation: Evaluation, tracker: ExperimentTracker) -> None:
+def log_evaluation(
+    evaluation: Evaluation,
+    tracker: ExperimentTracker,
+    *,
+    band_level: float = PRIMARY_COVERAGE_LEVEL,
+) -> None:
     """Log an evaluation into a method run.
 
     Metrics go to ``evaluation/test/<case>/<metric>`` (per case),
     ``evaluation/test/<metric>`` (mean over cases) and
     ``evaluation/test/policy_<p>/<metric>`` (mean over a policy's cases), at step
     0. Each case's samples and variance split go to the artifact
-    ``evaluation/test/<case>/predictive`` (JSON).
+    ``evaluation/test/<case>/predictive`` (JSON), and its RUL-over-time figure to
+    ``evaluation/test/<case>/rul_over_time`` (PNG).
 
     Args:
         evaluation: The evaluation.
         tracker: The method run's tracker.
+        band_level: Nominal level of the bands in the RUL-over-time figures.
     """
     metrics = {
         f"{EVALUATION_PREFIX}/{case}/{metric}": value
@@ -630,7 +625,9 @@ def log_evaluation(evaluation: Evaluation, tracker: ExperimentTracker) -> None:
     }
     tracker.log_metrics(metrics, step=0)
     for prediction in evaluation.predictions:
+        case_prefix = f"{EVALUATION_PREFIX}/{prediction.samples.name}"
+        tracker.log_artifact(f"{case_prefix}/predictive", prediction.to_artifact())
         tracker.log_artifact(
-            f"{EVALUATION_PREFIX}/{prediction.samples.name}/predictive",
-            prediction.to_artifact(),
+            f"{case_prefix}/rul_over_time",
+            plot_rul_over_time(prediction.samples, level=band_level),
         )

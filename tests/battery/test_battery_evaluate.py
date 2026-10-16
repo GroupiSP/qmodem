@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from matplotlib.figure import Figure
 from stagereg.core import expected_sample_crps, wsu
 from stagereg.jax import PosteriorPredictive
 
@@ -357,3 +358,19 @@ def test_the_evaluation_is_logged_per_case_overall_and_per_policy(
     assert len(artifact["predictive_samples"]) == N_TIMESTAMPS - 1
     assert len(artifact["predictive_samples"][0]) == 100
     assert set(artifact) >= {"epistemic_variance", "aleatoric_variance", "times"}
+
+
+def test_every_case_gets_a_rul_figure_next_to_its_predictive_samples(
+    driver_inputs, tracker_factory
+) -> None:
+    evaluation = _evaluate(driver_inputs)
+    tracker = tracker_factory()
+
+    log_evaluation(evaluation, tracker)
+
+    for prediction in evaluation.predictions:
+        prefix = f"evaluation/test/{prediction.samples.name}"
+        assert f"{prefix}/predictive" in tracker.artifacts
+        figure = tracker.artifacts[f"{prefix}/rul_over_time"]
+        assert isinstance(figure, Figure)
+        assert figure.axes[0].get_title().startswith(prediction.samples.name)
