@@ -109,3 +109,20 @@ def test_posterior_dataset_size_is_the_number_of_training_windows(
 
     assert posterior_dataset_size(synthetic_battery.data) == expected
     assert sum(len(b.targets) for b in loader(split="train", epoch=0)) == expected
+
+
+@settings(deadline=None, max_examples=25)
+@given(seed=seeds, epoch=epochs, batch_size=batch_sizes)
+def test_train_batches_are_full_except_the_last(
+    synthetic_battery, seed: int, epoch: int, batch_size: int
+) -> None:
+    n_windows = len(synthetic_battery.data.train)
+    loader = make_loader(
+        synthetic_battery.data, batch_size=batch_size, key=jax.random.key(seed)
+    )
+
+    sizes = [len(b.targets) for b in loader(split="train", epoch=epoch)]
+
+    assert len(sizes) == -(-n_windows // batch_size)
+    assert all(size == batch_size for size in sizes[:-1])
+    assert 0 < sizes[-1] <= batch_size

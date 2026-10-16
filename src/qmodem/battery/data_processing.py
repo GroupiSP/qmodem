@@ -3,12 +3,12 @@ from __future__ import annotations
 import dataclasses
 import functools
 import pathlib
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 
-import grain
 import jax
 import jax.numpy as jnp
 import mlflow
+import numpy as np
 import pandas as pd
 import sklearn.preprocessing as skpp
 from stagereg.core import Batch, LoaderFactory
@@ -66,76 +66,25 @@ def _split_train_val(
     )
 
 
-def _train_dataloader_builder(
-    sampler_seed: int,
-    ds_train: ArrayDataSource,
-    batch_size: int,
-    drop_remainder: bool,
-) -> grain.DataLoader:
-    """Build one epoch's shuffled training loader.
+def _shuffled_batches(
+    features: np.ndarray, targets: np.ndarray, batch_size: int, seed: int
+) -> list[Batch]:
+    """Split one epoch's shuffled training windows into batches.
 
     Args:
-        sampler_seed: Seed of this epoch's shuffle.
-        ds_train: The training windows.
-        batch_size: Batch size.
-        drop_remainder: Whether to drop a smaller last batch.
+        features: Training windows, one per row.
+        targets: Training targets, one per row.
+        batch_size: Batch size (the last batch may be smaller).
+        seed: Seed of this epoch's shuffle.
 
     Returns:
-        The Grain loader.
+        The batches, every window appearing exactly once.
     """
-    sampler = grain.samplers.IndexSampler(
-        num_records=len(ds_train),
-        num_epochs=1,
-        shuffle=True,
-        seed=sampler_seed,
-    )
-    return grain.DataLoader(
-        data_source=ds_train,
-        sampler=sampler,
-        operations=[
-            grain.transforms.Batch(
-                batch_size=batch_size,
-                drop_remainder=drop_remainder,
-            )
-        ],
-        worker_count=0,
-    )
-
-
-def dataloader_builders(
-    data: PreparedData, batch_size: int, drop_remainder: bool
-) -> tuple[Callable[[int], Iterable], Callable[[int], Iterable]]:
-    """Return per-epoch builders of the training and validation loaders.
-
-    Args:
-        data: The prepared windows.
-        batch_size: Training batch size.
-        drop_remainder: Whether to drop a smaller last training batch.
-
-    Returns:
-        ``(train_builder, val_builder)``: the training builder takes the epoch's
-        shuffle seed, the validation builder the epoch (one batch of every
-        validation window).
-    """
-    train_builder = functools.partial(
-        _train_dataloader_builder,
-        ds_train=data.train,
-        batch_size=batch_size,
-        drop_remainder=drop_remainder,
-    )
-
-    def val_builder(epoch: int) -> list[tuple[jax.Array, jax.Array]]:
-        """Return the whole validation set as a single batch.
-
-        Args:
-            epoch: The epoch (unused; the validation set never changes).
-
-        Returns:
-            One ``(features, targets)`` batch.
-        """
-        return [(data.val.features, data.val.targets)]
-
-    return train_builder, val_builder
+    order = np.random.default_rng(seed).permutation(len(targets))
+    return [
+        Batch(inputs=jnp.asarray(features[idx]), targets=jnp.asarray(targets[idx]))
+        for idx in np.split(order, range(batch_size, len(order), batch_size))
+    ]
 
 
 def make_data_pipeline(
@@ -255,8 +204,11 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
     Returns:
         A loader ``loader(*, split, epoch) -> list[Batch]``.
     """
-    train_builder, val_builder = dataloader_builders(
-        data, batch_size=batch_size, drop_remainder=False
+    # Converted once: indexing NumPy is far cheaper than indexing device arrays.
+    train_features = np.asarray(data.train.features)
+    train_targets = np.asarray(data.train.targets)
+    val_batch = Batch(
+        inputs=jnp.asarray(data.val.features), targets=jnp.asarray(data.val.targets)
     )
 
     def loader(*, split: str, epoch: int) -> list[Batch]:
@@ -273,17 +225,15 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
             ValueError: If the split is unknown.
         """
         if split == TRAIN_SPLIT:
-            batches = train_builder(_shuffle_seed(key, epoch))
-        elif split == VALIDATION_SPLIT:
-            batches = val_builder(epoch)
-        else:
-            raise ValueError(
-                f"Unknown split {split!r}; expected {TRAIN_SPLIT!r} or "
-                f"{VALIDATION_SPLIT!r}."
+            return _shuffled_batches(
+                train_features, train_targets, batch_size, _shuffle_seed(key, epoch)
             )
-        return [
-            Batch(inputs=jnp.asarray(x), targets=jnp.asarray(y)) for x, y in batches
-        ]
+        if split == VALIDATION_SPLIT:
+            return [val_batch]
+        raise ValueError(
+            f"Unknown split {split!r}; expected {TRAIN_SPLIT!r} or "
+            f"{VALIDATION_SPLIT!r}."
+        )
 
     return loader
 
