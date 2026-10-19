@@ -70,8 +70,16 @@ _Avoid_: Repetition, trial (a trial is an HPO term)
 The search that fixes one stage's hyperparameters on protocol seed 0 (the mean and variance stages once for all methods, the posterior stage once per method), made of trials whose winning hyperparameters are then frozen for every protocol seed.
 _Avoid_: Tuning run, sweep
 
+**Backbone validation set**:
+The held-out histories that select, stop and tune the mean and variance stages; disjoint from the posterior validation set, so that no posterior stage is judged on data its backbone was selected on.
+_Avoid_: val_A, holdout
+
+**Posterior validation set**:
+The held-out histories, disjoint from the backbone validation set, on which the validation criterion is computed.
+_Avoid_: val_B, holdout
+
 **Validation criterion**:
-The single score on held-out validation data that selects a posterior stage's best checkpoint, stops it early and serves as its HPO objective, shared by every method of the comparison protocol.
+The single score on the posterior validation set that selects a posterior stage's best checkpoint, stops it early and serves as its HPO objective, shared by every method of the comparison protocol.
 _Avoid_: Validation loss (training losses differ by method), monitored metric (the stopper's mechanism, not the protocol's choice)
 
 **Ablation arm**:
