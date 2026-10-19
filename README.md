@@ -1,33 +1,128 @@
 # QMoDeM: Quantum-aided Models for Decision-Making
 
+QMoDeM compares quantum and classical inference methods for uncertainty-aware remaining-useful-life (RUL) regression on simulated battery discharges. Training runs are built on [stagereg](https://github.com/GroupiSP/stagereg) (stages, posterior stage, inference methods) and tracked in MLflow. The comparison is fixed by [docs/comparison-protocol.md](docs/comparison-protocol.md); the vocabulary is in [GLOSSARY.md](GLOSSARY.md).
+
 ## Installation
 
 ```bash
-pip install -e .
-# or with uv:
 uv sync
+# or, without uv:
+pip install -e .
 ```
 
-## Running the scripts
+This installs `stagereg[jax]==0.2.0` together with a pinned JAX/Flax window:
 
-> Scripts log to MLFlow, a machine learning experiment tracking software. This design choice allows to compare runs easily in the same UI.
+| Pin | Why |
+|---|---|
+| `stagereg[jax]==0.2.0` | The posterior stage, early stopper, checkpoint cache and metrics qmodem relies on are those of 0.2.0. |
+| `jax>=0.10,<0.11` | PennyLane (Q-AVI's quantum latent map) breaks on JAX 0.11. |
+| `flax>=0.12.8,<0.12.9` | The tested Flax release for stagereg 0.2.0. Older Flax breaks stagereg's optimizer restore (this is why `jax-ai-stack`, which pins Flax 0.12.0, is no longer a dependency). |
 
-### Data generation
+## Configuration (`.env`)
 
-Run one of the `generate_discharge_history.py` scripts.
+Scripts read their configuration from the environment, falling back to a `.env` file (copy `.env.example`):
 
-### Setup of the environment file (`.env`)
+| Variable | Meaning |
+|---|---|
+| `RAW_DATA_DIR_MULTI` | Directory where the battery simulation data (`train.csv`, `test.csv`) is written and read. |
+| `DATA_GEN_RUN_ID_MULTI` | MLflow run ID of the data-generation run. |
+| `MLFLOW_EXPERIMENT_NAME` | MLflow experiment of your numerical campaign; run selection searches only this experiment. |
+| `MLFLOW_BACKEND_STORE` | MLflow backend store URI (default `sqlite:///mlflow.db`). |
+| `MLFLOW_ARTIFACT_STORE` | MLflow artifact root (default `mlruns/`). |
 
-1. Specify `RAW_DATA_DIR`, i.e. the location where to write the battery simulation data. For the multiple loading scenarios case, you can do the same with `RAW_DATA_DIR_MULTI`.
-2. Copy-paste the MLFlow run ID to `DATA_GEN_RUN_ID` (`DATA_GEN_RUN_ID_MULTI` for the multiple scenarios case).
-3. Set `MLFLOW_USE_LAST_TRAINED=true` if you plan to run the test script right after the corresponding training one. If `MLFLOW_USE_LAST_TRAINED=true`, the program will prompt you to provide the experiment name and run ID for MLFlow to retrieve the correct run.
-4. Set a meaningful `MLFLOW_EXPERIMENT_NAME` for your numerical campaign.
+Except for data generation, values already set in the environment win over `.env`, so a run can be pointed at another backend, e.g. `MLFLOW_EXPERIMENT_NAME=smoke uv run python scripts/battery_multiple_scenarios/train_backbone.py --seed 0`.
 
-### Training/testing
+## Scripts
 
-1. Make sure the data genration run ID is the correct one.
-2. Run one of the `_train.py` scripts to train the network.
-3. Run the corresponding test script.
+All scripts live in `scripts/battery_multiple_scenarios/` and log to MLflow. Run `uv run python <script> --help` for every flag (not on `generate_discharge_histories.py`, which parses no arguments and would start generating).
+
+| Script | Creates | Purpose |
+|---|---|---|
+| `generate_discharge_histories.py` | data-generation run | Simulates the train/test discharge histories. Takes no flags (it runs immediately, and `.env` overrides the environment). |
+| `train_backbone.py` | backbone run (`role=backbone`) | Trains the mean and variance stages of one protocol seed. |
+| `train_method_run.py` | method run (`role=method`) | Restores a backbone run and trains one method's posterior stage (none for HNN). |
+| `evaluate.py` | metrics in the method run | Evaluates a method run on the test histories (CRPS, RMSE, coverage, WSU). |
+| `run_mean_study.py` | HPO study (`role=hpo_study`, `stage=mean`) | Tunes the mean network and its learning rate. |
+| `run_variance_study.py` | HPO study (`stage=variance`) | Tunes the variance learning rate on a backbone run's frozen mean. |
+| `run_posterior_study.py` | HPO study (`stage=posterior`, `method=m`) | Tunes one method's posterior stage on a backbone run. |
+
+Method tag values (`--method`): `hnn`, `mcd`, `bbb`, `psgld`, `q-avi`, `c-avi`. Posterior studies take all of them except `hnn`.
+
+### Run layout
+
+```
+data-generation run
+backbone run          role=backbone  seed=r  data_generation_run_id
+│     checkpoints/mean/best, checkpoints/variance/best, x_scaler, y_scaler
+└── method run        role=method    method=m  seed=r   (mlflow.parentRunId = backbone run)
+      checkpoints/posterior/best, evaluation/test/... metrics
+      [mean_study_run_id, variance_study_run_id (backbone), posterior_study_run_id (method), protocol_overrides]
+HPO study run         role=hpo_study stage=mean|variance|posterior [method, backbone_run_id, seed]
+└── trial run         role=hpo_trial hpo.trial=n  hpo.state=complete|pruned|fail
+      params best.<name> on the study run, e.g. best.mean/network/kernel_size
+```
+
+### Run selection
+
+Scripts that consume a run take either an exact run ID or tag criteria:
+
+| Script | Exact run | Tag criteria |
+|---|---|---|
+| `train_method_run.py`, `run_variance_study.py`, `run_posterior_study.py` | `--backbone-run-id <id>` | `--seed r` (backbone run of seed r) |
+| `evaluate.py` | `--run-id <id>` | `--method m --seed r` (method run) |
+
+Tag selection returns the newest `FINISHED` match in the configured experiment, skipping runs tagged `protocol_overrides=true` unless `--include-overridden` is passed. It raises if nothing matches, if a criterion the role needs is missing, or if two matches share the newest start time. HPO runs are never selected by tags: pass study runs by ID (`--mean-study-run-id`, `--variance-study-run-id`, `--study-run-id`).
+
+## Running the protocol
+
+Set `S=scripts/battery_multiple_scenarios`. `<MEAN>`, `<VAR>`, `<POST_m>` stand for study run IDs printed by the scripts (and visible in MLflow).
+
+1. **Data.** Set `RAW_DATA_DIR_MULTI` and `MLFLOW_EXPERIMENT_NAME`, run `uv run python $S/generate_discharge_histories.py`, then copy its run ID to `DATA_GEN_RUN_ID_MULTI`.
+2. **HPO** (protocol §5), all on protocol seed 0, in this order: mean study → seed-0 backbone (tuned mean) → variance study → seed-0 backbone re-trained with **both** studies → posterior studies.
+
+   ```bash
+   uv run python $S/run_mean_study.py                                # mean study <MEAN>
+   uv run python $S/train_backbone.py --seed 0 --mean-study-run-id <MEAN> \
+       --run-name hpo-backbone-seed-0                                # tuned mean, default variance LR
+   uv run python $S/run_variance_study.py --seed 0                   # variance study <VAR>
+   uv run python $S/train_backbone.py --seed 0 --mean-study-run-id <MEAN> \
+       --variance-study-run-id <VAR> --run-name hpo-backbone-seed-0-tuned  # tuned mean and variance LR
+   uv run python $S/run_posterior_study.py --method mcd --seed 0     # posterior study <POST_mcd>
+   # ... likewise for bbb, psgld, q-avi and c-avi
+   ```
+
+   The variance study and the posterior studies select seed 0's newest finished backbone run; pass `--backbone-run-id` to pin one. Backbone runs record the studies they were trained from as tags (`mean_study_run_id`, `variance_study_run_id`), and `run_posterior_study.py` refuses a backbone without `variance_study_run_id`, so posterior trials always see the tuned variance.
+3. **Protocol runs**, for every protocol seed r (0 included), re-trained from the frozen `best.*` params of the studies:
+
+   ```bash
+   uv run python $S/train_backbone.py --seed r \
+       --mean-study-run-id <MEAN> --variance-study-run-id <VAR>
+   uv run python $S/train_method_run.py --method hnn --seed r
+   uv run python $S/train_method_run.py --method m --seed r --study-run-id <POST_m>
+   uv run python $S/evaluate.py --method m --seed r
+   ```
+
+Each study is one `role=hpo_study` run whose selected hyperparameters are params `best.<name>` (e.g. `best.mean/network/kernel_size`), with one `role=hpo_trial` child run per trial. Studies keep Optuna's state in memory unless `--optuna-storage` is given.
+
+### Smoke tests
+
+Shrink the budgets, never the code. Point `MLFLOW_BACKEND_STORE`, `MLFLOW_ARTIFACT_STORE` and `MLFLOW_EXPERIMENT_NAME` at a scratch store so the campaign's runs stay clean. Shrunk budgets are protocol overrides, so pass `--include-overridden` wherever a run is selected by tags:
+
+```bash
+uv run python $S/run_mean_study.py --n-trials 2 --max-epochs 3
+uv run python $S/train_backbone.py --seed 0 --mean-epochs 3 --variance-epochs 3 --mean-study-run-id <MEAN>
+uv run python $S/run_variance_study.py --seed 0 --include-overridden --n-trials 2 --max-epochs 3
+uv run python $S/train_backbone.py --seed 0 --mean-epochs 3 --variance-epochs 3 \
+    --mean-study-run-id <MEAN> --variance-study-run-id <VAR>
+uv run python $S/run_posterior_study.py --method psgld --seed 0 --include-overridden \
+    --n-trials 2 --max-epochs 4 --posterior-param burn_in_epochs=2
+uv run python $S/train_method_run.py --method bbb --seed 0 --include-overridden --max-epochs 5
+uv run python $S/evaluate.py --method bbb --seed 0 --include-overridden
+```
+
+`--posterior-param NAME=VALUE` (repeatable, nested with `/`, e.g. `avi/n_qubits=3`) overrides one posterior hyperparameter; `--max-epochs` / `--patience` override the posterior stage's schedule, and `train_backbone.py --mean-epochs` / `--variance-epochs` the backbone's caps. Any such override tags the run `protocol_overrides=true` and lists the overridden settings in `protocol_overrides.params`; so does `train_method_run.py` for a method with a posterior stage run without `--study-run-id` (untuned defaults, listed as `posterior_study`). Tag selection skips these runs unless `--include-overridden` is given, so a smoke run is never picked as a protocol run.
+
+Method runs, the variance study and posterior studies take the data-generation run from their backbone's `data_generation_run_id` tag (a different `DATA_GEN_RUN_ID_MULTI` is refused) and window the data with the backbone's logged scalers, never refitted.
 
 ## Development
 
@@ -35,5 +130,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines. Quick reference:
 
 ```bash
 uv run pre-commit install            # install hooks (once, before contributing)
+uv run pre-commit run --all-files    # lint and format
 uv run pytest                        # run all tests
 ```
