@@ -28,11 +28,13 @@ from stagereg.core import (
     CheckpointStore,
     EventSink,
     ExperimentTracker,
+    LoaderFactory,
     TrackerEventSink,
     TrainingState,
 )
 from stagereg.jax import (
     GammaVarianceStage,
+    InferenceMethod,
     MeanStage,
     Posterior,
     PosteriorPredictive,
@@ -77,6 +79,7 @@ from .models import MeanNet, VarianceNet
 from .posterior import (
     POSTERIOR_CHECKPOINT_KEY,
     PREDICTIVE_SAMPLE_COUNT,
+    VAL_CRPS_BASELINE,
     EpochTimer,
     PosteriorCost,
     PosteriorKeys,
@@ -85,6 +88,7 @@ from .posterior import (
     draws_per_second,
     log_cost,
     parameter_count,
+    validation_crps,
 )
 from .train import (
     MEAN_CHECKPOINT_KEY,
@@ -384,7 +388,9 @@ def train_method_run(
     never re-trained. The training state is then re-keyed with
     ``method_key(seed, method)``. A method with a posterior stage then trains the
     shared posterior stage (``build_posterior_stage``) and finalizes its best
-    epoch on validation CRPS into ``store`` (``posterior/best``). HNN trains and
+    epoch on validation CRPS into ``store`` (``posterior/best``). Before epoch 0
+    it logs the warm start's validation CRPS once (``VAL_CRPS_BASELINE``,
+    diagnostic only, never a ``posterior/best`` candidate). HNN trains and
     saves nothing. Every method run logs its posterior hyperparameters (with the
     dataset size N), its method metrics (``PosteriorSpec.method_metrics``) and its
     cost metrics (``cost/posterior/...``).
@@ -493,18 +499,22 @@ def _train_posterior(
     keys = PosteriorKeys.of(run.key)
     method = spec.build_method(keys.init)
     timer = EpochTimer(tracker)
+    loader = make_loader(data, batch_size=spec.stage.batch_size, key=keys.loader)
     stage = build_posterior_stage(
         spec=spec,
         method=method,
         network=backbone.mean_hp.network,
         keys=keys,
-        loader=make_loader(data, batch_size=spec.stage.batch_size, key=keys.loader),
+        loader=loader,
         dataset_size=dataset_size,
         event_sinks=(TrackerEventSink(tracker), timer, *event_sinks),
         store=store,
     )
     start = time.perf_counter()
     stage.prepare(state)
+    _log_validation_baseline(
+        run, method=method, loader=loader, keys=keys, tracker=tracker
+    )
     timer.start()
     stage.train(state)
     wall_clock_seconds = time.perf_counter() - start
@@ -532,6 +542,43 @@ def _train_posterior(
         ),
     )
     return trained
+
+
+def _log_validation_baseline(
+    run: MethodRun,
+    *,
+    method: InferenceMethod,
+    loader: LoaderFactory,
+    keys: PosteriorKeys,
+    tracker: ExperimentTracker,
+) -> None:
+    """Log the warm-started posterior's validation criterion before epoch 0.
+
+    The score uses the stage's fixed draw and sample keys and
+    ``PREDICTIVE_SAMPLE_COUNT`` draws, as every epoch does, and leaves the
+    training state's key untouched. A method without a posterior before its
+    first update (pSGLD) is scored at its warm start, the backbone mean. The
+    baseline is diagnostic only: neither the early stopper, checkpoint selection
+    nor HPO sees it.
+
+    Args:
+        run: The method run without posterior (backbone restored).
+        method: The prepared inference method.
+        loader: The posterior stage's loader.
+        keys: The posterior-stage keys.
+        tracker: Receives ``VAL_CRPS_BASELINE`` at step 0.
+    """
+    warm_start = dataclasses.replace(
+        run, posterior=method.posterior() if method.has_posterior else None
+    )
+    baseline = validation_crps(
+        lambda inputs: warm_start.predictive(
+            inputs, keys.validation_draws, PREDICTIVE_SAMPLE_COUNT
+        ),
+        loader,
+        keys.validation_samples,
+    )
+    tracker.log_metrics({VAL_CRPS_BASELINE: baseline}, step=0)
 
 
 def restore_method_run(

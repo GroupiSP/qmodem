@@ -270,6 +270,39 @@ def exactly_equal() -> Any:
     return assert_exactly_equal
 
 
+def assert_one_baseline_before_epoch_0(tracker: InMemoryTracker) -> None:
+    """Assert that a run logged exactly one finite baseline, before any epoch.
+
+    Args:
+        tracker: The method run's tracker.
+
+    Raises:
+        AssertionError: If ``val_crps_baseline`` is missing, repeated, not at
+            step 0, non-finite, or logged after the first posterior epoch.
+    """
+    logged = [
+        (position, step, values["val_crps_baseline"])
+        for position, (values, step) in enumerate(tracker.metrics)
+        if "val_crps_baseline" in values
+    ]
+    first_epoch = next(
+        position
+        for position, (values, _) in enumerate(tracker.metrics)
+        if "posterior/train/loss" in values
+    )
+    assert len(logged) == 1
+    position, step, value = logged[0]
+    assert step == 0
+    assert np.isfinite(value)
+    assert position < first_epoch
+
+
+@pytest.fixture(scope="session")
+def one_baseline_before_epoch_0() -> Any:
+    """The baseline-logging check ``assert_one_baseline_before_epoch_0``."""
+    return assert_one_baseline_before_epoch_0
+
+
 @dataclasses.dataclass(frozen=True)
 class MLflowBackend:
     """A file-backed MLflow tracking backend under a temporary directory.

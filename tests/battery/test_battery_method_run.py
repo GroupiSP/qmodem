@@ -28,9 +28,10 @@ from qmodem.battery.posterior import (
     COST_TRAINABLE_PARAMETERS,
     COST_WALL_CLOCK,
     INFERRED_SUBNETWORK,
+    VAL_CRPS_BASELINE,
     PosteriorStageHyperparameters,
 )
-from qmodem.battery.train import Method, backbone_keys
+from qmodem.battery.train import Method, OptimizerHyperparameters, backbone_keys
 
 PREDICTIVE_SAMPLE_COUNT = 100
 COST_TAGS = {COST_WALL_CLOCK, COST_TRAINABLE_PARAMETERS, COST_DRAWS_PER_SECOND}
@@ -470,3 +471,71 @@ def test_overrides_nest_the_schedule_and_named_posterior_params() -> None:
 def test_a_malformed_override_is_refused(assignment: str) -> None:
     with pytest.raises(ValueError):
         posterior_overrides([assignment])
+
+
+# --- the posterior validation baseline (val_crps_baseline) -------------------------
+
+
+def test_a_bbb_run_logs_one_validation_baseline_before_its_first_epoch(
+    bbb_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = bbb_run
+
+    one_baseline_before_epoch_0(tracker)
+
+
+def test_an_mcd_run_logs_one_validation_baseline_before_its_first_epoch(
+    mcd_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = mcd_run
+
+    one_baseline_before_epoch_0(tracker)
+
+
+def test_an_hnn_run_logs_no_validation_baseline(hnn_run) -> None:
+    _, tracker, _ = hnn_run
+
+    assert VAL_CRPS_BASELINE not in tracker.tags
+
+
+def _train_mcd_at(
+    learning_rate: float, trained_backbone, tracker_factory, store_factory
+):
+    tracker = tracker_factory()
+    persistent = InMemoryCheckpointStore()
+    train_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        data=trained_backbone.battery.data,
+        config=TINY_MCD.model_copy(
+            update={"optimizer": OptimizerHyperparameters(learning_rate=learning_rate)}
+        ),
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store_factory(persistent),
+    )
+    return tracker, persistent
+
+
+def test_the_baseline_is_epoch_0s_score_of_a_posterior_that_barely_moved(
+    trained_backbone, tracker_factory, store_factory
+) -> None:
+    tracker, _ = _train_mcd_at(1e-12, trained_backbone, tracker_factory, store_factory)
+
+    assert tracker.history(VAL_CRPS_BASELINE)[0] == pytest.approx(
+        tracker.history("posterior/validation/crps")[0], rel=1e-5
+    )
+
+
+def test_the_best_epoch_ignores_a_baseline_lower_than_every_epoch(
+    trained_backbone, tracker_factory, store_factory
+) -> None:
+    tracker, persistent = _train_mcd_at(
+        1.0, trained_backbone, tracker_factory, store_factory
+    )
+    baseline = tracker.history(VAL_CRPS_BASELINE)[0]
+    crps = tracker.history("posterior/validation/crps")
+    finalized = persistent.load("posterior/best")
+
+    assert baseline < min(crps)
+    assert finalized.epoch == int(np.argmin(crps))
+    assert finalized.early_stopping_state.best_score == min(crps)

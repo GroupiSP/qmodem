@@ -46,6 +46,7 @@ from stagereg.jax import (
     IsotropicGaussianPrior,
     MetricSuite,
     Posterior,
+    PosteriorPredictive,
     PosteriorPredictivePredictor,
     PosteriorProblem,
     PosteriorStage,
@@ -53,6 +54,7 @@ from stagereg.jax import (
     PredictionRequirements,
     Predictor,
 )
+from stagereg.jax.metrics import reduce_metric_suite
 
 from qmodem.tracking import Stage
 
@@ -81,6 +83,12 @@ PREDICTIVE_SAMPLE_COUNT = 100
 
 VALIDATION_METRIC = "crps"
 """The validation criterion: early-stopping and HPO metric of every posterior."""
+
+VAL_CRPS_BASELINE = "val_crps_baseline"
+"""The validation criterion of the warm-started posterior, before epoch 0.
+
+Diagnostic only: it never feeds the early stopper, checkpoint selection or HPO.
+"""
 
 COST_WALL_CLOCK = "cost/posterior/wall_clock_seconds"
 COST_TRAINABLE_PARAMETERS = "cost/posterior/trainable_parameters"
@@ -381,6 +389,39 @@ def validation_metrics(sample_key: jax.Array) -> MetricSuite:
         predictor=FixedKeyPredictor(PosteriorPredictivePredictor(), sample_key),
         predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
     )
+
+
+def validation_crps(
+    predictive: Callable[[PyTree], PosteriorPredictive],
+    loader: LoaderFactory,
+    sample_key: jax.Array,
+) -> float:
+    """Score the validation criterion of a posterior predictive once.
+
+    The score is the one every posterior epoch reports
+    (``validation_metrics(sample_key)`` over the loader's ``"validation"``
+    batches), for a predictive whose draws are already fixed.
+
+    Args:
+        predictive: Maps validation inputs to the posterior predictive, drawn
+            with the stage's fixed draw key and ``PREDICTIVE_SAMPLE_COUNT``.
+        loader: The posterior stage's loader.
+        sample_key: The fixed key of the validation predictive samples.
+
+    Returns:
+        The validation CRPS.
+    """
+    suite = validation_metrics(sample_key)
+    predictor = suite.predictor
+    assert predictor is not None  # validation_metrics always sets one
+    parts = [
+        predictor(predictive, batch, suite.prediction_requirements, sample_key)
+        for batch in loader(split="validation", epoch=0)
+    ]
+    metrics = reduce_metric_suite(
+        suite=suite, losses=None, batch_metric_values={}, epoch_metric_parts=parts
+    )
+    return metrics[VALIDATION_METRIC]
 
 
 def posterior_early_stopper(stage: PosteriorStageHyperparameters) -> EarlyStopper:

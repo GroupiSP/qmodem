@@ -128,6 +128,14 @@ def test_a_psgld_run_validates_only_after_its_first_retained_sample(
     assert len(tracker.history("posterior/validation/crps")) == EPOCHS - first_validated
 
 
+def test_a_psgld_run_logs_one_validation_baseline_before_its_burn_in(
+    psgld_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = psgld_run
+
+    one_baseline_before_epoch_0(tracker)
+
+
 def test_a_psgld_run_logs_its_time_per_epoch(psgld_run) -> None:
     _, tracker, _ = psgld_run
     epoch_seconds = tracker.history(COST_EPOCH_SECONDS)

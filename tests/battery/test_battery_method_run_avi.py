@@ -177,6 +177,14 @@ def test_an_avi_run_logs_its_diagnostics_every_epoch(avi_run) -> None:
     assert all(v > 0 for v in tracker.history("posterior/train/weight_spread"))
 
 
+def test_an_avi_run_logs_one_validation_baseline_before_its_first_epoch(
+    avi_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = avi_run
+
+    one_baseline_before_epoch_0(tracker)
+
+
 def test_an_avi_run_finalizes_its_best_epoch_on_validation_crps(avi_run) -> None:
     _, tracker, persistent = avi_run
     crps = tracker.history("posterior/validation/crps")
