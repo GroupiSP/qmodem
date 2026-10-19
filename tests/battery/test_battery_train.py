@@ -29,6 +29,7 @@ from qmodem.battery.train import (
     backbone_keys,
     backbone_optimizer,
     load_backbone_hyperparameters,
+    steps_per_epoch,
     track_backbone_run,
     train_backbone,
     train_mean_stage,
@@ -218,6 +219,26 @@ def test_the_posterior_optimizer_keeps_a_constant_learning_rate(
     sizes = _step_sizes(method.optimizer, 20)
 
     assert sizes == pytest.approx([learning_rate] * 20, rel=1e-4)
+
+
+@given(batch_size=st.integers(-8, 0))
+def test_a_non_positive_batch_size_has_no_steps_per_epoch(
+    synthetic_battery, batch_size: int
+) -> None:
+    with pytest.raises(ValueError, match="batch_size"):
+        steps_per_epoch(synthetic_battery.data, batch_size)
+
+
+@given(batch_size=st.integers(1, 200))
+def test_every_training_window_fits_in_the_steps_of_an_epoch(
+    synthetic_battery, batch_size: int
+) -> None:
+    n_windows = len(synthetic_battery.data.train)
+
+    steps = steps_per_epoch(synthetic_battery.data, batch_size)
+
+    assert steps * batch_size >= n_windows
+    assert steps == 1 or (steps - 1) * batch_size < n_windows
 
 
 def test_backbone_returns_finalized_mean_and_variance_checkpoints(

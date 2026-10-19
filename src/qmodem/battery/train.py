@@ -314,7 +314,12 @@ def steps_per_epoch(data: PreparedData, batch_size: int) -> int:
 
     Returns:
         ``ceil(n_train_windows / batch_size)``, at least 1.
+
+    Raises:
+        ValueError: If ``batch_size`` is not positive.
     """
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}.")
     return max(1, math.ceil(len(data.train.features) / batch_size))
 
 

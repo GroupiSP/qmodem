@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import importlib.metadata
+import logging
 import pathlib
 
 import jax
@@ -35,6 +36,7 @@ from qmodem.tracking import (
     RunSelectionError,
     RunSelector,
     backbone_tags,
+    log_window_counts,
     mlflow_checkpoint_store,
     protocol_override_tags,
     resolve_run_id,
@@ -641,3 +643,29 @@ def test_a_selector_includes_overridden_runs_only_when_asked(make_run) -> None:
     )
 
     assert resolved == smoke
+
+
+_window_counts = st.dictionaries(
+    st.sampled_from(["windows_train", "windows_backbone_val", "windows_posterior_val"]),
+    st.integers(0, 10**6),
+    min_size=1,
+)
+
+
+@_MLFLOW_SETTINGS
+@given(counts=_window_counts)
+def test_window_counts_are_recorded_as_params_and_logged(
+    mlflow_backend, caplog: pytest.LogCaptureFixture, counts: dict[str, int]
+) -> None:
+    run_id = mlflow_backend.new_run()
+    logger = logging.getLogger("test_window_counts")
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        log_window_counts(run_id, counts, logger=logger, client=mlflow_backend.client)
+
+    params = mlflow_backend.client.get_run(run_id).data.params
+    assert {k: int(v) for k, v in params.items()} == counts
+    (record,) = caplog.records
+    assert run_id in record.getMessage()
+    assert str(counts) in record.getMessage()

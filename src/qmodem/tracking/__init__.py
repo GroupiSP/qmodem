@@ -47,6 +47,7 @@ from .tags import (
 from .tracker import (
     MLFlowSetup,
     MLflowTracker,
+    log_window_counts,
     stagereg_version,
     track_dataframe,
     track_mlflow,
@@ -85,6 +86,7 @@ __all__ = [
     "load_fitted_scaler",
     "load_scaler",
     "log_scaler",
+    "log_window_counts",
     "mlflow_checkpoint_store",
     "protocol_override_tags",
     "resolve_run_id",

@@ -47,6 +47,47 @@ class SimulatorUpdater(Protocol):
     ) -> sb.SimulationConfig: ...
 
 
+class ConfigFactory(Protocol):
+    """Builds a simulation config whose noise callables draw from ``rng``."""
+
+    def __call__(self, rng: np.random.Generator) -> sb.SimulationConfig: ...
+
+
+TRAIN_STREAM_SPLIT_NAMES: tuple[str, str, str] = (
+    "train",
+    "backbone_val",
+    "posterior_val",
+)
+"""Splits of ``train.csv``, in ``run_id`` order."""
+
+TEST_SPLIT_NAME = "test"
+"""The split of ``test.csv``."""
+
+
+def n_histories_param(split: str) -> str:
+    """Name of a split's history count, as a :class:`Hyperparameters` field and param.
+
+    Args:
+        split: A split name, e.g. ``"backbone_val"``.
+
+    Returns:
+        ``"n_histories_<split>"``.
+    """
+    return f"n_histories_{split}"
+
+
+def n_policy_1_param(split: str) -> str:
+    """Name of a split's policy-1 count, as a :class:`Hyperparameters` field and param.
+
+    Args:
+        split: A split name, e.g. ``"backbone_val"``.
+
+    Returns:
+        ``"n_policy_1_<split>"``.
+    """
+    return f"n_policy_1_{split}"
+
+
 @dataclass(frozen=True)
 class Hyperparameters:
     voc_model: VOCModel = VOCModel.BUSTOS_BAEZA
@@ -71,25 +112,49 @@ class Hyperparameters:
     test_seed: int = 123
 
     def __post_init__(self) -> None:
-        """Validate every split's counts.
+        """Validate the hyperparameters on construction.
 
         Raises:
-            ValueError: If a split's policy-1 count exceeds its size.
+            ValueError: If a split's counts are invalid (see :meth:`_validate`).
         """
-        self.train_stream_splits()
-        self.test_split()
+        self._validate()
 
-    def train_stream_splits(self) -> tuple[SplitSpec, SplitSpec, SplitSpec]:
+    def _validate(self) -> None:
+        """Check that every split's counts form a valid :class:`SplitSpec`.
+
+        Raises:
+            ValueError: If a count is negative or a split's policy-1 count exceeds
+                its size.
+        """
+        for split in (*TRAIN_STREAM_SPLIT_NAMES, TEST_SPLIT_NAME):
+            self.split(split)
+
+    def split(self, name: str) -> SplitSpec:
+        """Size and policy mix of one named split.
+
+        Args:
+            name: A split name (see :data:`TRAIN_STREAM_SPLIT_NAMES`,
+                :data:`TEST_SPLIT_NAME`).
+
+        Returns:
+            The split.
+
+        Raises:
+            AttributeError: If ``name`` is not a split.
+            ValueError: If the split's counts are invalid.
+        """
+        return SplitSpec(
+            getattr(self, n_histories_param(name)),
+            getattr(self, n_policy_1_param(name)),
+        )
+
+    def train_stream_splits(self) -> tuple[SplitSpec, ...]:
         """Splits of ``train.csv``, in ``run_id`` order (seeded by ``train_seed``).
 
         Returns:
             The train, backbone validation set and posterior validation set splits.
         """
-        return (
-            SplitSpec(self.n_histories_train, self.n_policy_1_train),
-            SplitSpec(self.n_histories_backbone_val, self.n_policy_1_backbone_val),
-            SplitSpec(self.n_histories_posterior_val, self.n_policy_1_posterior_val),
-        )
+        return tuple(self.split(name) for name in TRAIN_STREAM_SPLIT_NAMES)
 
     def test_split(self) -> SplitSpec:
         """Split of ``test.csv`` (seeded by ``test_seed``).
@@ -97,7 +162,7 @@ class Hyperparameters:
         Returns:
             The test split.
         """
-        return SplitSpec(self.n_histories_test, self.n_policy_1_test)
+        return self.split(TEST_SPLIT_NAME)
 
 
 def gaussian_noise(*, rng: np.random.Generator, noise_std: float) -> float:
@@ -178,15 +243,17 @@ class SplitSpec:
         n_histories: Histories in the split.
         n_policy_1: Histories that follow policy 1; the other
             ``n_histories - n_policy_1`` follow policy 0.
-
-    Raises:
-        ValueError: If a count is negative or ``n_policy_1 > n_histories``.
     """
 
     n_histories: int
     n_policy_1: int
 
     def __post_init__(self) -> None:
+        """Validate the counts.
+
+        Raises:
+            ValueError: If a count is negative or ``n_policy_1 > n_histories``.
+        """
         if self.n_histories < 0 or self.n_policy_1 < 0:
             raise ValueError(f"Split counts must be non-negative, got {self}.")
         if self.n_policy_1 > self.n_histories:
@@ -225,28 +292,34 @@ def assign_policies(split: SplitSpec, rng: np.random.Generator) -> np.ndarray:
 
 
 def write_split_histories(
-    config: sb.SimulationConfig,
+    make_config: ConfigFactory,
     splits: Sequence[SplitSpec],
-    rng: np.random.Generator,
+    seed: int,
 ) -> pd.DataFrame:
     """Simulate the histories of consecutive splits with fixed policy counts.
 
-    Each split's policies are permuted by ``rng`` (see :func:`assign_policies`) and
-    every history is simulated with its assigned policy; the policy choice of
-    ``config`` is not used. The splits occupy contiguous ``run_id`` blocks in the
-    given order, starting at 0.
+    Split ``i`` draws from its own generator, seeded by the ``i``-th child of
+    ``SeedSequence(seed)``: it permutes the split's policies (see
+    :func:`assign_policies`) and feeds the noise of the split's config, built by
+    ``make_config``. A split's histories therefore depend only on ``seed``, its
+    position and its own counts, not on the other splits' counts. Every history is
+    simulated with its assigned policy; the config's policy choice is not used. The
+    splits occupy contiguous ``run_id`` blocks in the given order, starting at 0.
 
     Args:
-        config: Base simulation config; its noise callables carry the noise RNG.
+        make_config: Builds a split's base simulation config from its generator.
         splits: Splits to generate, in ``run_id`` order.
-        rng: Generator that permutes the policy assignment of each split.
+        seed: Root seed of the splits' generators.
 
     Returns:
-        Histories with columns ``run_id, policy_id, time, load, soc, voltage``.
+        Histories with columns ``run_id, time, policy_id, load, soc, voltage``.
     """
     frames = []
     run_id = 0
-    for split in splits:
+    children = np.random.SeedSequence(seed).spawn(len(splits))
+    for split, child in zip(splits, children, strict=True):
+        rng = np.random.default_rng(child)
+        config = make_config(rng)
         for policy_id in assign_policies(split, rng):
             history_config = dataclasses.replace(
                 config,
@@ -262,7 +335,7 @@ def write_split_histories(
             run_id += 1
     if not frames:
         return pd.DataFrame(
-            columns=["run_id", "policy_id", "time", "load", "soc", "voltage"]
+            columns=["run_id", "time", "policy_id", "load", "soc", "voltage"]
         )
     return pd.concat(frames, ignore_index=True)
 

@@ -342,7 +342,7 @@ def _require_registered(config: MethodConfig) -> None:
         )
 
 
-def _validation_inputs(data: PreparedData) -> jax.Array:
+def _posterior_validation_inputs(data: PreparedData) -> jax.Array:
     """Return the inputs of the draws-per-second probe.
 
     Args:
@@ -375,7 +375,7 @@ def _cost(
     Returns:
         The cost, with the draws per second of ``PREDICTIVE_SAMPLE_COUNT`` draws.
     """
-    inputs = _validation_inputs(data)
+    inputs = _posterior_validation_inputs(data)
     key = run.evaluation_key
     finite_draws = None if run.posterior is None else run.posterior.num_draws
     return PosteriorCost(

@@ -415,10 +415,14 @@ def validation_crps(
 
     Returns:
         The validation CRPS.
+
+    Raises:
+        RuntimeError: If the validation metric suite has no predictor.
     """
     suite = validation_metrics(sample_key)
     predictor = suite.predictor
-    assert predictor is not None  # validation_metrics always sets one
+    if predictor is None:
+        raise RuntimeError("The validation metric suite has no predictor.")
     parts = [
         predictor(predictive, batch, suite.prediction_requirements, sample_key)
         for batch in loader(split="validation", epoch=0)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import jax
@@ -11,13 +12,13 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from qmodem.battery.data_generation import Hyperparameters
 from qmodem.battery.data_processing import (
     TRAIN_SPLIT,
     VALIDATION_SPLIT,
     WINDOW_SIZE,
     SplitSizes,
     ValidationSet,
-    log_window_counts,
     make_loader,
     posterior_dataset_size,
     split_histories,
@@ -133,19 +134,6 @@ def test_the_validation_sets_have_their_histories_windows(synthetic_battery) -> 
     )
     assert len(data.posterior_val) == sum(
         length - WINDOW_SIZE + 1 for length in synthetic_battery.posterior_val_lengths
-    )
-
-
-def test_the_window_counts_are_logged_as_run_params(
-    synthetic_battery, mlflow_backend
-) -> None:
-    run_id = mlflow_backend.new_run()
-
-    log_window_counts(run_id, synthetic_battery.data, client=mlflow_backend.client)
-
-    params = mlflow_backend.client.get_run(run_id).data.params
-    assert {k: int(v) for k, v in params.items()} == (
-        synthetic_battery.data.window_counts()
     )
 
 
@@ -326,3 +314,21 @@ def test_split_sizes_are_read_from_the_data_generation_params() -> None:
     assert SplitSizes.from_params(params) == SplitSizes(
         n_train=10, n_backbone_val=20, n_posterior_val=20
     )
+
+
+@settings(deadline=None, max_examples=25)
+@given(sizes=split_sizes)
+def test_split_sizes_round_trip_through_the_logged_data_generation_params(
+    sizes: SplitSizes,
+) -> None:
+    hp = Hyperparameters(
+        n_histories_train=sizes.n_train,
+        n_policy_1_train=0,
+        n_histories_backbone_val=sizes.n_backbone_val,
+        n_policy_1_backbone_val=0,
+        n_histories_posterior_val=sizes.n_posterior_val,
+        n_policy_1_posterior_val=0,
+    )
+    logged = {key: str(value) for key, value in dataclasses.asdict(hp).items()}
+
+    assert SplitSizes.from_params(logged) == sizes

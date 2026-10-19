@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 import os
 import pathlib
 import time
@@ -249,3 +250,26 @@ def track_dataframe(df: pd.DataFrame, name: str, context: str) -> None:
     """
     dataset = mlflow.data.from_pandas(df, name=name)
     mlflow.log_input(dataset=dataset, context=context)
+
+
+def log_window_counts(
+    run_id: str,
+    counts: Mapping[str, int],
+    *,
+    logger: logging.Logger,
+    client: MlflowClient | None = None,
+) -> None:
+    """Report the window count of each split: log it and record it as run params.
+
+    Args:
+        run_id: The run receiving the counts as params.
+        counts: Window count per split, keyed by param name (e.g.
+            ``PreparedData.window_counts()``).
+        logger: The logger the counts are reported to, at INFO level.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+    """
+    logger.info("Run %s, windows per split: %s", run_id, dict(counts))
+    client = client if client is not None else MlflowClient()
+    client.log_batch(
+        run_id, params=[Param(key, str(value)) for key, value in counts.items()]
+    )

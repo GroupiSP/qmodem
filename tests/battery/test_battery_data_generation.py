@@ -80,10 +80,9 @@ def test_reference_samples_are_the_same_on_every_call_with_one_config(
 # --- Fixed-count, policy-stratified history generation ---------------------------
 
 
-def _two_policy_config(seed: int) -> tuple[sb.SimulationConfig, np.random.Generator]:
-    """A fast two-policy config (low initial SOC) and the RNG it draws from."""
-    rng = np.random.default_rng(seed)
-    config = sb.SimulationConfig(
+def _two_policy_config(rng: np.random.Generator) -> sb.SimulationConfig:
+    """A fast two-policy config (low initial SOC) whose noise draws from ``rng``."""
+    return sb.SimulationConfig(
         current_policies=[
             ConstantCurrentDischarge(-5.0),
             ConstantCurrentDischarge(-4.0),
@@ -97,7 +96,6 @@ def _two_policy_config(seed: int) -> tuple[sb.SimulationConfig, np.random.Genera
         dt=5.0,
         soc_0=0.05,
     )
-    return config, rng
 
 
 _split_specs = st.integers(0, 4).flatmap(
@@ -116,9 +114,7 @@ def _policy_per_history(histories: pd.DataFrame) -> pd.Series:
 def test_each_split_has_exactly_its_policy_counts_in_contiguous_run_id_blocks(
     splits: list[SplitSpec], seed: int
 ) -> None:
-    config, rng = _two_policy_config(seed)
-
-    histories = write_split_histories(config, splits, rng)
+    histories = write_split_histories(_two_policy_config, splits, seed)
 
     policies = _policy_per_history(histories)
     n_total = sum(s.n_histories for s in splits)
@@ -138,10 +134,46 @@ def test_the_same_seed_gives_identical_histories(
     splits: list[SplitSpec], seed: int
 ) -> None:
     def generate() -> pd.DataFrame:
-        config, rng = _two_policy_config(seed)
-        return write_split_histories(config, splits, rng)
+        return write_split_histories(_two_policy_config, splits, seed)
 
     pd.testing.assert_frame_equal(generate(), generate())
+
+
+def _split_block(
+    histories: pd.DataFrame, splits: list[SplitSpec], index: int
+) -> pd.DataFrame:
+    """One split's histories, with ``run_id`` relative to the split's first one."""
+    start = sum(s.n_histories for s in splits[:index])
+    block = histories[
+        (histories["run_id"] >= start)
+        & (histories["run_id"] < start + splits[index].n_histories)
+    ].reset_index(drop=True)
+    return block.assign(run_id=block["run_id"] - start)
+
+
+@settings(max_examples=10, deadline=None)
+@given(
+    splits=st.lists(_split_specs, min_size=2, max_size=3),
+    changed=st.data(),
+    seed=st.integers(0, 99),
+)
+def test_changing_one_splits_counts_leaves_the_other_splits_unchanged(
+    splits: list[SplitSpec], changed: st.DataObject, seed: int
+) -> None:
+    index = changed.draw(st.integers(0, len(splits) - 1), label="changed split")
+    replacement = changed.draw(_split_specs, label="replacement")
+    other_splits = [*splits[:index], replacement, *splits[index + 1 :]]
+
+    before = write_split_histories(_two_policy_config, splits, seed)
+    after = write_split_histories(_two_policy_config, other_splits, seed)
+
+    for i in range(len(splits)):
+        if i != index:
+            pd.testing.assert_frame_equal(
+                _split_block(before, splits, i),
+                _split_block(after, other_splits, i),
+                check_dtype=False,
+            )
 
 
 @given(n_histories=st.integers(0, 50), excess=st.integers(1, 10))

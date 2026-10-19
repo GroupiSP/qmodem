@@ -41,7 +41,6 @@ from collections.abc import Sequence
 from stagereg.core import flatten_parameters
 
 from qmodem.battery.backbone_data import BackboneContext, load_backbone_context
-from qmodem.battery.data_processing import log_window_counts
 from qmodem.battery.hpo import STUDY_SEED
 from qmodem.battery.method_run import (
     MethodConfig,
@@ -60,6 +59,7 @@ from qmodem.script_session import ScriptSession, script_session
 from qmodem.tracking import (
     Role,
     RunSelector,
+    log_window_counts,
     protocol_override_tags,
 )
 
@@ -168,12 +168,7 @@ def tuned_backbone(
         expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
         client=session.client,
     )
-    logger.info(
-        "Backbone run %s (seed %d), windows per split: %s",
-        backbone_run_id,
-        backbone.seed,
-        backbone.data.window_counts(),
-    )
+    logger.info("Backbone run %s (seed %d)", backbone_run_id, backbone.seed)
     return backbone_run_id, backbone
 
 
@@ -215,7 +210,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             .apply(result.best_params, base)
             .posterior_hyperparameters(),
         )
-        log_window_counts(result.run_id, backbone.data, client=session.client)
+        log_window_counts(
+            result.run_id,
+            backbone.data.window_counts(),
+            logger=logger,
+            client=session.client,
+        )
         session.attach_log(result.run_id, "study_log.txt")
 
 

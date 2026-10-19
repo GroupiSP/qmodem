@@ -13,10 +13,12 @@ import mlflow
 import numpy as np
 import pandas as pd
 import sklearn.preprocessing as skpp
-from mlflow.entities import Param
-from mlflow.tracking import MlflowClient
 from stagereg.core import Batch, LoaderFactory
 
+from qmodem.battery.data_generation import (
+    TRAIN_STREAM_SPLIT_NAMES,
+    n_histories_param,
+)
 from qmodem.data import (
     ArrayDataSource,
     DataPipeline,
@@ -119,10 +121,13 @@ class SplitSizes:
         Raises:
             KeyError: If a size param is missing.
         """
+        n_train, n_backbone_val, n_posterior_val = (
+            int(params[n_histories_param(split)]) for split in TRAIN_STREAM_SPLIT_NAMES
+        )
         return cls(
-            n_train=int(params["n_histories_train"]),
-            n_backbone_val=int(params["n_histories_backbone_val"]),
-            n_posterior_val=int(params["n_histories_posterior_val"]),
+            n_train=n_train,
+            n_backbone_val=n_backbone_val,
+            n_posterior_val=n_posterior_val,
         )
 
 
@@ -282,23 +287,6 @@ def prepare_windows(
         train=ArrayDataSource(features=X_train, targets=y_train),
         backbone_val=ArrayDataSource(features=X_backbone, targets=y_backbone),
         posterior_val=ArrayDataSource(features=X_posterior, targets=y_posterior),
-    )
-
-
-def log_window_counts(
-    run_id: str, data: PreparedData, *, client: MlflowClient | None = None
-) -> None:
-    """Log the window count of each split as params of an MLflow run.
-
-    Args:
-        run_id: The run receiving ``PreparedData.window_counts``.
-        data: The prepared windows.
-        client: The MLflow client. Defaults to one on the current tracking URI.
-    """
-    client = client if client is not None else MlflowClient()
-    client.log_batch(
-        run_id,
-        params=[Param(key, str(value)) for key, value in data.window_counts().items()],
     )
 
 

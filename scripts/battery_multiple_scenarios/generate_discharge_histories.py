@@ -36,6 +36,15 @@ def make_simulator_config(
     rng: np.random.Generator,
     hp: Hyperparameters,
 ) -> sb.SimulationConfig:
+    """Build the two-policy simulation config whose random draws come from ``rng``.
+
+    Args:
+        rng: Generator of the policy choice and of the process and measurement noise.
+        hp: Data-generation hyperparameters.
+
+    Returns:
+        The simulation config.
+    """
     return sb.SimulationConfig(
         current_policies=[constant_cruise_policy, variable_cruise_policy],
         policy_choice_distribution=functools.partial(
@@ -57,7 +66,7 @@ def make_simulator_config(
 
 
 def main() -> None:
-    load_dotenv(override=True)
+    load_dotenv()
 
     hp = Hyperparameters()
 
@@ -74,20 +83,19 @@ def main() -> None:
     tracking_setup = MLFlowSetup(run_name="generate_histories")
 
     with track_mlflow(tracking_setup):
-        train_rng = np.random.default_rng(seed=hp.train_seed)
-        test_rng = np.random.default_rng(seed=hp.test_seed)
-
         mlflow.log_params(dataclasses.asdict(hp))
 
+        make_config = functools.partial(make_simulator_config, hp=hp)
         # Train, backbone validation set and posterior validation set: contiguous
-        # run_id blocks of one stream, each with fixed policy counts.
+        # run_id blocks of train.csv, each with fixed policy counts and its own
+        # random stream spawned from train_seed.
         train_df = write_split_histories(
-            make_simulator_config(train_rng, hp), hp.train_stream_splits(), train_rng
+            make_config, hp.train_stream_splits(), hp.train_seed
         )
-        # The test config keeps the 70/30 policy prior for the reference band;
-        # the test histories themselves use fixed policy counts.
-        test_config = make_simulator_config(test_rng, hp)
-        test_df = write_split_histories(test_config, [hp.test_split()], test_rng)
+        test_df = write_split_histories(make_config, [hp.test_split()], hp.test_seed)
+        # The pickled test config keeps the 70/30 policy prior only for the
+        # evaluation reference band; the test histories use fixed policy counts.
+        test_config = make_simulator_config(np.random.default_rng(hp.test_seed), hp)
 
         train_df = add_rul_series(train_df)
         test_df = add_rul_series(test_df)
