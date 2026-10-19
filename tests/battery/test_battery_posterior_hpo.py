@@ -12,7 +12,7 @@ import sklearn.preprocessing as skpp
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from qmodem.battery.data_processing import WINDOW_SIZE
+from qmodem.battery.data_processing import WINDOW_SIZE, ValidationSet
 from qmodem.battery.hpo import best_epoch_value
 from qmodem.battery.method_run import (
     BackboneHandle,
@@ -258,6 +258,29 @@ def test_a_trial_logs_the_suggested_configuration(fixed_trials) -> None:
 
     assert run.tracker.params["posterior"]["dropout_rate"] == 0.2
     assert run.tracker.params["posterior"]["optimizer"] == {"learning_rate": 1e-3}
+
+
+def test_a_trial_scores_the_posterior_validation_set(
+    fixed_trials, trained_backbone, only_serving, tracker_factory, store_factory
+) -> None:
+    (_, reference), _ = fixed_trials[Method.MCD]
+    objective = posterior_objective(
+        backbone=BackboneHandle(
+            mean_hp=trained_backbone.mean_hp,
+            variance_hp=trained_backbone.variance_hp,
+            store=store_factory(trained_backbone.persistent),
+        ),
+        data=only_serving(trained_backbone.battery.data, ValidationSet.POSTERIOR),
+        space=POSTERIOR_SEARCH_SPACES[Method.MCD],
+        base=_TRIAL_BASES[Method.MCD],
+    )
+    run = _trial_run(
+        optuna.trial.FixedTrial(_FIXED_PARAMS[Method.MCD]),
+        tracker_factory,
+        store_factory,
+    )
+
+    assert objective(run) == pytest.approx(reference)
 
 
 def test_the_posterior_validation_crps_feeds_the_pruner(

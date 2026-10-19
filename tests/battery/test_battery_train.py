@@ -16,7 +16,7 @@ from hypothesis import strategies as st
 from pydantic import ValidationError
 from stagereg.core import Checkpoint, flatten_parameters, is_finalized
 
-from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE
+from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE, ValidationSet
 from qmodem.battery.train import (
     MeanHyperparameters,
     MeanNetworkHyperparameters,
@@ -129,6 +129,27 @@ def test_backbone_keys_are_reproducible_and_distinct_across_streams_and_seeds(
         others = dataclasses.astuple(backbone_keys(other))
         assert not np.array_equal(
             jax.random.key_data(others[0]), jax.random.key_data(keys[0])
+        )
+
+
+def test_a_backbone_run_is_selected_on_the_backbone_validation_set(
+    trained_backbone, only_serving, tracker_factory, store_factory
+) -> None:
+    data = only_serving(trained_backbone.battery.data, ValidationSet.BACKBONE)
+    tracker = tracker_factory()
+
+    train_backbone(
+        data=data,
+        mean_hp=trained_backbone.mean_hp,
+        variance_hp=trained_backbone.variance_hp,
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store_factory(),
+    )
+
+    for stage in ("mean", "variance"):
+        assert tracker.history(f"{stage}/validation/loss") == pytest.approx(
+            trained_backbone.tracker.history(f"{stage}/validation/loss")
         )
 
 
@@ -426,7 +447,9 @@ np.savez(
 def test_backbone_checkpoints_and_scalers_restore_in_a_fresh_process(
     mlflow_backbone, tmp_path
 ) -> None:
-    inputs = np.asarray(mlflow_backbone.reference.battery.data.val.features[:5])
+    inputs = np.asarray(
+        mlflow_backbone.reference.battery.data.posterior_val.features[:5]
+    )
     features = np.linspace(0.5, 1.5, 2 * WINDOW_SIZE).reshape(WINDOW_SIZE, 2)
     targets = np.linspace(0.0, 1.0, 4).reshape(4, 1)
     out = tmp_path / "restored.npz"

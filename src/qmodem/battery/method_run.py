@@ -57,7 +57,6 @@ from qmodem.tracking import (
 
 from .data_processing import (
     PreparedData,
-    make_loader,
     posterior_dataset_size,
     restore_only_loader,
 )
@@ -88,6 +87,7 @@ from .posterior import (
     draws_per_second,
     log_cost,
     parameter_count,
+    posterior_loader,
     validation_crps,
 )
 from .train import (
@@ -325,15 +325,15 @@ def _require_registered(config: MethodConfig) -> None:
 
 
 def _validation_inputs(data: PreparedData) -> jax.Array:
-    """Return every validation window, the inputs of the draws-per-second probe.
+    """Return the inputs of the draws-per-second probe.
 
     Args:
         data: Prepared train and validation windows.
 
     Returns:
-        The validation windows ``(B, W, C)``.
+        Every posterior validation set window ``(B, W, C)``.
     """
-    return jnp.asarray(data.val.features)
+    return jnp.asarray(data.posterior_val.features)
 
 
 def _cost(
@@ -499,7 +499,7 @@ def _train_posterior(
     keys = PosteriorKeys.of(run.key)
     method = spec.build_method(keys.init)
     timer = EpochTimer(tracker)
-    loader = make_loader(data, batch_size=spec.stage.batch_size, key=keys.loader)
+    loader = posterior_loader(data, batch_size=spec.stage.batch_size, key=keys.loader)
     stage = build_posterior_stage(
         spec=spec,
         method=method,

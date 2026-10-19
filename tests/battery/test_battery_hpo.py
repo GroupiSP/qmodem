@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import uuid
 
 import optuna
@@ -10,6 +11,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from qmodem.battery.data_processing import ValidationSet
 from qmodem.battery.hpo import (
     MEAN_STUDY,
     VARIANCE_STUDY,
@@ -20,7 +22,7 @@ from qmodem.battery.hpo import (
     variance_objective,
 )
 from qmodem.battery.train import MeanHyperparameters, VarianceHyperparameters
-from qmodem.hpo import StudyConfig, StudyLayout, run_study
+from qmodem.hpo import StudyConfig, StudyLayout, TrialRun, run_study
 from qmodem.tracking import MLflowCheckpointStore
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -96,6 +98,33 @@ def setup(mlflow_backend):
 def _trial_runs(client, result):
     experiment_id = client.get_run(result.run_id).info.experiment_id
     return client.search_runs([experiment_id], filter_string="tags.role = 'hpo_trial'")
+
+
+def test_mean_and_variance_trials_score_the_backbone_validation_set(
+    trained_backbone, only_serving, tracker_factory, store_factory
+) -> None:
+    data = only_serving(trained_backbone.battery.data, ValidationSet.BACKBONE)
+    objectives = (
+        mean_objective(
+            data=data, space=_TINY_MEAN_SPACE, base=trained_backbone.mean_hp
+        ),
+        variance_objective(
+            data=data,
+            mean_hp=trained_backbone.mean_hp,
+            mean_checkpoint=trained_backbone.checkpoints.mean,
+            space=VarianceSearchSpace(),
+            base=trained_backbone.variance_hp,
+        ),
+    )
+
+    for objective in objectives:
+        run = TrialRun(
+            trial=_random_trial(0),
+            run_id="trial",
+            tracker=tracker_factory(),
+            store=store_factory(),
+        )
+        assert math.isfinite(objective(run))
 
 
 def _min_history(client, run_id: str, tag: str) -> float:

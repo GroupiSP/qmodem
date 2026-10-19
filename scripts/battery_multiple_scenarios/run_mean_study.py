@@ -30,7 +30,12 @@ import os
 import pathlib
 from collections.abc import Sequence
 
-from qmodem.battery.data_processing import WINDOW_SIZE, make_data_pipeline, prepare_data
+from qmodem.battery.data_processing import (
+    WINDOW_SIZE,
+    log_window_counts,
+    make_data_pipeline,
+    prepare_data,
+)
 from qmodem.battery.hpo import MEAN_STUDY, STUDY_SEED, MeanSearchSpace, mean_objective
 from qmodem.battery.train import MeanHyperparameters, StageScheduleHyperparameters
 from qmodem.hpo import StudyLayout, run_study
@@ -83,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             os.environ["DATA_GEN_RUN_ID_MULTI"],
             make_data_pipeline(WINDOW_SIZE),
         )
-        logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
+        logger.info("Windows per split: %s", data.window_counts())
         space = MeanSearchSpace()
         base = MeanHyperparameters(
             schedule=StageScheduleHyperparameters(max_epochs=args.max_epochs)
@@ -101,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             result.best_value,
             space.apply(result.best_params, base).model_dump(),
         )
+        log_window_counts(result.run_id, data, client=session.client)
         session.attach_log(result.run_id, "study_log.txt")
 
 

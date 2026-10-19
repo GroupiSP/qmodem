@@ -47,6 +47,7 @@ import sklearn.preprocessing as skpp
 from qmodem.battery.data_processing import (
     FEATURES,
     WINDOW_SIZE,
+    log_window_counts,
     make_data_pipeline,
     prepare_data,
 )
@@ -178,7 +179,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             data_generation_run_id,
             make_data_pipeline(WINDOW_SIZE, x_scaler=x_scaler, y_scaler=y_scaler),
         )
-        logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
+        logger.info("Windows per split: %s", data.window_counts())
         mean_hp, variance_hp = backbone_hyperparameters(args)
         run = track_backbone_run(
             data=data,
@@ -208,6 +209,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             run.checkpoints.mean.epoch,
             run.checkpoints.variance.epoch,
         )
+        log_window_counts(run.run_id, data, client=session.client)
         session.attach_log(run.run_id, "training_log.txt")
 
 

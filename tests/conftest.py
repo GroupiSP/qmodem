@@ -29,7 +29,9 @@ from stagereg.core import (
 
 from qmodem.battery.data_processing import (
     WINDOW_SIZE,
+    HistorySplits,
     PreparedData,
+    ValidationSet,
     make_data_pipeline,
     prepare_windows,
 )
@@ -41,10 +43,12 @@ from qmodem.battery.train import (
     VarianceHyperparameters,
     train_backbone,
 )
+from qmodem.data import ArrayDataSource
 from qmodem.tracking import MLFlowSetup
 
 SYNTHETIC_TRAIN_LENGTHS: tuple[int, ...] = (23, 31, 27, 40)
-SYNTHETIC_VAL_LENGTHS: tuple[int, ...] = (25, 19)
+SYNTHETIC_BACKBONE_VAL_LENGTHS: tuple[int, ...] = (25, 19)
+SYNTHETIC_POSTERIOR_VAL_LENGTHS: tuple[int, ...] = (21, 30, 17)
 
 
 class InMemoryTracker:
@@ -155,27 +159,62 @@ class SyntheticBattery:
     Attributes:
         data: Train and validation windows (window size ``WINDOW_SIZE``).
         train_lengths: Length of every training history.
-        val_lengths: Length of every validation history.
+        backbone_val_lengths: Length of every backbone validation set history.
+        posterior_val_lengths: Length of every posterior validation set history.
     """
 
     data: PreparedData
     train_lengths: tuple[int, ...]
-    val_lengths: tuple[int, ...]
+    backbone_val_lengths: tuple[int, ...]
+    posterior_val_lengths: tuple[int, ...]
 
 
 @pytest.fixture(scope="session")
 def synthetic_battery() -> SyntheticBattery:
     """Tiny synthetic battery windows prepared by the production pipeline."""
     data = prepare_windows(
-        train_df=_synthetic_histories(SYNTHETIC_TRAIN_LENGTHS, seed=0),
-        val_df=_synthetic_histories(SYNTHETIC_VAL_LENGTHS, seed=1),
+        HistorySplits(
+            train=_synthetic_histories(SYNTHETIC_TRAIN_LENGTHS, seed=0),
+            backbone_val=_synthetic_histories(SYNTHETIC_BACKBONE_VAL_LENGTHS, seed=1),
+            posterior_val=_synthetic_histories(SYNTHETIC_POSTERIOR_VAL_LENGTHS, seed=2),
+        ),
         pipeline=make_data_pipeline(window_size=WINDOW_SIZE),
     )
     return SyntheticBattery(
         data=data,
         train_lengths=SYNTHETIC_TRAIN_LENGTHS,
-        val_lengths=SYNTHETIC_VAL_LENGTHS,
+        backbone_val_lengths=SYNTHETIC_BACKBONE_VAL_LENGTHS,
+        posterior_val_lengths=SYNTHETIC_POSTERIOR_VAL_LENGTHS,
     )
+
+
+def serving_only(data: PreparedData, served: ValidationSet) -> PreparedData:
+    """Booby-trap every validation set but ``served``.
+
+    The other set's windows get an extra input channel, so any network fed
+    them fails: a consumer runs through only if it never reads that set.
+
+    Args:
+        data: The prepared windows.
+        served: The validation set left intact.
+
+    Returns:
+        The windows, with the other validation set unusable.
+    """
+    other = "posterior_val" if served is ValidationSet.BACKBONE else "backbone_val"
+    windows = getattr(data, other)
+    features = np.asarray(windows.features)
+    trap = ArrayDataSource(
+        features=np.concatenate([features, features[..., :1]], axis=-1),
+        targets=windows.targets,
+    )
+    return dataclasses.replace(data, **{other: trap})
+
+
+@pytest.fixture(scope="session")
+def only_serving() -> Any:
+    """The booby-trapping helper ``serving_only``."""
+    return serving_only
 
 
 @pytest.fixture(scope="session")

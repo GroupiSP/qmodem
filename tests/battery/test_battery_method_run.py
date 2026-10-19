@@ -10,6 +10,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from stagereg.core import InMemoryCheckpointStore, is_finalized
 
+from qmodem.battery.data_processing import ValidationSet
 from qmodem.battery.method_run import (
     METHOD_CONFIGS,
     BackboneHandle,
@@ -69,7 +70,7 @@ def test_an_hnn_run_yields_100_predictive_draws_of_the_backbone_mean_per_window(
     hnn_run, trained_backbone
 ) -> None:
     run, _, _ = hnn_run
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
 
     predictive = run.predictive(
         inputs, jax.random.key(1), num_draws=PREDICTIVE_SAMPLE_COUNT
@@ -104,7 +105,7 @@ def test_a_restored_hnn_run_predicts_like_the_trained_one(
         seed=trained_backbone.seed,
         store=store_factory(persistent),
     )
-    inputs = trained_backbone.battery.data.val.features[:5]
+    inputs = trained_backbone.battery.data.posterior_val.features[:5]
     key = jax.random.key(3)
 
     expected = run.predictive(inputs, key, num_draws=4)
@@ -180,7 +181,7 @@ def test_a_restored_bbb_run_yields_the_trained_runs_predictive_samples(
 ) -> None:
     run, _, persistent = bbb_run
     restored = _restore_bbb(trained_backbone, store_factory, persistent)
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
     key = jax.random.key(5)
 
     expected = run.predictive(inputs, key, num_draws=PREDICTIVE_SAMPLE_COUNT)
@@ -203,7 +204,7 @@ def test_the_same_seed_gives_identical_finalized_bbb_checkpoints_and_draws(
         tracker_factory(),
         store_factory(again_persistent),
     )
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(11)
 
     exactly_equal(
@@ -267,7 +268,7 @@ def test_the_bbb_frozen_remainder_keeps_its_trained_mean_values(
     run, _, _ = bbb_run
     mean_net = _merged(trained_backbone.checkpoints.mean.parameters)
     trained_conv = nnx.state(mean_net, nnx.All(nnx.Param, INFERRED_SUBNETWORK))
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
 
     # With the conv layer at its trained-mean values, every leaf of the posterior
     # network equals the trained mean's, so it is the trained mean network.
@@ -310,6 +311,30 @@ def mcd_run(trained_backbone, tracker_factory, store_factory):
     return run, tracker, persistent
 
 
+@pytest.mark.parametrize("config", [HNNConfig(), TINY_MCD], ids=["hnn", "mcd"])
+def test_a_method_run_reads_only_the_posterior_validation_set(
+    config, mcd_run, trained_backbone, only_serving, tracker_factory, store_factory
+) -> None:
+    # The posterior stage, its baseline and the draws-per-second probe all run on
+    # the posterior validation set; reading the backbone one would fail.
+    tracker = tracker_factory()
+
+    train_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        data=only_serving(trained_backbone.battery.data, ValidationSet.POSTERIOR),
+        config=config,
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store_factory(),
+    )
+
+    assert COST_DRAWS_PER_SECOND in tracker.tags
+    if isinstance(config, MCDConfig):
+        _, reference, _ = mcd_run
+        for tag in ("posterior/validation/crps", VAL_CRPS_BASELINE):
+            assert tracker.history(tag) == pytest.approx(reference.history(tag))
+
+
 def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(
     mcd_run, trained_backbone, store_factory
 ) -> None:
@@ -320,7 +345,7 @@ def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(
         seed=trained_backbone.seed,
         store=store_factory(persistent),
     )
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
     key = jax.random.key(5)
 
     expected = run.predictive(inputs, key, num_draws=PREDICTIVE_SAMPLE_COUNT)
@@ -341,7 +366,7 @@ def test_the_same_seed_gives_identical_finalized_mcd_checkpoints_and_draws(
         tracker_factory(),
         store_factory(again_persistent),
     )
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(11)
 
     exactly_equal(
@@ -360,7 +385,7 @@ def test_mcd_draws_differ_but_each_is_one_function_across_input_subsets(
 ) -> None:
     run, _, _ = mcd_run
     split = min(split, size - 1)
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
     key = jax.random.key(3)
 
     whole = run.posterior.sample_means(inputs, key, 4)
@@ -416,7 +441,7 @@ def test_the_mcd_frozen_remainder_keeps_its_trained_mean_values(
     run, _, _ = mcd_run
     mean_net = _merged(trained_backbone.checkpoints.mean.parameters)
     trained_conv = nnx.state(mean_net, nnx.All(nnx.Param, INFERRED_SUBNETWORK))
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
     key = jax.random.key(seed)
     # Dropout changes the output, so the reference is the trained mean network
     # under the same draw's mask: the MCD net with every Param at the trained
@@ -529,8 +554,9 @@ def test_the_baseline_is_epoch_0s_score_of_a_posterior_that_barely_moved(
 def test_the_best_epoch_ignores_a_baseline_lower_than_every_epoch(
     trained_backbone, tracker_factory, store_factory
 ) -> None:
+    # An LR this large makes every epoch worse than the warm start.
     tracker, persistent = _train_mcd_at(
-        1.0, trained_backbone, tracker_factory, store_factory
+        10.0, trained_backbone, tracker_factory, store_factory
     )
     baseline = tracker.history(VAL_CRPS_BASELINE)[0]
     crps = tracker.history("posterior/validation/crps")

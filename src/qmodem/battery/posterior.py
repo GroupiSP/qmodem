@@ -58,7 +58,12 @@ from stagereg.jax.metrics import reduce_metric_suite
 
 from qmodem.tracking import Stage
 
-from .data_processing import restore_only_loader
+from .data_processing import (
+    PreparedData,
+    ValidationSet,
+    make_loader,
+    restore_only_loader,
+)
 from .evaluate import PRIMARY_COVERAGE_LEVEL, coverage_key
 from .train import MeanNetworkHyperparameters
 
@@ -422,6 +427,27 @@ def validation_crps(
         suite=suite, losses=None, batch_metric_values={}, epoch_metric_parts=parts
     )
     return metrics[VALIDATION_METRIC]
+
+
+def posterior_loader(
+    data: PreparedData, batch_size: int, key: jax.Array
+) -> LoaderFactory:
+    """Return the posterior stage's loader: it validates on the posterior set.
+
+    The validation criterion (early stopping, the baseline, posterior HPO) is
+    scored on the posterior validation set, disjoint from the backbone's.
+
+    Args:
+        data: The prepared windows.
+        batch_size: Training batch size.
+        key: Typed PRNG key of the training shuffle.
+
+    Returns:
+        The loader (see ``make_loader``).
+    """
+    return make_loader(
+        data, batch_size=batch_size, key=key, validation=ValidationSet.POSTERIOR
+    )
 
 
 def posterior_early_stopper(stage: PosteriorStageHyperparameters) -> EarlyStopper:

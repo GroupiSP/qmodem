@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
 import functools
 import pathlib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +13,8 @@ import mlflow
 import numpy as np
 import pandas as pd
 import sklearn.preprocessing as skpp
+from mlflow.entities import Param
+from mlflow.tracking import MlflowClient
 from stagereg.core import Batch, LoaderFactory
 
 from qmodem.data import (
@@ -35,35 +38,139 @@ TRAIN_SPLIT = "train"
 VALIDATION_SPLIT = "validation"
 
 
+class ValidationSet(enum.StrEnum):
+    """Which validation set a loader's ``"validation"`` split serves.
+
+    The backbone validation set selects the mean and variance stages (and their HPO
+    studies); the posterior validation set selects the posterior stage (and its HPO
+    study). The two are disjoint.
+    """
+
+    BACKBONE = "backbone"
+    POSTERIOR = "posterior"
+
+
 @dataclasses.dataclass
 class PreparedData:
-    """Windowed, scaled train and validation data.
+    """Windowed, scaled train data and both validation sets.
 
     Attributes:
         train: Training windows and targets.
-        val: Validation windows and targets.
+        backbone_val: Backbone validation set windows and targets.
+        posterior_val: Posterior validation set windows and targets.
     """
 
     train: ArrayDataSource
-    val: ArrayDataSource
+    backbone_val: ArrayDataSource
+    posterior_val: ArrayDataSource
+
+    def validation(self, which: ValidationSet) -> ArrayDataSource:
+        """Return the windows of one validation set.
+
+        Args:
+            which: The validation set.
+
+        Returns:
+            Its windows and targets.
+        """
+        return {
+            ValidationSet.BACKBONE: self.backbone_val,
+            ValidationSet.POSTERIOR: self.posterior_val,
+        }[which]
+
+    def window_counts(self) -> dict[str, int]:
+        """Return the window count of each split, keyed for MLflow params.
+
+        Returns:
+            ``{"windows_train": ..., "windows_backbone_val": ...,
+            "windows_posterior_val": ...}``.
+        """
+        return {
+            "windows_train": len(self.train),
+            "windows_backbone_val": len(self.backbone_val),
+            "windows_posterior_val": len(self.posterior_val),
+        }
 
 
-def _split_train_val(
-    train_path: pathlib.Path, n_histories_train: int
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Split the training CSV into training and validation histories by ``run_id``.
+@dataclasses.dataclass(frozen=True)
+class SplitSizes:
+    """History counts of the contiguous ``run_id`` blocks of ``train.csv``.
+
+    Attributes:
+        n_train: Training histories (the first block).
+        n_backbone_val: Backbone validation set histories (the second block).
+        n_posterior_val: Posterior validation set histories (the third block).
+    """
+
+    n_train: int
+    n_backbone_val: int
+    n_posterior_val: int
+
+    @classmethod
+    def from_params(cls, params: Mapping[str, str]) -> SplitSizes:
+        """Read the sizes from a data-generation run's MLflow params.
+
+        Args:
+            params: The data-generation run's params.
+
+        Returns:
+            The split sizes.
+
+        Raises:
+            KeyError: If a size param is missing.
+        """
+        return cls(
+            n_train=int(params["n_histories_train"]),
+            n_backbone_val=int(params["n_histories_backbone_val"]),
+            n_posterior_val=int(params["n_histories_posterior_val"]),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class HistorySplits:
+    """The histories of ``train.csv``, split into disjoint ``run_id`` blocks.
+
+    Attributes:
+        train: Training histories.
+        backbone_val: Backbone validation set histories.
+        posterior_val: Posterior validation set histories.
+    """
+
+    train: pd.DataFrame
+    backbone_val: pd.DataFrame
+    posterior_val: pd.DataFrame
+
+
+def split_histories(histories: pd.DataFrame, sizes: SplitSizes) -> HistorySplits:
+    """Slice the histories of ``train.csv`` into train and both validation sets.
+
+    ``run_id`` ``[0, n_train)`` is train, the next ``n_backbone_val`` the backbone
+    validation set and the next ``n_posterior_val`` the posterior validation set.
 
     Args:
-        train_path: Path of ``train.csv``.
-        n_histories_train: Histories with a smaller ``run_id`` are training data.
+        histories: The histories, with a ``run_id`` column.
+        sizes: The block sizes logged on the data-generation run.
 
     Returns:
-        The training and the validation histories.
+        The three disjoint splits, together covering every history.
+
+    Raises:
+        ValueError: If the ``run_id``\\ s are not exactly ``0 .. total - 1``.
     """
-    data = pd.read_csv(train_path)
-    return (
-        data[data["run_id"] < n_histories_train],
-        data[data["run_id"] >= n_histories_train],
+    run_ids = histories["run_id"]
+    total = sizes.n_train + sizes.n_backbone_val + sizes.n_posterior_val
+    if set(run_ids.unique().tolist()) != set(range(total)):
+        raise ValueError(
+            f"Expected run_id 0..{total - 1} ({sizes}), got "
+            f"{run_ids.nunique()} distinct run_id values."
+        )
+    first_posterior = sizes.n_train + sizes.n_backbone_val
+    return HistorySplits(
+        train=histories[run_ids < sizes.n_train],
+        backbone_val=histories[
+            (run_ids >= sizes.n_train) & (run_ids < first_posterior)
+        ],
+        posterior_val=histories[run_ids >= first_posterior],
     )
 
 
@@ -144,36 +251,54 @@ def make_data_pipeline(
 
 
 def prepare_windows(
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
+    splits: HistorySplits,
     pipeline: DataPipeline,
     *,
     fit_scalers: bool = True,
 ) -> PreparedData:
-    """Window the train and validation histories with train-fitted scalers.
+    """Window the train and both validation sets with train-fitted scalers.
 
     Args:
-        train_df: Training histories.
-        val_df: Validation histories.
+        splits: The train, backbone validation set and posterior validation set
+            histories.
         pipeline: The data pipeline.
-        fit_scalers: Fit the pipeline's scalers on ``train_df`` (a backbone run).
-            ``False`` uses already fitted scalers as they are (runs consuming a
-            backbone, see ``backbone_data_pipeline``).
+        fit_scalers: Fit the pipeline's scalers on the training histories (a
+            backbone run). ``False`` uses already fitted scalers as they are
+            (runs consuming a backbone, see ``backbone_data_pipeline``).
 
     Returns:
-        The prepared train and validation windows.
+        The prepared windows of every split.
     """
     pipeline.set_mode(
         ScalingMode.FIT_TRANSFORM if fit_scalers else ScalingMode.TRANSFORM
     )
-    X_train, y_train = pipeline(train_df)
+    X_train, y_train = pipeline(splits.train)
 
     pipeline.set_mode(ScalingMode.TRANSFORM)
-    X_val, y_val = pipeline(val_df)
+    X_backbone, y_backbone = pipeline(splits.backbone_val)
+    X_posterior, y_posterior = pipeline(splits.posterior_val)
 
     return PreparedData(
         train=ArrayDataSource(features=X_train, targets=y_train),
-        val=ArrayDataSource(features=X_val, targets=y_val),
+        backbone_val=ArrayDataSource(features=X_backbone, targets=y_backbone),
+        posterior_val=ArrayDataSource(features=X_posterior, targets=y_posterior),
+    )
+
+
+def log_window_counts(
+    run_id: str, data: PreparedData, *, client: MlflowClient | None = None
+) -> None:
+    """Log the window count of each split as params of an MLflow run.
+
+    Args:
+        run_id: The run receiving ``PreparedData.window_counts``.
+        data: The prepared windows.
+        client: The MLflow client. Defaults to one on the current tracking URI.
+    """
+    client = client if client is not None else MlflowClient()
+    client.log_batch(
+        run_id,
+        params=[Param(key, str(value)) for key, value in data.window_counts().items()],
     )
 
 
@@ -203,17 +328,25 @@ def _shuffle_seed(key: jax.Array, epoch: int) -> int:
     return int(jax.random.randint(epoch_key, (), 0, jnp.iinfo(jnp.int32).max))
 
 
-def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFactory:
+def make_loader(
+    data: PreparedData,
+    batch_size: int,
+    key: jax.Array,
+    *,
+    validation: ValidationSet,
+) -> LoaderFactory:
     """Build stagereg's ``LoaderFactory`` over the prepared windows.
 
     The training split is reshuffled every epoch with a seed derived from
     ``key`` and the epoch, so the same epoch always gives the same batch order.
-    The validation split is one batch holding every validation window, in order.
+    The validation split is one batch holding every window of the ``validation``
+    set, in order.
 
     Args:
         data: The prepared windows.
         batch_size: Training batch size (the last batch may be smaller).
         key: Typed PRNG key the training shuffle derives from.
+        validation: The validation set the ``"validation"`` split serves.
 
     Returns:
         A loader ``loader(*, split, epoch) -> list[Batch]``.
@@ -223,7 +356,8 @@ def make_loader(data: PreparedData, batch_size: int, key: jax.Array) -> LoaderFa
         features=np.asarray(data.train.features),
         targets=np.asarray(data.train.targets),
     )
-    val_batch = _to_batch(data.val.features, data.val.targets)
+    served = data.validation(validation)
+    val_batch = _to_batch(served.features, served.targets)
     batches_of: dict[str, Callable[[int], list[Batch]]] = {
         TRAIN_SPLIT: lambda epoch: _shuffled_batches(
             train, batch_size, _shuffle_seed(key, epoch)
@@ -279,8 +413,9 @@ def prepare_data(
 ) -> PreparedData:
     """Prepare the multiple-scenarios windows from the raw training histories.
 
-    Histories with ``run_id < n_histories_train`` (read from the data-generation
-    run's MLflow params) are training data, the rest are validation data.
+    ``train.csv`` is sliced into train, backbone validation set and posterior
+    validation set by ``run_id`` range (``split_histories``), with the sizes
+    logged on the data-generation run (``SplitSizes.from_params``).
 
     Args:
         raw_data_dir: Directory holding ``train.csv``.
@@ -291,12 +426,14 @@ def prepare_data(
             ``False`` keeps already fitted ones (see ``prepare_windows``).
 
     Returns:
-        The prepared train and validation windows.
+        The prepared windows of every split.
+
+    Raises:
+        ValueError: If ``train.csv`` does not match the logged split sizes.
     """
     data_gen_run = mlflow.get_run(data_gen_run_id)
-    train_df, val_df = _split_train_val(
-        raw_data_dir / "train.csv",
-        n_histories_train=int(data_gen_run.data.params["n_histories_train"]),
+    splits = split_histories(
+        pd.read_csv(raw_data_dir / "train.csv"),
+        SplitSizes.from_params(data_gen_run.data.params),
     )
-
-    return prepare_windows(train_df, val_df, pipeline, fit_scalers=fit_scalers)
+    return prepare_windows(splits, pipeline, fit_scalers=fit_scalers)

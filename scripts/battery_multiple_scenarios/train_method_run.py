@@ -51,6 +51,7 @@ from mlflow.tracking import MlflowClient
 from stagereg.core import flatten_parameters
 
 from qmodem.battery.backbone_data import load_backbone_context
+from qmodem.battery.data_processing import log_window_counts
 from qmodem.battery.method_run import (
     METHOD_CONFIGS,
     MethodConfig,
@@ -212,8 +213,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             study_run_id=args.study_run_id,
         )
         logger.info(
-            "Method run %s (%s, seed %d)", run.run_id, method.value, backbone.seed
+            "Method run %s (%s, seed %d), windows per split: %s",
+            run.run_id,
+            method.value,
+            backbone.seed,
+            backbone.data.window_counts(),
         )
+        log_window_counts(run.run_id, backbone.data, client=session.client)
         session.attach_log(run.run_id, "training_log.txt")
 
 

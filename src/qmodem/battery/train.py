@@ -42,7 +42,7 @@ from qmodem.tracking import (
     unflatten_parameters,
 )
 
-from .data_processing import PreparedData, make_loader
+from .data_processing import PreparedData, ValidationSet, make_loader
 from .models import MeanNet, VarianceNet
 
 
@@ -351,7 +351,12 @@ def train_mean_stage(
     stage = _mean_stage(
         mean_hp=mean_hp,
         keys=keys,
-        loader=make_loader(data, batch_size=mean_hp.batch_size, key=keys.loader),
+        loader=make_loader(
+            data,
+            batch_size=mean_hp.batch_size,
+            key=keys.loader,
+            validation=ValidationSet.BACKBONE,
+        ),
         event_sinks=(TrackerEventSink(tracker), *event_sinks),
         store=store,
     )
@@ -395,7 +400,12 @@ def train_variance_stage(
     """
     tracker.log_params({Stage.VARIANCE: variance_hp.model_dump()})
     keys = backbone_keys(seed)
-    loader = make_loader(data, batch_size=mean_hp.batch_size, key=keys.loader)
+    loader = make_loader(
+        data,
+        batch_size=mean_hp.batch_size,
+        key=keys.loader,
+        validation=ValidationSet.BACKBONE,
+    )
     state = TrainingState()
     mean_stage = _mean_stage(
         mean_hp=mean_hp, keys=keys, loader=loader, event_sinks=(), store=store

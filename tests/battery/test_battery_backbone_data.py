@@ -18,6 +18,7 @@ from qmodem.battery.backbone_data import (
 from qmodem.battery.data_processing import (
     FEATURES,
     WINDOW_SIZE,
+    HistorySplits,
     make_data_pipeline,
     prepare_windows,
 )
@@ -97,14 +98,15 @@ def test_windows_are_scaled_with_the_backbone_scalers_never_refitted(
     tracked_backbone, seed: int
 ) -> None:
     run_id, x_scaler, y_scaler = tracked_backbone
-    train, val = _histories((23, 31), seed), _histories((19,), seed + 1)
-
-    loaded = prepare_windows(
-        train, val, backbone_data_pipeline(run_id), fit_scalers=False
+    splits = HistorySplits(
+        train=_histories((23, 31), seed),
+        backbone_val=_histories((19,), seed + 1),
+        posterior_val=_histories((17, 22), seed + 2),
     )
+
+    loaded = prepare_windows(splits, backbone_data_pipeline(run_id), fit_scalers=False)
     parent = prepare_windows(
-        train,
-        val,
+        splits,
         make_data_pipeline(
             WINDOW_SIZE,
             x_scaler=copy.deepcopy(x_scaler),
@@ -113,7 +115,7 @@ def test_windows_are_scaled_with_the_backbone_scalers_never_refitted(
         fit_scalers=False,
     )
 
-    for split in ("train", "val"):
+    for split in ("train", "backbone_val", "posterior_val"):
         np.testing.assert_array_equal(
             getattr(loaded, split).features, getattr(parent, split).features
         )

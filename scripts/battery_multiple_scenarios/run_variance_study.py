@@ -33,6 +33,7 @@ import pathlib
 from collections.abc import Sequence
 
 from qmodem.battery.backbone_data import load_backbone_context
+from qmodem.battery.data_processing import log_window_counts
 from qmodem.battery.hpo import (
     STUDY_SEED,
     VARIANCE_STUDY,
@@ -113,7 +114,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
             client=session.client,
         )
-        logger.info("Backbone run %s (seed %d)", backbone_run_id, backbone.seed)
+        logger.info(
+            "Backbone run %s (seed %d), windows per split: %s",
+            backbone_run_id,
+            backbone.seed,
+            backbone.data.window_counts(),
+        )
 
         space = VarianceSearchSpace()
         base = variance_hp
@@ -144,6 +150,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             result.best_value,
             space.apply(result.best_params, base).model_dump(),
         )
+        log_window_counts(result.run_id, backbone.data, client=session.client)
         session.attach_log(result.run_id, "study_log.txt")
 
 
