@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
 import pathlib
 import pickle
 import tempfile
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any, Protocol
@@ -57,12 +58,46 @@ class Hyperparameters:
     dt: float = 5.0  # in seconds
     v_cutoff: float = 2.5  # in Volts
     n_histories_train: int = 10
-    n_histories_val: int = 5
-    n_histories_test: int = 10
+    n_policy_1_train: int = 3
+    n_histories_backbone_val: int = 20
+    n_policy_1_backbone_val: int = 6
+    n_histories_posterior_val: int = 20
+    n_policy_1_posterior_val: int = 6
+    n_histories_test: int = 20
+    n_policy_1_test: int = 6
     process_noise_std: float = 2e-3
     measurement_noise_std: float = 5e-3
     train_seed: int = 42
     test_seed: int = 123
+
+    def __post_init__(self) -> None:
+        """Validate every split's counts.
+
+        Raises:
+            ValueError: If a split's policy-1 count exceeds its size.
+        """
+        self.train_stream_splits()
+        self.test_split()
+
+    def train_stream_splits(self) -> tuple[SplitSpec, SplitSpec, SplitSpec]:
+        """Splits of ``train.csv``, in ``run_id`` order (seeded by ``train_seed``).
+
+        Returns:
+            The train, backbone validation set and posterior validation set splits.
+        """
+        return (
+            SplitSpec(self.n_histories_train, self.n_policy_1_train),
+            SplitSpec(self.n_histories_backbone_val, self.n_policy_1_backbone_val),
+            SplitSpec(self.n_histories_posterior_val, self.n_policy_1_posterior_val),
+        )
+
+    def test_split(self) -> SplitSpec:
+        """Split of ``test.csv`` (seeded by ``test_seed``).
+
+        Returns:
+            The test split.
+        """
+        return SplitSpec(self.n_histories_test, self.n_policy_1_test)
 
 
 def gaussian_noise(*, rng: np.random.Generator, noise_std: float) -> float:
@@ -135,22 +170,101 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
     df.insert(0, "run_id", run_id)  # Add a run_id column for tracking
 
 
-def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFrame:
-    """Runs MC simulations and gathers the results into a single dataframe."""
-    out_df = pd.DataFrame(
-        columns=["run_id", "policy_id", "time", "load", "soc", "voltage"]
-    )
+@dataclass(frozen=True)
+class SplitSpec:
+    """Size and current-policy mix of one split of generated histories.
 
-    for i in range(n_histories):
-        result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
-        df = result.to_dataframe()
+    Attributes:
+        n_histories: Histories in the split.
+        n_policy_1: Histories that follow policy 1; the other
+            ``n_histories - n_policy_1`` follow policy 0.
 
-        # Modify the dataframe and append it to the output one
-        _modify_dataframe(df, i)
+    Raises:
+        ValueError: If a count is negative or ``n_policy_1 > n_histories``.
+    """
 
-        out_df = pd.concat([out_df, df], ignore_index=True)
+    n_histories: int
+    n_policy_1: int
 
-    return out_df
+    def __post_init__(self) -> None:
+        if self.n_histories < 0 or self.n_policy_1 < 0:
+            raise ValueError(f"Split counts must be non-negative, got {self}.")
+        if self.n_policy_1 > self.n_histories:
+            raise ValueError(
+                f"n_policy_1={self.n_policy_1} exceeds n_histories={self.n_histories}."
+            )
+
+
+def fixed_policy_choice(*, policy_id: int) -> int:
+    """Deterministically select the given current policy.
+
+    Picklable policy choice used to simulate a history with an assigned policy.
+
+    Args:
+        policy_id: Index of the current policy to select.
+
+    Returns:
+        ``policy_id``.
+    """
+    return policy_id
+
+
+def assign_policies(split: SplitSpec, rng: np.random.Generator) -> np.ndarray:
+    """Assign exactly the split's policy counts to its histories, in a random order.
+
+    Args:
+        split: Size and policy-1 count of the split.
+        rng: Generator that permutes the assignment.
+
+    Returns:
+        ``(n_histories,)`` integer array with ``n_policy_1`` ones and zeros elsewhere.
+    """
+    policies = np.zeros(split.n_histories, dtype=np.int64)
+    policies[: split.n_policy_1] = 1
+    return rng.permutation(policies)
+
+
+def write_split_histories(
+    config: sb.SimulationConfig,
+    splits: Sequence[SplitSpec],
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """Simulate the histories of consecutive splits with fixed policy counts.
+
+    Each split's policies are permuted by ``rng`` (see :func:`assign_policies`) and
+    every history is simulated with its assigned policy; the policy choice of
+    ``config`` is not used. The splits occupy contiguous ``run_id`` blocks in the
+    given order, starting at 0.
+
+    Args:
+        config: Base simulation config; its noise callables carry the noise RNG.
+        splits: Splits to generate, in ``run_id`` order.
+        rng: Generator that permutes the policy assignment of each split.
+
+    Returns:
+        Histories with columns ``run_id, policy_id, time, load, soc, voltage``.
+    """
+    frames = []
+    run_id = 0
+    for split in splits:
+        for policy_id in assign_policies(split, rng):
+            history_config = dataclasses.replace(
+                config,
+                policy_choice_distribution=functools.partial(
+                    fixed_policy_choice, policy_id=int(policy_id)
+                ),
+            )
+            df = sb.simulate_constant_capacity_simple(
+                n_sim=1, config=history_config
+            ).to_dataframe()
+            _modify_dataframe(df, run_id)
+            frames.append(df)
+            run_id += 1
+    if not frames:
+        return pd.DataFrame(
+            columns=["run_id", "policy_id", "time", "load", "soc", "voltage"]
+        )
+    return pd.concat(frames, ignore_index=True)
 
 
 def add_rul_series(df: pd.DataFrame) -> pd.DataFrame:

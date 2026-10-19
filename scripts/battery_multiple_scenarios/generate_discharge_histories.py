@@ -17,7 +17,7 @@ from qmodem.battery.data_generation import (
     bernoulli_policy_choice,
     gaussian_noise,
     log_simulation_config,
-    write_histories,
+    write_split_histories,
 )
 from qmodem.battery.policies import VariableDischargeCurrentPolicy, plot_current_profile
 from qmodem.tracking import MLFlowSetup, track_dataframe, track_mlflow
@@ -62,6 +62,13 @@ def main() -> None:
     hp = Hyperparameters()
 
     RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
+    existing = [RAW_DATA_DIR / f for f in ("train.csv", "test.csv")]
+    if any(f.exists() for f in existing):
+        raise FileExistsError(
+            f"{RAW_DATA_DIR} already holds generated data; point RAW_DATA_DIR_MULTI "
+            "to a new directory instead of overwriting it."
+        )
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     # MLFlow setup
     tracking_setup = MLFlowSetup(run_name="generate_histories")
@@ -72,12 +79,15 @@ def main() -> None:
 
         mlflow.log_params(dataclasses.asdict(hp))
 
-        train_df = write_histories(
-            make_simulator_config(train_rng, hp),
-            n_histories=hp.n_histories_train + hp.n_histories_val,
+        # Train, backbone validation set and posterior validation set: contiguous
+        # run_id blocks of one stream, each with fixed policy counts.
+        train_df = write_split_histories(
+            make_simulator_config(train_rng, hp), hp.train_stream_splits(), train_rng
         )
+        # The test config keeps the 70/30 policy prior for the reference band;
+        # the test histories themselves use fixed policy counts.
         test_config = make_simulator_config(test_rng, hp)
-        test_df = write_histories(test_config, n_histories=hp.n_histories_test)
+        test_df = write_split_histories(test_config, [hp.test_split()], test_rng)
 
         train_df = add_rul_series(train_df)
         test_df = add_rul_series(test_df)
