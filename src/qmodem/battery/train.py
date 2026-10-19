@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Literal
@@ -73,6 +74,9 @@ _VARIANCE_INIT_STREAM = 1
 _LOADER_STREAM = 2
 _TRAINING_STREAM = 3
 
+LR_DECAY_FLOOR = 0.01
+"""Final over initial learning rate of the mean and variance stages' decay."""
+
 
 class _FrozenHyperparameters(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -93,10 +97,13 @@ class MeanNetworkHyperparameters(_FrozenHyperparameters):
 
 
 class OptimizerHyperparameters(_FrozenHyperparameters):
-    """Adam at a constant learning rate.
+    """Adam's learning rate.
+
+    The posterior stage uses it as a constant; the mean and variance stages use
+    it as the start of their cosine decay (see ``backbone_optimizer``).
 
     Attributes:
-        learning_rate: Adam's learning rate.
+        learning_rate: Adam's (initial) learning rate.
     """
 
     learning_rate: float = Field(default=1e-3, gt=0.0)
@@ -231,6 +238,86 @@ def build_variance_net(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class EpochCosineDecay:
+    """Cosine-decayed learning rate, constant within an epoch (an optax schedule).
+
+    A value-comparable callable (unlike a closure or ``functools.partial``), so
+    a checkpointed optimizer compares equal to its reloaded copy.
+
+    Attributes:
+        learning_rate: The learning rate at epoch 0.
+        max_epochs: The epoch at which the floor is reached (and kept after).
+        steps_per_epoch: Optimizer steps in one epoch.
+    """
+
+    learning_rate: float
+    max_epochs: int
+    steps_per_epoch: int
+
+    def __call__(self, step: jax.Array) -> jax.Array:
+        """Return the learning rate of ``step``'s epoch.
+
+        Args:
+            step: The optimizer step count.
+
+        Returns:
+            ``LR_DECAY_FLOOR``-floored cosine decay at epoch
+            ``step // steps_per_epoch``.
+        """
+        decay = optax.cosine_decay_schedule(
+            self.learning_rate, decay_steps=self.max_epochs, alpha=LR_DECAY_FLOOR
+        )
+        return decay(step // self.steps_per_epoch)
+
+
+def backbone_optimizer(
+    optimizer: OptimizerHyperparameters, *, max_epochs: int, steps_per_epoch: int
+) -> optax.GradientTransformation:
+    """Adam with the mean and variance stages' per-epoch cosine LR decay.
+
+    The learning rate decays from ``optimizer.learning_rate`` at epoch 0 to
+    ``LR_DECAY_FLOOR · learning_rate`` at epoch ``max_epochs``, and is stepped
+    once per epoch. The floor ratio is fixed, not a hyperparameter.
+
+    Args:
+        optimizer: The stage's optimizer hyperparameters.
+        max_epochs: The stage's epoch cap.
+        steps_per_epoch: Optimizer steps (training batches) per epoch.
+
+    Returns:
+        The stage's gradient transformation.
+
+    Raises:
+        ValueError: If ``max_epochs`` or ``steps_per_epoch`` is below 1.
+    """
+    if max_epochs < 1 or steps_per_epoch < 1:
+        raise ValueError(
+            "max_epochs and steps_per_epoch must be >= 1, got "
+            f"{max_epochs} and {steps_per_epoch}."
+        )
+    return optax.adam(
+        EpochCosineDecay(
+            learning_rate=optimizer.learning_rate,
+            max_epochs=max_epochs,
+            steps_per_epoch=steps_per_epoch,
+        )
+    )
+
+
+def steps_per_epoch(data: PreparedData, batch_size: int) -> int:
+    """Optimizer steps per epoch: training batches, the last one possibly smaller.
+
+    Args:
+        data: The prepared windows.
+        batch_size: Training batch size.
+
+    Returns:
+        ``ceil(n_train_windows / batch_size)``, at least 1.
+    """
+    return max(1, math.ceil(len(data.train.features) / batch_size))
+
+
 def _early_stopper(schedule: StageScheduleHyperparameters) -> EarlyStopper:
     return EarlyStopper(
         metric="loss", mode="min", patience=schedule.patience, min_delta=0.0
@@ -242,6 +329,7 @@ def _mean_stage(
     mean_hp: MeanHyperparameters,
     keys: BackboneKeys,
     loader: LoaderFactory,
+    steps_per_epoch: int,
     event_sinks: Sequence[EventSink],
     store: CheckpointStore,
 ) -> MeanStage:
@@ -251,6 +339,7 @@ def _mean_stage(
         mean_hp: Mean-stage hyperparameters.
         keys: The backbone run's keys.
         loader: The backbone run's loader.
+        steps_per_epoch: Training batches per epoch (the LR decay's epoch length).
         event_sinks: Receive the stage's training events.
         store: Receives the ``mean/best`` checkpoints.
 
@@ -262,7 +351,12 @@ def _mean_stage(
     return MeanStage(
         model=mean_net,
         optimizer=create_optimizer(
-            mean_net, optax.adam(mean_hp.optimizer.learning_rate)
+            mean_net,
+            backbone_optimizer(
+                mean_hp.optimizer,
+                max_epochs=mean_hp.schedule.max_epochs,
+                steps_per_epoch=steps_per_epoch,
+            ),
         ),
         train_loader=loader,
         options=SupervisedStageOptions(
@@ -283,6 +377,7 @@ def _variance_stage(
     variance_hp: VarianceHyperparameters,
     keys: BackboneKeys,
     loader: LoaderFactory,
+    steps_per_epoch: int,
     event_sinks: Sequence[EventSink],
     store: CheckpointStore,
 ) -> GammaVarianceStage:
@@ -293,6 +388,7 @@ def _variance_stage(
         variance_hp: Variance-stage hyperparameters.
         keys: The backbone run's keys.
         loader: The backbone run's loader (the residuals' source).
+        steps_per_epoch: Training batches per epoch (the LR decay's epoch length).
         event_sinks: Receive the stage's training events.
         store: Receives the ``variance/best`` checkpoints.
 
@@ -303,7 +399,12 @@ def _variance_stage(
     variance_stage = GammaVarianceStage(
         model=variance_net,
         optimizer=create_optimizer(
-            variance_net, optax.adam(variance_hp.optimizer.learning_rate)
+            variance_net,
+            backbone_optimizer(
+                variance_hp.optimizer,
+                max_epochs=variance_hp.schedule.max_epochs,
+                steps_per_epoch=steps_per_epoch,
+            ),
         ),
         source_loader=loader,
         options=SupervisedStageOptions(
@@ -357,6 +458,7 @@ def train_mean_stage(
             key=keys.loader,
             validation=ValidationSet.BACKBONE,
         ),
+        steps_per_epoch=steps_per_epoch(data, mean_hp.batch_size),
         event_sinks=(TrackerEventSink(tracker), *event_sinks),
         store=store,
     )
@@ -406,9 +508,15 @@ def train_variance_stage(
         key=keys.loader,
         validation=ValidationSet.BACKBONE,
     )
+    n_steps = steps_per_epoch(data, mean_hp.batch_size)
     state = TrainingState()
     mean_stage = _mean_stage(
-        mean_hp=mean_hp, keys=keys, loader=loader, event_sinks=(), store=store
+        mean_hp=mean_hp,
+        keys=keys,
+        loader=loader,
+        steps_per_epoch=n_steps,
+        event_sinks=(),
+        store=store,
     )
     mean_stage.restore(state, mean_checkpoint)
     stage = _variance_stage(
@@ -416,6 +524,7 @@ def train_variance_stage(
         variance_hp=variance_hp,
         keys=keys,
         loader=loader,
+        steps_per_epoch=n_steps,
         event_sinks=(TrackerEventSink(tracker), *event_sinks),
         store=store,
     )

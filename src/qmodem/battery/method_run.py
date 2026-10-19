@@ -97,6 +97,7 @@ from .train import (
     Method,
     VarianceHyperparameters,
     backbone_keys,
+    backbone_optimizer,
     build_mean_net,
     build_variance_net,
 )
@@ -269,6 +270,25 @@ class MethodRun:
         )
 
 
+def _restore_only_optimizer(
+    hp: MeanHyperparameters | VarianceHyperparameters,
+) -> optax.GradientTransformation:
+    """The backbone stage optimizer a restore validates its checkpoint against.
+
+    Only the optimizer state's structure matters: restoring replaces the
+    transformation with the checkpoint's own, so the epoch length is arbitrary.
+
+    Args:
+        hp: The stage's hyperparameters.
+
+    Returns:
+        A transformation with the backbone stage optimizer's state structure.
+    """
+    return backbone_optimizer(
+        hp.optimizer, max_epochs=hp.schedule.max_epochs, steps_per_epoch=1
+    )
+
+
 def _restore_backbone(
     backbone: BackboneHandle, seed: int
 ) -> tuple[TrainingState, MeanNet, VarianceNet]:
@@ -288,9 +308,7 @@ def _restore_backbone(
     mean_net = build_mean_net(network, keys.mean_init)
     MeanStage(
         model=mean_net,
-        optimizer=create_optimizer(
-            mean_net, optax.adam(backbone.mean_hp.optimizer.learning_rate)
-        ),
+        optimizer=create_optimizer(mean_net, _restore_only_optimizer(backbone.mean_hp)),
         train_loader=restore_only_loader,
         options=SupervisedStageOptions(epochs=1, checkpoint_key=MEAN_CHECKPOINT_KEY),
     ).restore(state, backbone.store.load(MEAN_CHECKPOINT_KEY))
@@ -299,7 +317,7 @@ def _restore_backbone(
     GammaVarianceStage(
         model=variance_net,
         optimizer=create_optimizer(
-            variance_net, optax.adam(backbone.variance_hp.optimizer.learning_rate)
+            variance_net, _restore_only_optimizer(backbone.variance_hp)
         ),
         source_loader=restore_only_loader,
         options=SupervisedStageOptions(
