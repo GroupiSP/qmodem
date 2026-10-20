@@ -2967,7 +2967,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "simbat", git = "https://github.com/GroupiSP/simbat.git" },
-    { name = "stagereg", extras = ["jax"], specifier = "==0.2.0" },
+    { name = "stagereg", extras = ["jax"], specifier = "==0.3.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -3355,14 +3355,14 @@ wheels = [
 
 [[package]]
 name = "stagereg"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6b/ea/dc0dfba5f3dec7f60e4db5dbb2fe5ae308f5a37fb1c15a6945b00d85634a/stagereg-0.2.0.tar.gz", hash = "sha256:b20b0a5d51b24d73f1364c288deded9d760cf35e8fafd1b283a1990936b74218", size = 156719, upload-time = "2026-10-15T13:42:55.714Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/66/626ac00e8f28aa149377989debbb8fc7e203d6c8217023dc6609dee39700/stagereg-0.3.0.tar.gz", hash = "sha256:c79dd2270d64d794c8d53e699f4eea36a34ddb01c7dbcececbefcaeb6cd718a2", size = 175768, upload-time = "2026-10-19T18:41:45.474Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/13/64d6db8543ea6886e66459661098b8d8b67a616a0b05a5e9b8d9db2e8373/stagereg-0.2.0-py3-none-any.whl", hash = "sha256:5aa5b47634d42dd3bff649629b3012ae62f817b2d8db0c55461bd7098b062836", size = 88286, upload-time = "2026-10-15T13:42:54.127Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/0f/fc8c0481db84e25c33ff6ef9c1d0af87fa326f60ee2bc635640a9a9c94a7/stagereg-0.3.0-py3-none-any.whl", hash = "sha256:6895065534325ee9754eea4be5bfc49a0d9e80cac0d223a1f782addac0037f89", size = 97431, upload-time = "2026-10-19T18:41:44.058Z" },
 ]
 
 [package.optional-dependencies]
