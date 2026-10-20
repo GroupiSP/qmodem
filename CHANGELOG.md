@@ -21,13 +21,17 @@ qmodem now runs on stagereg `0.3.0` ([#130]).
 
 ### Notes
 
-- Results are statistically equivalent to `0.2.0` runs, not bit-identical. The
-  `stagereg_version` tag (`0.2.0` vs `0.3.0`) tells the runs apart.
+- Results are statistically equivalent to `0.2.0` runs. Bit-identity is not
+  guaranteed, though the smoke-run q-avi, c-avi and pSGLD loss trajectories were
+  bit-identical on the same JAX/Flax ([#132]). The `stagereg_version` tag
+  (`0.2.0` vs `0.3.0`) tells the runs apart.
 - pSGLD is about 30% faster (partial speed-up). Same machine and data (CPU, smoke
   dataset, 300 epochs, epoch 0 excluded), `0.2.0` vs `0.3.0`: burn-in 0.046 vs
   0.032 s/epoch, sampling 1.17 vs 0.83 s/epoch, wall 241 vs 171 s ([#132]).
   Sampling epochs still grow with the number of retained samples
-  ([GroupiSP/stagereg#136]).
+  ([GroupiSP/stagereg#136]). Absolute times are on the small smoke dataset, so
+  they are not comparable to the earlier ≈2.6 s / 6 s per-epoch figures; the
+  ~30% is the same-machine relative gain.
 
 ## [0.2.0] - 2026-10-19
 

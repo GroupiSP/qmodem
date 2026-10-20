@@ -15,7 +15,7 @@ This installs `stagereg[jax]==0.3.0`. Two pins matter:
 | Pin | Why |
 |---|---|
 | `stagereg[jax]==0.3.0` | Exact pin: the posterior stage, early stopper, checkpoint cache and metrics qmodem relies on are those of 0.3.0. Every run records it in the `stagereg_version` tag. |
-| `jax>=0.10,<0.11`, `flax>=0.12.8,<0.12.9` | Caps driven by PennyLane (Q-AVI's quantum latent map), which calls `jax.core.is_concrete`, removed in JAX 0.11 ([PennyLaneAI/pennylane#9930](https://github.com/PennyLaneAI/pennylane/issues/9930)); Flax 0.12.9 requires JAX 0.11. To be lifted once PennyLane supports JAX 0.11. |
+| `jax>=0.10,<0.11`, `flax>=0.12.8,<0.12.9` | Caps driven by PennyLane (Q-AVI's quantum latent map), which calls `jax.core.is_concrete`, removed in JAX 0.11 ([PennyLaneAI/pennylane#9930](https://github.com/PennyLaneAI/pennylane/issues/9930)); Flax 0.12.9 requires JAX 0.11. To be lifted once PennyLane supports JAX 0.11. `flax>=0.12.8` is also the restore-safe minimum: older Flax breaks stagereg's optimizer restore. |
 
 The exact versions installed come from `uv.lock`.
 
