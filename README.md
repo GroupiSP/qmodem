@@ -6,8 +6,6 @@ QMoDeM compares quantum and classical inference methods for uncertainty-aware re
 
 ```bash
 uv sync
-# or, without uv:
-pip install -e .
 ```
 
 This installs `stagereg[jax]==0.3.0`. Two pins matter:
