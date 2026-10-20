@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-20
+
+qmodem now runs on stagereg `0.3.0` ([#130]).
+
+### Changed
+
+- Dependency bumped to `stagereg[jax]==0.3.0` (exact pin).
+- The `jax>=0.10,<0.11` and `flax>=0.12.8,<0.12.9` caps are kept, now driven by
+  PennyLane: PennyLane 0.45.1 calls `jax.core.is_concrete`, removed in JAX 0.11
+  ([PennyLaneAI/pennylane#9930]), and Flax 0.12.9 requires JAX 0.11. The caps will
+  be lifted once PennyLane supports JAX 0.11.
+
+### Notes
+
+- Results are statistically equivalent to `0.2.0` runs, not bit-identical. The
+  `stagereg_version` tag (`0.2.0` vs `0.3.0`) tells the runs apart.
+- pSGLD is about 30% faster (partial speed-up). Same machine and data (CPU, smoke
+  dataset, 300 epochs, epoch 0 excluded), `0.2.0` vs `0.3.0`: burn-in 0.046 vs
+  0.032 s/epoch, sampling 1.17 vs 0.83 s/epoch, wall 241 vs 171 s ([#132]).
+  Sampling epochs still grow with the number of retained samples
+  ([GroupiSP/stagereg#136]).
+
 ## [0.2.0] - 2026-10-19
 
 qmodem now runs on [stagereg](https://pypi.org/project/stagereg/) `0.2.0` and
@@ -82,9 +104,14 @@ longer be loaded or selected ([#103], [#118]).
 
 Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 
-[Unreleased]: https://github.com/GroupiSP/qmodem/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/GroupiSP/qmodem/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/GroupiSP/qmodem/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/GroupiSP/qmodem/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GroupiSP/qmodem/releases/tag/v0.1.0
 [#98]: https://github.com/GroupiSP/qmodem/issues/98
 [#103]: https://github.com/GroupiSP/qmodem/issues/103
 [#118]: https://github.com/GroupiSP/qmodem/pull/118
+[#130]: https://github.com/GroupiSP/qmodem/issues/130
+[#132]: https://github.com/GroupiSP/qmodem/issues/132
+[PennyLaneAI/pennylane#9930]: https://github.com/PennyLaneAI/pennylane/issues/9930
+[GroupiSP/stagereg#136]: https://github.com/GroupiSP/stagereg/issues/136

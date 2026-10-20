@@ -10,13 +10,14 @@ uv sync
 pip install -e .
 ```
 
-This installs `stagereg[jax]==0.2.0` together with a pinned JAX/Flax window:
+This installs `stagereg[jax]==0.3.0`. Two pins matter:
 
 | Pin | Why |
 |---|---|
-| `stagereg[jax]==0.2.0` | The posterior stage, early stopper, checkpoint cache and metrics qmodem relies on are those of 0.2.0. |
-| `jax>=0.10,<0.11` | PennyLane (Q-AVI's quantum latent map) breaks on JAX 0.11. |
-| `flax>=0.12.8,<0.12.9` | The tested Flax release for stagereg 0.2.0. Older Flax breaks stagereg's optimizer restore (this is why `jax-ai-stack`, which pins Flax 0.12.0, is no longer a dependency). |
+| `stagereg[jax]==0.3.0` | Exact pin: the posterior stage, early stopper, checkpoint cache and metrics qmodem relies on are those of 0.3.0. Every run records it in the `stagereg_version` tag. |
+| `jax>=0.10,<0.11`, `flax>=0.12.8,<0.12.9` | Caps driven by PennyLane (Q-AVI's quantum latent map), which calls `jax.core.is_concrete`, removed in JAX 0.11 ([PennyLaneAI/pennylane#9930](https://github.com/PennyLaneAI/pennylane/issues/9930)); Flax 0.12.9 requires JAX 0.11. To be lifted once PennyLane supports JAX 0.11. |
+
+The exact versions installed come from `uv.lock`.
 
 ## Configuration (`.env`)
 
