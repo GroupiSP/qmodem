@@ -50,7 +50,7 @@ SYNTHETIC_VAL_LENGTHS: tuple[int, ...] = (25, 19)
 class InMemoryTracker:
     """In-memory ``ExperimentTracker`` and ``EventSink`` test double.
 
-    stagereg 0.2.0 ships no in-memory tracker, so qmodem keeps its own copy of
+    stagereg 0.3.0 ships no in-memory tracker, so qmodem keeps its own copy of
     the one in stagereg's test suite.
 
     Attributes:

@@ -1,6 +1,6 @@
 [project]
 name = "qmodem"
-version = "0.2.0"
+version = "0.2.1"
 description = "QMoDeM: Quantum-aided Models for Decision Making."
 readme = "README.md"
 authors = [
@@ -9,6 +9,8 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "cloudpickle>=3.1.2",
+    # flax/jax caps are PennyLane-driven: PennyLane calls jax.core.is_concrete,
+    # removed in JAX 0.11 (PennyLaneAI/pennylane#9930).
     "flax>=0.12.8,<0.12.9",
     "jaxtyping>=0.3.0",
     "jax>=0.10,<0.11",
@@ -23,7 +25,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "scikit-learn>=1.8.0",
     "simbat",
-    "stagereg[jax]==0.2.0",
+    "stagereg[jax]==0.3.0",
 ]
 
 [build-system]

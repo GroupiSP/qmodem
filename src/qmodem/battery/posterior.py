@@ -231,7 +231,7 @@ class _FixedKeyPosterior:
 class FixedDrawKeyMethod:
     """An inference method whose posterior is always drawn with one fixed key.
 
-    stagereg 0.2.0's posterior stage re-splits the validation draw key from the
+    stagereg 0.3.0's posterior stage re-splits the validation draw key from the
     training state every epoch. Wrapping the method makes every epoch's
     validation (and the HPO pruner's value) score the same draws of the current
     posterior. Training is delegated unchanged. Unwrap with ``.method`` for any
