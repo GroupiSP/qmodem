@@ -575,9 +575,8 @@ def _log_validation_baseline(
 ) -> None:
     """Log the warm-started posterior's validation criterion before epoch 0.
 
-    The score uses the stage's fixed draw and sample keys and
-    ``PREDICTIVE_SAMPLE_COUNT`` draws, as every epoch does, and leaves the
-    training state's key untouched. A method without a posterior before its
+    The score uses the stage's validation key and ``PREDICTIVE_SAMPLE_COUNT``
+    draws, as every epoch does, and leaves the training state's key untouched. A method without a posterior before its
     first update (pSGLD) is scored at its warm start, the backbone mean. The
     baseline is diagnostic only: neither the early stopper, checkpoint selection
     nor HPO sees it.
@@ -593,11 +592,11 @@ def _log_validation_baseline(
         run, posterior=method.posterior() if method.has_posterior else None
     )
     baseline = validation_crps(
-        lambda inputs: warm_start.predictive(
-            inputs, keys.validation_draws, PREDICTIVE_SAMPLE_COUNT
+        lambda inputs, draw_key: warm_start.predictive(
+            inputs, draw_key, PREDICTIVE_SAMPLE_COUNT
         ),
         loader,
-        keys.validation_samples,
+        keys.validation,
     )
     tracker.log_metrics({VAL_CRPS_BASELINE: baseline}, step=0)
 
