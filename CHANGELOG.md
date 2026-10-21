@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
+qmodem now runs on stagereg `0.4.0` ([#135]).
+
 ### Changed
 
 - Disjoint backbone and posterior validation sets, with fixed per-split policy
@@ -16,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The pickled test simulation config keeps the 70/30 Bernoulli policy prior only
   for the evaluation reference band; the histories use fixed policy counts
   ([#121]).
+- Dependency bumped to `stagereg[jax]==0.4.0`. The posterior stage now validates
+  under stagereg's `validation_key`, one per method run (ADR 0002), on the
+  compiled path; qmodem's fixed-key wrappers are gone ([#135]).
+- Posterior validation metrics, early-stopping decisions and posterior training
+  randomness differ from older runs: validation keys each batch's predictive
+  samples separately and no longer advances the run's key. Posterior HPO studies
+  and method runs must be rerun; backbone runs are unaffected ([#135]).
+- `cost/posterior/draws_per_second` now times the jit-compiled draw function and
+  reports the median of 5 calls (was one eager call), so it is higher and not
+  comparable with older runs ([#135]).
 
 ## [0.2.1] - 2026-10-20
 
@@ -118,7 +132,8 @@ longer be loaded or selected ([#103], [#118]).
 
 Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 
-[Unreleased]: https://github.com/GroupiSP/qmodem/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/GroupiSP/qmodem/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/GroupiSP/qmodem/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/GroupiSP/qmodem/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/GroupiSP/qmodem/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GroupiSP/qmodem/releases/tag/v0.1.0
@@ -128,5 +143,6 @@ Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 [#121]: https://github.com/GroupiSP/qmodem/issues/121
 [#130]: https://github.com/GroupiSP/qmodem/issues/130
 [#132]: https://github.com/GroupiSP/qmodem/issues/132
+[#135]: https://github.com/GroupiSP/qmodem/issues/135
 [PennyLaneAI/pennylane#9930]: https://github.com/PennyLaneAI/pennylane/issues/9930
 [GroupiSP/stagereg#136]: https://github.com/GroupiSP/stagereg/issues/136

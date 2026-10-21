@@ -7,8 +7,8 @@ for MCD, the posterior network) differs. This module owns what is shared:
 - the inferred subnetwork (the whole conv layer, ``INFERRED_SUBNETWORK``),
 - the prior ``IsotropicGaussianPrior(precision=1.0)``,
 - the validation criterion: mean sample CRPS of the posterior predictive over
-  ``PREDICTIVE_SAMPLE_COUNT`` draws, with fixed draw and sample keys
-  (``validation_metrics``, ``FixedDrawKeyMethod``, ``FixedKeyPredictor``),
+  ``PREDICTIVE_SAMPLE_COUNT`` draws, under one validation key per method run
+  (``validation_metrics``, ``PosteriorKeys.validation``, ADR 0002),
 - early stopping on validation CRPS (``posterior_early_stopper``),
 - the stage schedule, batch size and dataset size (``PosteriorStageHyperparameters``),
 - the per-method plug-in (``PosteriorSpec``) and the stage builder
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -28,10 +29,8 @@ import jax
 from flax import nnx
 from pydantic import BaseModel, ConfigDict, Field
 from stagereg.core import (
-    Batch,
     CheckpointStore,
     EarlyStopper,
-    EpochPredictionData,
     EventSink,
     ExperimentTracker,
     IntervalCoverage,
@@ -45,14 +44,10 @@ from stagereg.jax import (
     InferenceMethod,
     IsotropicGaussianPrior,
     MetricSuite,
-    Posterior,
     PosteriorPredictive,
     PosteriorPredictivePredictor,
-    PosteriorProblem,
     PosteriorStage,
     PosteriorStageOptions,
-    PredictionRequirements,
-    Predictor,
 )
 from stagereg.jax.metrics import reduce_metric_suite
 
@@ -98,6 +93,8 @@ Diagnostic only: it never feeds the early stopper, checkpoint selection or HPO.
 COST_WALL_CLOCK = "cost/posterior/wall_clock_seconds"
 COST_TRAINABLE_PARAMETERS = "cost/posterior/trainable_parameters"
 COST_DRAWS_PER_SECOND = "cost/posterior/draws_per_second"
+DRAWS_PER_SECOND_REPEATS = 5
+"""Timed calls of the draws-per-second probe; it reports their median."""
 COST_SCAFFOLDING_PARAMETERS = "cost/posterior/scaffolding_parameters"
 """Parameters trained only to fit the posterior, not part of it (AVI's discriminator);
 logged only by methods that have any."""
@@ -178,15 +175,14 @@ class PosteriorKeys:
         network: Initializes the posterior network (its Params are then
             overwritten by the mean's; only non-Param state keeps it).
         loader: Shuffles the training windows.
-        validation_draws: The fixed key of the validation draws.
-        validation_samples: The fixed key of the validation predictive samples.
+        validation: The fixed key of every validation (stagereg's
+            ``PosteriorStageOptions.validation_key``), see ADR 0002.
     """
 
     init: jax.Array
     network: jax.Array
     loader: jax.Array
-    validation_draws: jax.Array
-    validation_samples: jax.Array
+    validation: jax.Array
 
     @classmethod
     def of(cls, method_key: jax.Array) -> PosteriorKeys:
@@ -198,186 +194,23 @@ class PosteriorKeys:
         Returns:
             The posterior-stage keys.
         """
-        validation = jax.random.fold_in(method_key, _VALIDATION_STREAM)
         return cls(
             init=jax.random.fold_in(method_key, _INIT_STREAM),
             network=jax.random.fold_in(method_key, _NETWORK_STREAM),
             loader=jax.random.fold_in(method_key, _LOADER_STREAM),
-            validation_draws=jax.random.fold_in(validation, 0),
-            validation_samples=jax.random.fold_in(validation, 1),
+            validation=jax.random.fold_in(method_key, _VALIDATION_STREAM),
         )
 
 
-# --- fixed validation keys ---------------------------------------------------------
+# --- validation ------------------------------------------------------------------
 
 
-@dataclasses.dataclass(frozen=True)
-class _FixedKeyPosterior:
-    """A posterior whose draws ignore the key they are asked for."""
-
-    posterior: Posterior
-    key: jax.Array
-
-    @property
-    def num_draws(self) -> int | None:
-        """The wrapped posterior's number of draws."""
-        return self.posterior.num_draws
-
-    def sample_means(
-        self, inputs: PyTree, key: jax.Array, num_samples: int | None = None
-    ) -> jax.Array:
-        """Draw the wrapped posterior's means under the fixed key.
-
-        Args:
-            inputs: Model inputs with a leading batch dimension.
-            key: Ignored.
-            num_samples: The number of draws.
-
-        Returns:
-            The draws' mean predictions ``[S, *batch]``.
-        """
-        del key
-        return self.posterior.sample_means(inputs, self.key, num_samples)
-
-
-@dataclasses.dataclass(frozen=True)
-class FixedDrawKeyMethod:
-    """An inference method whose posterior is always drawn with one fixed key.
-
-    stagereg 0.3.0's posterior stage re-splits the validation draw key from the
-    training state every epoch. Wrapping the method makes every epoch's
-    validation (and the HPO pruner's value) score the same draws of the current
-    posterior. Training is delegated unchanged. Unwrap with ``.method`` for any
-    use other than the stage's validation.
-
-    Attributes:
-        method: The wrapped inference method.
-        draw_key: The fixed draw key.
-    """
-
-    method: InferenceMethod
-    draw_key: jax.Array
-
-    @property
-    def supports_early_stopping(self) -> bool:
-        """Whether the wrapped method supports early stopping."""
-        return self.method.supports_early_stopping
-
-    @property
-    def diagnostics(self) -> tuple[str, ...]:
-        """The wrapped method's training diagnostics."""
-        return self.method.diagnostics
-
-    @property
-    def has_posterior(self) -> bool:
-        """Whether the wrapped method has a posterior yet."""
-        return self.method.has_posterior
-
-    def init(self, problem: PosteriorProblem) -> None:
-        """Initialize the wrapped method.
-
-        Args:
-            problem: The posterior problem.
-        """
-        self.method.init(problem)
-
-    def update(self, batch: Batch, key: jax.Array) -> Mapping[str, Any]:
-        """Update the wrapped method on one batch.
-
-        Args:
-            batch: A training batch.
-            key: The update key.
-
-        Returns:
-            The wrapped method's loss and diagnostics.
-        """
-        return self.method.update(batch, key)
-
-    def posterior(self) -> Posterior:
-        """Return the wrapped posterior, drawn with the fixed key.
-
-        Returns:
-            The fixed-key posterior.
-        """
-        return _FixedKeyPosterior(self.method.posterior(), self.draw_key)
-
-    def state(self) -> PyTree:
-        """Return the wrapped method's full state.
-
-        Returns:
-            The state.
-        """
-        return self.method.state()
-
-    def load_state(self, state: PyTree) -> None:
-        """Load the wrapped method's full state.
-
-        Args:
-            state: A state returned by ``state``.
-        """
-        self.method.load_state(state)
-
-    def posterior_state(self) -> PyTree:
-        """Return the wrapped method's posterior state.
-
-        Returns:
-            The posterior state.
-        """
-        return self.method.posterior_state()
-
-    def load_posterior(self, state: PyTree) -> None:
-        """Load the wrapped method's posterior state.
-
-        Args:
-            state: A state returned by ``posterior_state``.
-        """
-        self.method.load_posterior(state)
-
-
-@dataclasses.dataclass(frozen=True)
-class FixedKeyPredictor:
-    """A predictor that always samples its predictive samples with one fixed key.
-
-    Attributes:
-        predictor: The wrapped predictor.
-        key: The fixed key.
-    """
-
-    predictor: Predictor
-    key: jax.Array
-
-    def __call__(
-        self,
-        model: nnx.Module,
-        batch: Batch,
-        requirements: PredictionRequirements,
-        key: jax.Array,
-        /,
-    ) -> EpochPredictionData:
-        """Materialize the wrapped predictor's data under the fixed key.
-
-        Args:
-            model: The model returning a posterior predictive.
-            batch: A validation batch.
-            requirements: The metrics' requirements.
-            key: Ignored.
-
-        Returns:
-            The epoch prediction data.
-        """
-        del key
-        return self.predictor(model, batch, requirements, self.key)
-
-
-def validation_metrics(sample_key: jax.Array) -> MetricSuite:
+def validation_metrics() -> MetricSuite:
     """Return the shared validation metric suite of every posterior stage.
 
     CRPS is the criterion; NLL, RMSE and the 95% coverage are diagnostics. Each
     epoch scores ``PREDICTIVE_SAMPLE_COUNT`` mixture samples of the posterior
-    predictive, sampled with ``sample_key``.
-
-    Args:
-        sample_key: The fixed key of the predictive samples.
+    predictive; stagereg keys them per batch from the stage's validation key.
 
     Returns:
         The metric suite.
@@ -391,27 +224,28 @@ def validation_metrics(sample_key: jax.Array) -> MetricSuite:
                 level=PRIMARY_COVERAGE_LEVEL, name=coverage_key(PRIMARY_COVERAGE_LEVEL)
             ),
         ),
-        predictor=FixedKeyPredictor(PosteriorPredictivePredictor(), sample_key),
+        predictor=PosteriorPredictivePredictor(),
         predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
     )
 
 
 def validation_crps(
-    predictive: Callable[[PyTree], PosteriorPredictive],
+    predictive: Callable[[PyTree, jax.Array], PosteriorPredictive],
     loader: LoaderFactory,
-    sample_key: jax.Array,
+    validation_key: jax.Array,
 ) -> float:
     """Score the validation criterion of a posterior predictive once.
 
-    The score is the one every posterior epoch reports
-    (``validation_metrics(sample_key)`` over the loader's ``"validation"``
-    batches), for a predictive whose draws are already fixed.
+    The score is the one every posterior epoch reports: it derives its keys from
+    ``validation_key`` exactly as stagereg's posterior validation does (``split``
+    into a draw key and a metric key, then ``fold_in(metric_key, batch_index)``),
+    and scores ``validation_metrics()`` over the loader's ``"validation"`` batches.
 
     Args:
-        predictive: Maps validation inputs to the posterior predictive, drawn
-            with the stage's fixed draw key and ``PREDICTIVE_SAMPLE_COUNT``.
+        predictive: Maps validation inputs and the draw key to the posterior
+            predictive with ``PREDICTIVE_SAMPLE_COUNT`` draws.
         loader: The posterior stage's loader.
-        sample_key: The fixed key of the validation predictive samples.
+        validation_key: The stage's validation key (``PosteriorKeys.validation``).
 
     Returns:
         The validation CRPS.
@@ -419,13 +253,19 @@ def validation_crps(
     Raises:
         RuntimeError: If the validation metric suite has no predictor.
     """
-    suite = validation_metrics(sample_key)
+    suite = validation_metrics()
     predictor = suite.predictor
     if predictor is None:
         raise RuntimeError("The validation metric suite has no predictor.")
+    draw_key, metric_key = jax.random.split(validation_key)
     parts = [
-        predictor(predictive, batch, suite.prediction_requirements, sample_key)
-        for batch in loader(split="validation", epoch=0)
+        predictor(
+            lambda inputs: predictive(inputs, draw_key),
+            batch,
+            suite.prediction_requirements,
+            jax.random.fold_in(metric_key, index),
+        )
+        for index, batch in enumerate(loader(split="validation", epoch=0))
     ]
     metrics = reduce_metric_suite(
         suite=suite, losses=None, batch_metric_values={}, epoch_metric_parts=parts
@@ -498,14 +338,15 @@ def build_posterior_stage(
     """
     training = loader is not None
     return PosteriorStage(
-        inference_method=FixedDrawKeyMethod(method, keys.validation_draws),
+        inference_method=method,
         train_loader=loader if training else restore_only_loader,
         dataset_size=dataset_size if training and dataset_size is not None else 1,
         options=PosteriorStageOptions(
             epochs=spec.stage.max_epochs,
             num_draws=PREDICTIVE_SAMPLE_COUNT,
             validation_loader=loader,
-            validation_metrics=validation_metrics(keys.validation_samples),
+            validation_metrics=validation_metrics(),
+            validation_key=keys.validation,
             early_stopper=(
                 posterior_early_stopper(spec.stage) if spec.early_stopping else None
             ),
@@ -558,20 +399,49 @@ def parameter_count(tree: PyTree) -> int:
     return sum(math.prod(leaf.shape) for leaf in jax.tree.leaves(tree))
 
 
-def draws_per_second(draw: Callable[[], jax.Array], num_draws: int) -> float:
-    """Measure the throughput of a draw function after one warm-up call.
+def draws_per_second(
+    draw: Callable[[jax.Array, jax.Array], jax.Array],
+    inputs: jax.Array,
+    key: jax.Array,
+    num_draws: int,
+    repeats: int = DRAWS_PER_SECOND_REPEATS,
+    clock: Callable[[], float] = time.perf_counter,
+) -> float:
+    """Measure the compiled throughput of a draw function.
+
+    ``draw`` is first called eagerly, which materializes any posterior state
+    cached on first use (pSGLD's retained samples) outside a trace. It is then
+    compiled with ``jax.jit``, called once to compile and timed over ``repeats``
+    calls. The median call time is robust to the large spread of single timed
+    calls (#135). ``inputs`` and ``key`` are runtime arguments of the compiled
+    function, so XLA cannot fold the draws into a compile-time constant.
 
     Args:
-        draw: Takes ``num_draws`` draws and returns them.
+        draw: Takes ``num_draws`` draws at ``(inputs, key)`` and returns them.
+            Must be jittable.
+        inputs: The inputs of the draws.
+        key: The key of the draws.
         num_draws: The number of draws one call takes.
+        repeats: The number of timed calls, positive.
+        clock: Returns the current time in seconds.
 
     Returns:
-        Draws per second of the second call.
+        Draws per second of the median timed call.
+
+    Raises:
+        ValueError: If ``repeats`` is not positive.
     """
-    jax.block_until_ready(draw())  # compile
-    start = time.perf_counter()
-    jax.block_until_ready(draw())
-    return num_draws / max(time.perf_counter() - start, 1e-9)
+    if repeats <= 0:
+        raise ValueError("repeats must be positive.")
+    jax.block_until_ready(draw(inputs, key))  # materialize cached state
+    compiled = jax.jit(draw)
+    jax.block_until_ready(compiled(inputs, key))  # compile
+    seconds = []
+    for _ in range(repeats):
+        start = clock()
+        jax.block_until_ready(compiled(inputs, key))
+        seconds.append(clock() - start)
+    return num_draws / max(statistics.median(seconds), 1e-9)
 
 
 @dataclasses.dataclass

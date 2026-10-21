@@ -1,23 +1,21 @@
-"""The shared posterior stage: fixed validation keys and the stage's plug-in pieces."""
+"""The shared posterior stage: its keys and plug-in pieces."""
 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
-from typing import Any
+import itertools
+import statistics
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from stagereg.core import Batch
-from stagereg.jax import PosteriorProblem
 
 from qmodem.battery.posterior import (
-    FixedDrawKeyMethod,
-    FixedKeyPredictor,
     PosteriorKeys,
+    draws_per_second,
     parameter_count,
     posterior_loader,
 )
@@ -36,100 +34,6 @@ def test_the_posterior_stage_validates_on_the_posterior_validation_set(
     )
     np.testing.assert_array_equal(
         np.asarray(batch.targets), np.asarray(data.posterior_val.targets)
-    )
-
-
-@dataclasses.dataclass(frozen=True)
-class _KeyedPosterior:
-    """Draw ``s`` is a constant that depends on the key: ``uniform(fold_in(key,
-    s))``."""
-
-    @property
-    def num_draws(self) -> int | None:
-        return None
-
-    def sample_means(
-        self, inputs: jax.Array, key: jax.Array, num_samples: int | None = None
-    ) -> jax.Array:
-        offsets = jax.vmap(lambda s: jax.random.uniform(jax.random.fold_in(key, s)))(
-            jnp.arange(num_samples)
-        )
-        return offsets[:, None, None] + jnp.zeros((1, inputs.shape[0], 1))
-
-
-class _StubMethod:
-    supports_early_stopping = True
-    diagnostics = ("spread",)
-    has_posterior = True
-
-    def __init__(self) -> None:
-        self.updates: list[Batch] = []
-
-    def init(self, problem: PosteriorProblem) -> None:
-        del problem
-
-    def update(self, batch: Batch, key: jax.Array) -> Mapping[str, Any]:
-        self.updates.append(batch)
-        return {"loss": 1.0, "spread": 2.0}
-
-    def posterior(self) -> _KeyedPosterior:
-        return _KeyedPosterior()
-
-    def state(self) -> Any:
-        return {"full": 1}
-
-    def load_state(self, state: Any) -> None:
-        del state
-
-    def posterior_state(self) -> Any:
-        return {"posterior": 1}
-
-    def load_posterior(self, state: Any) -> None:
-        del state
-
-
-INPUTS = jnp.zeros((3, 10, 2))
-
-
-@settings(max_examples=20, deadline=None)
-@given(asked=st.integers(0, 2**31 - 1), fixed=st.integers(0, 2**31 - 1))
-def test_a_fixed_draw_key_method_draws_the_same_whatever_key_is_asked(
-    asked: int, fixed: int
-) -> None:
-    method = _StubMethod()
-    wrapped = FixedDrawKeyMethod(method, jax.random.key(fixed))
-
-    np.testing.assert_array_equal(
-        wrapped.posterior().sample_means(INPUTS, jax.random.key(asked), 5),
-        method.posterior().sample_means(INPUTS, jax.random.key(fixed), 5),
-    )
-
-
-def test_a_fixed_draw_key_method_trains_and_checkpoints_like_the_wrapped_one() -> None:
-    method = _StubMethod()
-    wrapped = FixedDrawKeyMethod(method, jax.random.key(0))
-    batch = Batch(inputs=INPUTS)
-
-    assert wrapped.update(batch, jax.random.key(1)) == {"loss": 1.0, "spread": 2.0}
-    assert method.updates == [batch]
-    assert wrapped.state() == method.state()
-    assert wrapped.posterior_state() == method.posterior_state()
-    assert wrapped.diagnostics == method.diagnostics
-    assert wrapped.supports_early_stopping and wrapped.has_posterior
-
-
-@given(asked=st.integers(0, 2**31 - 1))
-def test_a_fixed_key_predictor_passes_its_own_key(asked: int) -> None:
-    received = []
-    predictor = FixedKeyPredictor(
-        lambda model, batch, requirements, key: received.append(key),
-        jax.random.key(7),
-    )
-
-    predictor(None, Batch(inputs=INPUTS), None, jax.random.key(asked))
-
-    assert jax.random.key_data(received[0]).tolist() == (
-        jax.random.key_data(jax.random.key(7)).tolist()
     )
 
 
@@ -158,3 +62,71 @@ def test_the_parameter_count_is_the_number_of_entries(shapes: list[list[int]]) -
     tree = {str(i): jnp.zeros(shape) for i, shape in enumerate(shapes)}
 
     assert parameter_count(tree) == sum(int(np.prod(shape)) for shape in shapes)
+
+
+def _draw(inputs: jax.Array, key: jax.Array) -> jax.Array:
+    return inputs + jax.random.normal(key, inputs.shape)
+
+
+_INPUTS = jnp.zeros(1)
+_KEY = jax.random.key(0)
+
+
+def _clock(durations: list[float]):
+    """A clock whose consecutive (start, end) readings span ``durations``."""
+    readings = itertools.chain.from_iterable(
+        (float(i), i + duration) for i, duration in enumerate(durations)
+    )
+    return lambda: next(readings)
+
+
+@settings(deadline=None)  # the first example compiles the draw
+@given(
+    durations=st.lists(st.floats(1e-3, 1e3), min_size=1, max_size=9),
+    num_draws=st.integers(1, 1000),
+)
+def test_draws_per_second_is_the_draws_over_the_median_call_time(
+    durations: list[float], num_draws: int
+) -> None:
+    rate = draws_per_second(
+        _draw,
+        _INPUTS,
+        _KEY,
+        num_draws,
+        repeats=len(durations),
+        clock=_clock(durations),
+    )
+
+    assert rate == pytest.approx(num_draws / statistics.median(durations))
+
+
+@settings(deadline=None)
+@given(outlier=st.floats(1e-3, 1e3))
+def test_draws_per_second_ignores_one_outlying_call(outlier: float) -> None:
+    durations = [1.0, 1.0, outlier]
+
+    rate = draws_per_second(
+        _draw, _INPUTS, _KEY, 10, repeats=3, clock=_clock(durations)
+    )
+
+    assert rate == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize("repeats", [0, -1])
+def test_draws_per_second_needs_a_positive_repeat_count(repeats: int) -> None:
+    with pytest.raises(ValueError, match="repeats"):
+        draws_per_second(_draw, _INPUTS, _KEY, 1, repeats=repeats)
+
+
+def test_draws_per_second_passes_inputs_and_key_at_runtime() -> None:
+    traced = []
+
+    def draw(inputs: jax.Array, key: jax.Array) -> jax.Array:
+        traced.append(
+            isinstance(inputs, jax.core.Tracer) and isinstance(key, jax.core.Tracer)
+        )
+        return _draw(inputs, key)
+
+    draws_per_second(draw, _INPUTS, _KEY, 1, repeats=1)
+
+    assert traced == [False, True]  # one eager call, one trace

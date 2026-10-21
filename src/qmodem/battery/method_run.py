@@ -375,15 +375,17 @@ def _cost(
     Returns:
         The cost, with the draws per second of ``PREDICTIVE_SAMPLE_COUNT`` draws.
     """
-    inputs = _posterior_validation_inputs(data)
-    key = run.evaluation_key
     finite_draws = None if run.posterior is None else run.posterior.num_draws
     return PosteriorCost(
         wall_clock_seconds=wall_clock_seconds,
         trainable_parameters=trainable_parameters,
         scaffolding_parameters=scaffolding_parameters,
         draws_per_second=draws_per_second(
-            lambda: run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT).draws,
+            lambda inputs, key: run.predictive(
+                inputs, key, PREDICTIVE_SAMPLE_COUNT
+            ).draws,
+            _posterior_validation_inputs(data),
+            run.evaluation_key,
             finite_draws or PREDICTIVE_SAMPLE_COUNT,
         ),
     )
@@ -575,12 +577,11 @@ def _log_validation_baseline(
 ) -> None:
     """Log the warm-started posterior's validation criterion before epoch 0.
 
-    The score uses the stage's fixed draw and sample keys and
-    ``PREDICTIVE_SAMPLE_COUNT`` draws, as every epoch does, and leaves the
-    training state's key untouched. A method without a posterior before its
-    first update (pSGLD) is scored at its warm start, the backbone mean. The
-    baseline is diagnostic only: neither the early stopper, checkpoint selection
-    nor HPO sees it.
+    The score uses the stage's validation key and ``PREDICTIVE_SAMPLE_COUNT``
+    draws, as every epoch does, and leaves the training state's key untouched. A
+    method without a posterior before its first update (pSGLD) is scored at its
+    warm start, the backbone mean. The baseline is diagnostic only: neither the
+    early stopper, checkpoint selection nor HPO sees it.
 
     Args:
         run: The method run without posterior (backbone restored).
@@ -593,11 +594,11 @@ def _log_validation_baseline(
         run, posterior=method.posterior() if method.has_posterior else None
     )
     baseline = validation_crps(
-        lambda inputs: warm_start.predictive(
-            inputs, keys.validation_draws, PREDICTIVE_SAMPLE_COUNT
+        lambda inputs, draw_key: warm_start.predictive(
+            inputs, draw_key, PREDICTIVE_SAMPLE_COUNT
         ),
         loader,
-        keys.validation_samples,
+        keys.validation,
     )
     tracker.log_metrics({VAL_CRPS_BASELINE: baseline}, step=0)
 
