@@ -576,10 +576,10 @@ def _log_validation_baseline(
     """Log the warm-started posterior's validation criterion before epoch 0.
 
     The score uses the stage's validation key and ``PREDICTIVE_SAMPLE_COUNT``
-    draws, as every epoch does, and leaves the training state's key untouched. A method without a posterior before its
-    first update (pSGLD) is scored at its warm start, the backbone mean. The
-    baseline is diagnostic only: neither the early stopper, checkpoint selection
-    nor HPO sees it.
+    draws, as every epoch does, and leaves the training state's key untouched. A
+    method without a posterior before its first update (pSGLD) is scored at its
+    warm start, the backbone mean. The baseline is diagnostic only: neither the
+    early stopper, checkpoint selection nor HPO sees it.
 
     Args:
         run: The method run without posterior (backbone restored).
