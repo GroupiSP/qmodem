@@ -89,3 +89,39 @@ _Avoid_: Variant, baseline
 **Sensitivity arm**:
 An optional set of method runs that changes one setting of the posterior problem shared by all methods, reported against the primary setting.
 _Avoid_: Ablation (an ablation changes a method, not the shared problem)
+
+## Outputs
+
+The reported results of the comparison protocol, named by a fixed ID. T1, T2, F1 and F2 are the primary results.
+
+**T1**:
+The ranking table: RMSE, CRPS, coverage@0.95 and WSU per core method (mean ± std across protocol seeds), overall and per policy.
+_Avoid_: Results table, main table
+
+**T2**:
+The paired-difference table: each method's per-seed difference to BBB and to HNN, with a bootstrap confidence interval over protocol seeds; ablation and sensitivity arms appear here, one row each.
+_Avoid_: Delta table, significance table
+
+**T3**:
+The cost table: the posterior stage's wall-clock time, trainable parameter count and posterior draws per second, per method.
+_Avoid_: Timing table, runtime table
+
+**F1**:
+The reliability figure: empirical against nominal coverage of the predictive intervals at levels 0.5 to 0.95, per method.
+_Avoid_: Calibration plot
+
+**F2**:
+The variance-decomposition figure: epistemic and aleatoric variance over initial state of charge, per method, on the representative case of each current policy.
+_Avoid_: Uncertainty plot
+
+**F3**:
+The per-case figure: CRPS of every test case for every method, grouped by policy.
+_Avoid_: Per-trajectory bars
+
+**F4**:
+The RUL-band figure: each method's 95% predictive band against the simulator's reference band, on the representative case of each current policy.
+_Avoid_: RUL plot, prediction plot
+
+**Representative case**:
+For one current policy, the test case whose HNN CRPS is the median among that policy's test cases at protocol seed 0, fixed before any method results are seen.
+_Avoid_: Example case, typical trajectory
