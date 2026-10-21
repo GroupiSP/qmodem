@@ -400,7 +400,9 @@ def parameter_count(tree: PyTree) -> int:
 
 
 def draws_per_second(
-    draw: Callable[[], jax.Array],
+    draw: Callable[[jax.Array, jax.Array], jax.Array],
+    inputs: jax.Array,
+    key: jax.Array,
     num_draws: int,
     repeats: int = DRAWS_PER_SECOND_REPEATS,
     clock: Callable[[], float] = time.perf_counter,
@@ -411,10 +413,14 @@ def draws_per_second(
     cached on first use (pSGLD's retained samples) outside a trace. It is then
     compiled with ``jax.jit``, called once to compile and timed over ``repeats``
     calls. The median call time is robust to the large spread of single timed
-    calls (#135).
+    calls (#135). ``inputs`` and ``key`` are runtime arguments of the compiled
+    function, so XLA cannot fold the draws into a compile-time constant.
 
     Args:
-        draw: Takes ``num_draws`` draws and returns them. Must be jittable.
+        draw: Takes ``num_draws`` draws at ``(inputs, key)`` and returns them.
+            Must be jittable.
+        inputs: The inputs of the draws.
+        key: The key of the draws.
         num_draws: The number of draws one call takes.
         repeats: The number of timed calls, positive.
         clock: Returns the current time in seconds.
@@ -427,13 +433,13 @@ def draws_per_second(
     """
     if repeats <= 0:
         raise ValueError("repeats must be positive.")
-    jax.block_until_ready(draw())  # materialize cached state
+    jax.block_until_ready(draw(inputs, key))  # materialize cached state
     compiled = jax.jit(draw)
-    jax.block_until_ready(compiled())  # compile
+    jax.block_until_ready(compiled(inputs, key))  # compile
     seconds = []
     for _ in range(repeats):
         start = clock()
-        jax.block_until_ready(compiled())
+        jax.block_until_ready(compiled(inputs, key))
         seconds.append(clock() - start)
     return num_draws / max(statistics.median(seconds), 1e-9)
 

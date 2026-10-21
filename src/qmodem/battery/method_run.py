@@ -375,15 +375,17 @@ def _cost(
     Returns:
         The cost, with the draws per second of ``PREDICTIVE_SAMPLE_COUNT`` draws.
     """
-    inputs = _posterior_validation_inputs(data)
-    key = run.evaluation_key
     finite_draws = None if run.posterior is None else run.posterior.num_draws
     return PosteriorCost(
         wall_clock_seconds=wall_clock_seconds,
         trainable_parameters=trainable_parameters,
         scaffolding_parameters=scaffolding_parameters,
         draws_per_second=draws_per_second(
-            lambda: run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT).draws,
+            lambda inputs, key: run.predictive(
+                inputs, key, PREDICTIVE_SAMPLE_COUNT
+            ).draws,
+            _posterior_validation_inputs(data),
+            run.evaluation_key,
             finite_draws or PREDICTIVE_SAMPLE_COUNT,
         ),
     )
