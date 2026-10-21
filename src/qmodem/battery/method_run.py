@@ -528,14 +528,17 @@ def _train_posterior(
         event_sinks=(TrackerEventSink(tracker), timer, *event_sinks),
         store=store,
     )
+    # The diagnostic baseline sits between prepare and train; the cost excludes it.
     start = time.perf_counter()
     stage.prepare(state)
+    prepare_seconds = time.perf_counter() - start
     _log_validation_baseline(
         run, method=method, loader=loader, keys=keys, tracker=tracker
     )
     timer.start()
+    start = time.perf_counter()
     stage.train(state)
-    wall_clock_seconds = time.perf_counter() - start
+    wall_clock_seconds = prepare_seconds + time.perf_counter() - start
     timer.log_mean()
     checkpoint = store.load(POSTERIOR_CHECKPOINT_KEY)
     # Rebuild the posterior from the finalized checkpoint, exactly as a restore

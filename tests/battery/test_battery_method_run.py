@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import jax
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from stagereg.core import InMemoryCheckpointStore, is_finalized
 
+from qmodem.battery import method_run
 from qmodem.battery.data_processing import ValidationSet
 from qmodem.battery.method_run import (
     METHOD_CONFIGS,
@@ -565,3 +568,28 @@ def test_the_best_epoch_ignores_a_baseline_lower_than_every_epoch(
     assert baseline < min(crps)
     assert finalized.epoch == int(np.argmin(crps))
     assert finalized.early_stopping_state.best_score == min(crps)
+
+
+def test_the_posterior_wall_clock_excludes_the_validation_baseline(
+    trained_backbone, tracker_factory, store_factory, monkeypatch
+) -> None:
+    # The baseline advances a fake clock by an hour; the cost must not see it.
+    hour = 3600.0
+    offset = 0.0
+    real_perf_counter = method_run.time.perf_counter
+    real_baseline = method_run._log_validation_baseline
+
+    def slow_baseline(*args, **kwargs) -> None:
+        nonlocal offset
+        real_baseline(*args, **kwargs)
+        offset += hour
+
+    monkeypatch.setattr(
+        method_run,
+        "time",
+        SimpleNamespace(perf_counter=lambda: real_perf_counter() + offset),
+    )
+    monkeypatch.setattr(method_run, "_log_validation_baseline", slow_baseline)
+    tracker, _ = _train_mcd_at(1e-3, trained_backbone, tracker_factory, store_factory)
+
+    assert 0 < tracker.history(COST_WALL_CLOCK)[0] < hour
