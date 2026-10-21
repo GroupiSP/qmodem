@@ -28,11 +28,13 @@ from stagereg.core import (
     CheckpointStore,
     EventSink,
     ExperimentTracker,
+    LoaderFactory,
     TrackerEventSink,
     TrainingState,
 )
 from stagereg.jax import (
     GammaVarianceStage,
+    InferenceMethod,
     MeanStage,
     Posterior,
     PosteriorPredictive,
@@ -55,7 +57,6 @@ from qmodem.tracking import (
 
 from .data_processing import (
     PreparedData,
-    make_loader,
     posterior_dataset_size,
     restore_only_loader,
 )
@@ -77,6 +78,7 @@ from .models import MeanNet, VarianceNet
 from .posterior import (
     POSTERIOR_CHECKPOINT_KEY,
     PREDICTIVE_SAMPLE_COUNT,
+    VAL_CRPS_BASELINE,
     EpochTimer,
     PosteriorCost,
     PosteriorKeys,
@@ -85,6 +87,8 @@ from .posterior import (
     draws_per_second,
     log_cost,
     parameter_count,
+    posterior_loader,
+    validation_crps,
 )
 from .train import (
     MEAN_CHECKPOINT_KEY,
@@ -93,6 +97,7 @@ from .train import (
     Method,
     VarianceHyperparameters,
     backbone_keys,
+    backbone_optimizer,
     build_mean_net,
     build_variance_net,
 )
@@ -265,6 +270,25 @@ class MethodRun:
         )
 
 
+def _restore_only_optimizer(
+    hp: MeanHyperparameters | VarianceHyperparameters,
+) -> optax.GradientTransformation:
+    """The backbone stage optimizer a restore validates its checkpoint against.
+
+    Only the optimizer state's structure matters: restoring replaces the
+    transformation with the checkpoint's own, so the epoch length is arbitrary.
+
+    Args:
+        hp: The stage's hyperparameters.
+
+    Returns:
+        A transformation with the backbone stage optimizer's state structure.
+    """
+    return backbone_optimizer(
+        hp.optimizer, max_epochs=hp.schedule.max_epochs, steps_per_epoch=1
+    )
+
+
 def _restore_backbone(
     backbone: BackboneHandle, seed: int
 ) -> tuple[TrainingState, MeanNet, VarianceNet]:
@@ -284,9 +308,7 @@ def _restore_backbone(
     mean_net = build_mean_net(network, keys.mean_init)
     MeanStage(
         model=mean_net,
-        optimizer=create_optimizer(
-            mean_net, optax.adam(backbone.mean_hp.optimizer.learning_rate)
-        ),
+        optimizer=create_optimizer(mean_net, _restore_only_optimizer(backbone.mean_hp)),
         train_loader=restore_only_loader,
         options=SupervisedStageOptions(epochs=1, checkpoint_key=MEAN_CHECKPOINT_KEY),
     ).restore(state, backbone.store.load(MEAN_CHECKPOINT_KEY))
@@ -295,7 +317,7 @@ def _restore_backbone(
     GammaVarianceStage(
         model=variance_net,
         optimizer=create_optimizer(
-            variance_net, optax.adam(backbone.variance_hp.optimizer.learning_rate)
+            variance_net, _restore_only_optimizer(backbone.variance_hp)
         ),
         source_loader=restore_only_loader,
         options=SupervisedStageOptions(
@@ -320,16 +342,16 @@ def _require_registered(config: MethodConfig) -> None:
         )
 
 
-def _validation_inputs(data: PreparedData) -> jax.Array:
-    """Return every validation window, the inputs of the draws-per-second probe.
+def _posterior_validation_inputs(data: PreparedData) -> jax.Array:
+    """Return the inputs of the draws-per-second probe.
 
     Args:
         data: Prepared train and validation windows.
 
     Returns:
-        The validation windows ``(B, W, C)``.
+        Every posterior validation set window ``(B, W, C)``.
     """
-    return jnp.asarray(data.val.features)
+    return jnp.asarray(data.posterior_val.features)
 
 
 def _cost(
@@ -353,7 +375,7 @@ def _cost(
     Returns:
         The cost, with the draws per second of ``PREDICTIVE_SAMPLE_COUNT`` draws.
     """
-    inputs = _validation_inputs(data)
+    inputs = _posterior_validation_inputs(data)
     key = run.evaluation_key
     finite_draws = None if run.posterior is None else run.posterior.num_draws
     return PosteriorCost(
@@ -384,7 +406,9 @@ def train_method_run(
     never re-trained. The training state is then re-keyed with
     ``method_key(seed, method)``. A method with a posterior stage then trains the
     shared posterior stage (``build_posterior_stage``) and finalizes its best
-    epoch on validation CRPS into ``store`` (``posterior/best``). HNN trains and
+    epoch on validation CRPS into ``store`` (``posterior/best``). Before epoch 0
+    it logs the warm start's validation CRPS once (``VAL_CRPS_BASELINE``,
+    diagnostic only, never a ``posterior/best`` candidate). HNN trains and
     saves nothing. Every method run logs its posterior hyperparameters (with the
     dataset size N), its method metrics (``PosteriorSpec.method_metrics``) and its
     cost metrics (``cost/posterior/...``).
@@ -493,21 +517,28 @@ def _train_posterior(
     keys = PosteriorKeys.of(run.key)
     method = spec.build_method(keys.init)
     timer = EpochTimer(tracker)
+    loader = posterior_loader(data, batch_size=spec.stage.batch_size, key=keys.loader)
     stage = build_posterior_stage(
         spec=spec,
         method=method,
         network=backbone.mean_hp.network,
         keys=keys,
-        loader=make_loader(data, batch_size=spec.stage.batch_size, key=keys.loader),
+        loader=loader,
         dataset_size=dataset_size,
         event_sinks=(TrackerEventSink(tracker), timer, *event_sinks),
         store=store,
     )
+    # The diagnostic baseline sits between prepare and train; the cost excludes it.
     start = time.perf_counter()
     stage.prepare(state)
+    prepare_seconds = time.perf_counter() - start
+    _log_validation_baseline(
+        run, method=method, loader=loader, keys=keys, tracker=tracker
+    )
     timer.start()
+    start = time.perf_counter()
     stage.train(state)
-    wall_clock_seconds = time.perf_counter() - start
+    wall_clock_seconds = prepare_seconds + time.perf_counter() - start
     timer.log_mean()
     checkpoint = store.load(POSTERIOR_CHECKPOINT_KEY)
     # Rebuild the posterior from the finalized checkpoint, exactly as a restore
@@ -532,6 +563,43 @@ def _train_posterior(
         ),
     )
     return trained
+
+
+def _log_validation_baseline(
+    run: MethodRun,
+    *,
+    method: InferenceMethod,
+    loader: LoaderFactory,
+    keys: PosteriorKeys,
+    tracker: ExperimentTracker,
+) -> None:
+    """Log the warm-started posterior's validation criterion before epoch 0.
+
+    The score uses the stage's fixed draw and sample keys and
+    ``PREDICTIVE_SAMPLE_COUNT`` draws, as every epoch does, and leaves the
+    training state's key untouched. A method without a posterior before its
+    first update (pSGLD) is scored at its warm start, the backbone mean. The
+    baseline is diagnostic only: neither the early stopper, checkpoint selection
+    nor HPO sees it.
+
+    Args:
+        run: The method run without posterior (backbone restored).
+        method: The prepared inference method.
+        loader: The posterior stage's loader.
+        keys: The posterior-stage keys.
+        tracker: Receives ``VAL_CRPS_BASELINE`` at step 0.
+    """
+    warm_start = dataclasses.replace(
+        run, posterior=method.posterior() if method.has_posterior else None
+    )
+    baseline = validation_crps(
+        lambda inputs: warm_start.predictive(
+            inputs, keys.validation_draws, PREDICTIVE_SAMPLE_COUNT
+        ),
+        loader,
+        keys.validation_samples,
+    )
+    tracker.log_metrics({VAL_CRPS_BASELINE: baseline}, step=0)
 
 
 def restore_method_run(

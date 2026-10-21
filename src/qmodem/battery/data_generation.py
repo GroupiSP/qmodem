@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
 import pathlib
 import pickle
 import tempfile
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any, Protocol
@@ -46,6 +47,47 @@ class SimulatorUpdater(Protocol):
     ) -> sb.SimulationConfig: ...
 
 
+class ConfigFactory(Protocol):
+    """Builds a simulation config whose noise callables draw from ``rng``."""
+
+    def __call__(self, rng: np.random.Generator) -> sb.SimulationConfig: ...
+
+
+TRAIN_STREAM_SPLIT_NAMES: tuple[str, str, str] = (
+    "train",
+    "backbone_val",
+    "posterior_val",
+)
+"""Splits of ``train.csv``, in ``run_id`` order."""
+
+TEST_SPLIT_NAME = "test"
+"""The split of ``test.csv``."""
+
+
+def n_histories_param(split: str) -> str:
+    """Name of a split's history count, as a :class:`Hyperparameters` field and param.
+
+    Args:
+        split: A split name, e.g. ``"backbone_val"``.
+
+    Returns:
+        ``"n_histories_<split>"``.
+    """
+    return f"n_histories_{split}"
+
+
+def n_policy_1_param(split: str) -> str:
+    """Name of a split's policy-1 count, as a :class:`Hyperparameters` field and param.
+
+    Args:
+        split: A split name, e.g. ``"backbone_val"``.
+
+    Returns:
+        ``"n_policy_1_<split>"``.
+    """
+    return f"n_policy_1_{split}"
+
+
 @dataclass(frozen=True)
 class Hyperparameters:
     voc_model: VOCModel = VOCModel.BUSTOS_BAEZA
@@ -57,12 +99,70 @@ class Hyperparameters:
     dt: float = 5.0  # in seconds
     v_cutoff: float = 2.5  # in Volts
     n_histories_train: int = 10
-    n_histories_val: int = 5
-    n_histories_test: int = 10
+    n_policy_1_train: int = 3
+    n_histories_backbone_val: int = 20
+    n_policy_1_backbone_val: int = 6
+    n_histories_posterior_val: int = 20
+    n_policy_1_posterior_val: int = 6
+    n_histories_test: int = 20
+    n_policy_1_test: int = 6
     process_noise_std: float = 2e-3
     measurement_noise_std: float = 5e-3
     train_seed: int = 42
     test_seed: int = 123
+
+    def __post_init__(self) -> None:
+        """Validate the hyperparameters on construction.
+
+        Raises:
+            ValueError: If a split's counts are invalid (see :meth:`_validate`).
+        """
+        self._validate()
+
+    def _validate(self) -> None:
+        """Check that every split's counts form a valid :class:`SplitSpec`.
+
+        Raises:
+            ValueError: If a count is negative or a split's policy-1 count exceeds
+                its size.
+        """
+        for split in (*TRAIN_STREAM_SPLIT_NAMES, TEST_SPLIT_NAME):
+            self.split(split)
+
+    def split(self, name: str) -> SplitSpec:
+        """Size and policy mix of one named split.
+
+        Args:
+            name: A split name (see :data:`TRAIN_STREAM_SPLIT_NAMES`,
+                :data:`TEST_SPLIT_NAME`).
+
+        Returns:
+            The split.
+
+        Raises:
+            AttributeError: If ``name`` is not a split.
+            ValueError: If the split's counts are invalid.
+        """
+        return SplitSpec(
+            getattr(self, n_histories_param(name)),
+            getattr(self, n_policy_1_param(name)),
+        )
+
+    def train_stream_splits(self) -> tuple[SplitSpec, ...]:
+        """Splits of ``train.csv``, in ``run_id`` order (seeded by ``train_seed``).
+
+        Returns:
+            The train, backbone validation set and posterior validation set splits.
+        """
+        return tuple(self.split(name) for name in TRAIN_STREAM_SPLIT_NAMES)
+
+    def test_split(self) -> SplitSpec:
+        """Split of ``test.csv`` (seeded by ``test_seed``).
+
+        Returns:
+            The test split.
+        """
+        return self.split(TEST_SPLIT_NAME)
 
 
 def gaussian_noise(*, rng: np.random.Generator, noise_std: float) -> float:
@@ -135,22 +235,109 @@ def _modify_dataframe(df: pd.DataFrame, run_id: int) -> None:
     df.insert(0, "run_id", run_id)  # Add a run_id column for tracking
 
 
-def write_histories(config: sb.SimulationConfig, n_histories: int) -> pd.DataFrame:
-    """Runs MC simulations and gathers the results into a single dataframe."""
-    out_df = pd.DataFrame(
-        columns=["run_id", "policy_id", "time", "load", "soc", "voltage"]
-    )
+@dataclass(frozen=True)
+class SplitSpec:
+    """Size and current-policy mix of one split of generated histories.
 
-    for i in range(n_histories):
-        result = sb.simulate_constant_capacity_simple(n_sim=1, config=config)
-        df = result.to_dataframe()
+    Attributes:
+        n_histories: Histories in the split.
+        n_policy_1: Histories that follow policy 1; the other
+            ``n_histories - n_policy_1`` follow policy 0.
+    """
 
-        # Modify the dataframe and append it to the output one
-        _modify_dataframe(df, i)
+    n_histories: int
+    n_policy_1: int
 
-        out_df = pd.concat([out_df, df], ignore_index=True)
+    def __post_init__(self) -> None:
+        """Validate the counts.
 
-    return out_df
+        Raises:
+            ValueError: If a count is negative or ``n_policy_1 > n_histories``.
+        """
+        if self.n_histories < 0 or self.n_policy_1 < 0:
+            raise ValueError(f"Split counts must be non-negative, got {self}.")
+        if self.n_policy_1 > self.n_histories:
+            raise ValueError(
+                f"n_policy_1={self.n_policy_1} exceeds n_histories={self.n_histories}."
+            )
+
+
+def fixed_policy_choice(*, policy_id: int) -> int:
+    """Deterministically select the given current policy.
+
+    Picklable policy choice used to simulate a history with an assigned policy.
+
+    Args:
+        policy_id: Index of the current policy to select.
+
+    Returns:
+        ``policy_id``.
+    """
+    return policy_id
+
+
+def assign_policies(split: SplitSpec, rng: np.random.Generator) -> np.ndarray:
+    """Assign exactly the split's policy counts to its histories, in a random order.
+
+    Args:
+        split: Size and policy-1 count of the split.
+        rng: Generator that permutes the assignment.
+
+    Returns:
+        ``(n_histories,)`` integer array with ``n_policy_1`` ones and zeros elsewhere.
+    """
+    policies = np.zeros(split.n_histories, dtype=np.int64)
+    policies[: split.n_policy_1] = 1
+    return rng.permutation(policies)
+
+
+def write_split_histories(
+    make_config: ConfigFactory,
+    splits: Sequence[SplitSpec],
+    seed: int,
+) -> pd.DataFrame:
+    """Simulate the histories of consecutive splits with fixed policy counts.
+
+    Split ``i`` draws from its own generator, seeded by the ``i``-th child of
+    ``SeedSequence(seed)``: it permutes the split's policies (see
+    :func:`assign_policies`) and feeds the noise of the split's config, built by
+    ``make_config``. A split's histories therefore depend only on ``seed``, its
+    position and its own counts, not on the other splits' counts. Every history is
+    simulated with its assigned policy; the config's policy choice is not used. The
+    splits occupy contiguous ``run_id`` blocks in the given order, starting at 0.
+
+    Args:
+        make_config: Builds a split's base simulation config from its generator.
+        splits: Splits to generate, in ``run_id`` order.
+        seed: Root seed of the splits' generators.
+
+    Returns:
+        Histories with columns ``run_id, time, policy_id, load, soc, voltage``.
+    """
+    frames = []
+    run_id = 0
+    children = np.random.SeedSequence(seed).spawn(len(splits))
+    for split, child in zip(splits, children, strict=True):
+        rng = np.random.default_rng(child)
+        config = make_config(rng)
+        for policy_id in assign_policies(split, rng):
+            history_config = dataclasses.replace(
+                config,
+                policy_choice_distribution=functools.partial(
+                    fixed_policy_choice, policy_id=int(policy_id)
+                ),
+            )
+            df = sb.simulate_constant_capacity_simple(
+                n_sim=1, config=history_config
+            ).to_dataframe()
+            _modify_dataframe(df, run_id)
+            frames.append(df)
+            run_id += 1
+    if not frames:
+        return pd.DataFrame(
+            columns=["run_id", "time", "policy_id", "load", "soc", "voltage"]
+        )
+    return pd.concat(frames, ignore_index=True)
 
 
 def add_rul_series(df: pd.DataFrame) -> pd.DataFrame:

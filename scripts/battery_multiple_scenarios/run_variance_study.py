@@ -52,6 +52,7 @@ from qmodem.tracking import (
     Role,
     RunSelector,
     Stage,
+    log_window_counts,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             result.run_id,
             result.best_value,
             space.apply(result.best_params, base).model_dump(),
+        )
+        log_window_counts(
+            result.run_id,
+            backbone.data.window_counts(),
+            logger=logger,
+            client=session.client,
         )
         session.attach_log(result.run_id, "study_log.txt")
 

@@ -122,7 +122,7 @@ def test_a_restored_avi_run_yields_identical_draws(
         seed=trained_backbone.seed,
         store=store_factory(persistent),
     )
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
     key = jax.random.key(5)
 
     expected = run.predictive(inputs, key, num_draws=PREDICTIVE_SAMPLE_COUNT)
@@ -145,7 +145,7 @@ def test_the_same_seed_gives_identical_finalized_avi_checkpoints_and_draws(
         tracker_factory(),
         store_factory(again_persistent),
     )
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(11)
 
     exactly_equal(
@@ -175,6 +175,14 @@ def test_an_avi_run_logs_its_diagnostics_every_epoch(avi_run) -> None:
         assert len(history) == epochs
         assert all(np.isfinite(history))
     assert all(v > 0 for v in tracker.history("posterior/train/weight_spread"))
+
+
+def test_an_avi_run_logs_one_validation_baseline_before_its_first_epoch(
+    avi_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = avi_run
+
+    one_baseline_before_epoch_0(tracker)
 
 
 def test_an_avi_run_finalizes_its_best_epoch_on_validation_crps(avi_run) -> None:
@@ -216,7 +224,7 @@ def test_the_avi_frozen_remainder_keeps_its_trained_mean_values(
     run, _, _ = avi_run
     mean_net = _merged(trained_backbone.checkpoints.mean.parameters)
     trained_conv = nnx.state(mean_net, nnx.All(nnx.Param, INFERRED_SUBNETWORK))
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
 
     np.testing.assert_array_equal(
         run.posterior.mean_function(trained_conv, inputs, jax.random.key(seed)),
@@ -230,7 +238,7 @@ def test_avi_draws_are_consistent_across_input_subsets(
     avi_run, trained_backbone, start: int, size: int, seed: int
 ) -> None:
     run, _, _ = avi_run
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(seed)
 
     whole = run.posterior.sample_means(inputs, key, 8)

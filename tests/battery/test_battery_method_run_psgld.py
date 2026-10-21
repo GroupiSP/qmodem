@@ -10,7 +10,6 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from stagereg.core import InMemoryCheckpointStore, is_finalized
 
-from qmodem.battery.data_processing import make_loader
 from qmodem.battery.method_run import (
     METHOD_CONFIGS,
     BackboneHandle,
@@ -26,6 +25,7 @@ from qmodem.battery.posterior import (
     COST_TRAINABLE_PARAMETERS,
     INFERRED_SUBNETWORK,
     PosteriorStageHyperparameters,
+    posterior_loader,
 )
 from qmodem.battery.train import Method
 
@@ -66,7 +66,7 @@ def psgld_run(trained_backbone, tracker_factory, store_factory):
 
 
 def _steps_per_epoch(trained_backbone) -> int:
-    loader = make_loader(
+    loader = posterior_loader(
         trained_backbone.battery.data,
         batch_size=TINY_PSGLD.stage.batch_size,
         key=jax.random.key(0),
@@ -97,7 +97,7 @@ def test_a_psgld_run_finalizes_its_last_epoch_with_exactly_m_samples(
 ) -> None:
     run, _, persistent = psgld_run
     finalized = persistent.load("posterior/best")
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
 
     assert is_finalized(finalized)
     assert finalized.epoch == EPOCHS - 1
@@ -126,6 +126,14 @@ def test_a_psgld_run_validates_only_after_its_first_retained_sample(
 
     assert len(tracker.history("posterior/train/loss")) == EPOCHS
     assert len(tracker.history("posterior/validation/crps")) == EPOCHS - first_validated
+
+
+def test_a_psgld_run_logs_one_validation_baseline_before_its_burn_in(
+    psgld_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = psgld_run
+
+    one_baseline_before_epoch_0(tracker)
 
 
 def test_a_psgld_run_logs_its_time_per_epoch(psgld_run) -> None:
@@ -172,7 +180,7 @@ def test_a_restored_psgld_run_yields_the_trained_runs_draws(
         seed=trained_backbone.seed,
         store=store_factory(persistent),
     )
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(5)
 
     np.testing.assert_array_equal(
@@ -192,7 +200,7 @@ def test_the_same_seed_gives_identical_finalized_psgld_checkpoints_and_draws(
         tracker_factory(),
         store_factory(again_persistent),
     )
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(11)
 
     exactly_equal(
@@ -212,7 +220,7 @@ def test_the_psgld_frozen_remainder_keeps_its_trained_mean_values(
     mean_checkpoint = trained_backbone.checkpoints.mean.parameters
     mean_net = nnx.merge(mean_checkpoint.graphdef, mean_checkpoint.state)
     trained_conv = nnx.state(mean_net, nnx.All(nnx.Param, INFERRED_SUBNETWORK))
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
 
     np.testing.assert_array_equal(
         run.posterior.mean_function(trained_conv, inputs, jax.random.key(seed)),

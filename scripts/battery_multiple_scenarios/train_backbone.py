@@ -61,6 +61,7 @@ from qmodem.script_session import script_session
 from qmodem.tracking import (
     ScalerArtifact,
     Stage,
+    log_window_counts,
     protocol_override_tags,
 )
 
@@ -178,7 +179,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             data_generation_run_id,
             make_data_pipeline(WINDOW_SIZE, x_scaler=x_scaler, y_scaler=y_scaler),
         )
-        logger.info("Windows: %d train, %d validation", len(data.train), len(data.val))
         mean_hp, variance_hp = backbone_hyperparameters(args)
         run = track_backbone_run(
             data=data,
@@ -207,6 +207,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             run.run_id,
             run.checkpoints.mean.epoch,
             run.checkpoints.variance.epoch,
+        )
+        log_window_counts(
+            run.run_id, data.window_counts(), logger=logger, client=session.client
         )
         session.attach_log(run.run_id, "training_log.txt")
 

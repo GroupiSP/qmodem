@@ -46,6 +46,7 @@ from stagereg.jax import (
     IsotropicGaussianPrior,
     MetricSuite,
     Posterior,
+    PosteriorPredictive,
     PosteriorPredictivePredictor,
     PosteriorProblem,
     PosteriorStage,
@@ -53,10 +54,16 @@ from stagereg.jax import (
     PredictionRequirements,
     Predictor,
 )
+from stagereg.jax.metrics import reduce_metric_suite
 
 from qmodem.tracking import Stage
 
-from .data_processing import restore_only_loader
+from .data_processing import (
+    PreparedData,
+    ValidationSet,
+    make_loader,
+    restore_only_loader,
+)
 from .evaluate import PRIMARY_COVERAGE_LEVEL, coverage_key
 from .train import MeanNetworkHyperparameters
 
@@ -81,6 +88,12 @@ PREDICTIVE_SAMPLE_COUNT = 100
 
 VALIDATION_METRIC = "crps"
 """The validation criterion: early-stopping and HPO metric of every posterior."""
+
+VAL_CRPS_BASELINE = "val_crps_baseline"
+"""The validation criterion of the warm-started posterior, before epoch 0.
+
+Diagnostic only: it never feeds the early stopper, checkpoint selection or HPO.
+"""
 
 COST_WALL_CLOCK = "cost/posterior/wall_clock_seconds"
 COST_TRAINABLE_PARAMETERS = "cost/posterior/trainable_parameters"
@@ -380,6 +393,64 @@ def validation_metrics(sample_key: jax.Array) -> MetricSuite:
         ),
         predictor=FixedKeyPredictor(PosteriorPredictivePredictor(), sample_key),
         predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
+    )
+
+
+def validation_crps(
+    predictive: Callable[[PyTree], PosteriorPredictive],
+    loader: LoaderFactory,
+    sample_key: jax.Array,
+) -> float:
+    """Score the validation criterion of a posterior predictive once.
+
+    The score is the one every posterior epoch reports
+    (``validation_metrics(sample_key)`` over the loader's ``"validation"``
+    batches), for a predictive whose draws are already fixed.
+
+    Args:
+        predictive: Maps validation inputs to the posterior predictive, drawn
+            with the stage's fixed draw key and ``PREDICTIVE_SAMPLE_COUNT``.
+        loader: The posterior stage's loader.
+        sample_key: The fixed key of the validation predictive samples.
+
+    Returns:
+        The validation CRPS.
+
+    Raises:
+        RuntimeError: If the validation metric suite has no predictor.
+    """
+    suite = validation_metrics(sample_key)
+    predictor = suite.predictor
+    if predictor is None:
+        raise RuntimeError("The validation metric suite has no predictor.")
+    parts = [
+        predictor(predictive, batch, suite.prediction_requirements, sample_key)
+        for batch in loader(split="validation", epoch=0)
+    ]
+    metrics = reduce_metric_suite(
+        suite=suite, losses=None, batch_metric_values={}, epoch_metric_parts=parts
+    )
+    return metrics[VALIDATION_METRIC]
+
+
+def posterior_loader(
+    data: PreparedData, batch_size: int, key: jax.Array
+) -> LoaderFactory:
+    """Return the posterior stage's loader: it validates on the posterior set.
+
+    The validation criterion (early stopping, the baseline, posterior HPO) is
+    scored on the posterior validation set, disjoint from the backbone's.
+
+    Args:
+        data: The prepared windows.
+        batch_size: Training batch size.
+        key: Typed PRNG key of the training shuffle.
+
+    Returns:
+        The loader (see ``make_loader``).
+    """
+    return make_loader(
+        data, batch_size=batch_size, key=key, validation=ValidationSet.POSTERIOR
     )
 
 

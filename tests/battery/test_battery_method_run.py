@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import jax
 import numpy as np
 import pytest
@@ -10,6 +12,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from stagereg.core import InMemoryCheckpointStore, is_finalized
 
+from qmodem.battery import method_run
+from qmodem.battery.data_processing import ValidationSet
 from qmodem.battery.method_run import (
     METHOD_CONFIGS,
     BackboneHandle,
@@ -28,9 +32,10 @@ from qmodem.battery.posterior import (
     COST_TRAINABLE_PARAMETERS,
     COST_WALL_CLOCK,
     INFERRED_SUBNETWORK,
+    VAL_CRPS_BASELINE,
     PosteriorStageHyperparameters,
 )
-from qmodem.battery.train import Method, backbone_keys
+from qmodem.battery.train import Method, OptimizerHyperparameters, backbone_keys
 
 PREDICTIVE_SAMPLE_COUNT = 100
 COST_TAGS = {COST_WALL_CLOCK, COST_TRAINABLE_PARAMETERS, COST_DRAWS_PER_SECOND}
@@ -68,7 +73,7 @@ def test_an_hnn_run_yields_100_predictive_draws_of_the_backbone_mean_per_window(
     hnn_run, trained_backbone
 ) -> None:
     run, _, _ = hnn_run
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
 
     predictive = run.predictive(
         inputs, jax.random.key(1), num_draws=PREDICTIVE_SAMPLE_COUNT
@@ -103,7 +108,7 @@ def test_a_restored_hnn_run_predicts_like_the_trained_one(
         seed=trained_backbone.seed,
         store=store_factory(persistent),
     )
-    inputs = trained_backbone.battery.data.val.features[:5]
+    inputs = trained_backbone.battery.data.posterior_val.features[:5]
     key = jax.random.key(3)
 
     expected = run.predictive(inputs, key, num_draws=4)
@@ -179,7 +184,7 @@ def test_a_restored_bbb_run_yields_the_trained_runs_predictive_samples(
 ) -> None:
     run, _, persistent = bbb_run
     restored = _restore_bbb(trained_backbone, store_factory, persistent)
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
     key = jax.random.key(5)
 
     expected = run.predictive(inputs, key, num_draws=PREDICTIVE_SAMPLE_COUNT)
@@ -202,7 +207,7 @@ def test_the_same_seed_gives_identical_finalized_bbb_checkpoints_and_draws(
         tracker_factory(),
         store_factory(again_persistent),
     )
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(11)
 
     exactly_equal(
@@ -266,7 +271,7 @@ def test_the_bbb_frozen_remainder_keeps_its_trained_mean_values(
     run, _, _ = bbb_run
     mean_net = _merged(trained_backbone.checkpoints.mean.parameters)
     trained_conv = nnx.state(mean_net, nnx.All(nnx.Param, INFERRED_SUBNETWORK))
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
 
     # With the conv layer at its trained-mean values, every leaf of the posterior
     # network equals the trained mean's, so it is the trained mean network.
@@ -309,6 +314,30 @@ def mcd_run(trained_backbone, tracker_factory, store_factory):
     return run, tracker, persistent
 
 
+@pytest.mark.parametrize("config", [HNNConfig(), TINY_MCD], ids=["hnn", "mcd"])
+def test_a_method_run_reads_only_the_posterior_validation_set(
+    config, mcd_run, trained_backbone, only_serving, tracker_factory, store_factory
+) -> None:
+    # The posterior stage, its baseline and the draws-per-second probe all run on
+    # the posterior validation set; reading the backbone one would fail.
+    tracker = tracker_factory()
+
+    train_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        data=only_serving(trained_backbone.battery.data, ValidationSet.POSTERIOR),
+        config=config,
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store_factory(),
+    )
+
+    assert COST_DRAWS_PER_SECOND in tracker.tags
+    if isinstance(config, MCDConfig):
+        _, reference, _ = mcd_run
+        for tag in ("posterior/validation/crps", VAL_CRPS_BASELINE):
+            assert tracker.history(tag) == pytest.approx(reference.history(tag))
+
+
 def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(
     mcd_run, trained_backbone, store_factory
 ) -> None:
@@ -319,7 +348,7 @@ def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(
         seed=trained_backbone.seed,
         store=store_factory(persistent),
     )
-    inputs = trained_backbone.battery.data.val.features[:7]
+    inputs = trained_backbone.battery.data.posterior_val.features[:7]
     key = jax.random.key(5)
 
     expected = run.predictive(inputs, key, num_draws=PREDICTIVE_SAMPLE_COUNT)
@@ -340,7 +369,7 @@ def test_the_same_seed_gives_identical_finalized_mcd_checkpoints_and_draws(
         tracker_factory(),
         store_factory(again_persistent),
     )
-    inputs = trained_backbone.battery.data.val.features
+    inputs = trained_backbone.battery.data.posterior_val.features
     key = jax.random.key(11)
 
     exactly_equal(
@@ -359,7 +388,7 @@ def test_mcd_draws_differ_but_each_is_one_function_across_input_subsets(
 ) -> None:
     run, _, _ = mcd_run
     split = min(split, size - 1)
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
     key = jax.random.key(3)
 
     whole = run.posterior.sample_means(inputs, key, 4)
@@ -415,7 +444,7 @@ def test_the_mcd_frozen_remainder_keeps_its_trained_mean_values(
     run, _, _ = mcd_run
     mean_net = _merged(trained_backbone.checkpoints.mean.parameters)
     trained_conv = nnx.state(mean_net, nnx.All(nnx.Param, INFERRED_SUBNETWORK))
-    inputs = trained_backbone.battery.data.val.features[start : start + size]
+    inputs = trained_backbone.battery.data.posterior_val.features[start : start + size]
     key = jax.random.key(seed)
     # Dropout changes the output, so the reference is the trained mean network
     # under the same draw's mask: the MCD net with every Param at the trained
@@ -470,3 +499,97 @@ def test_overrides_nest_the_schedule_and_named_posterior_params() -> None:
 def test_a_malformed_override_is_refused(assignment: str) -> None:
     with pytest.raises(ValueError):
         posterior_overrides([assignment])
+
+
+# --- the posterior validation baseline (val_crps_baseline) -------------------------
+
+
+def test_a_bbb_run_logs_one_validation_baseline_before_its_first_epoch(
+    bbb_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = bbb_run
+
+    one_baseline_before_epoch_0(tracker)
+
+
+def test_an_mcd_run_logs_one_validation_baseline_before_its_first_epoch(
+    mcd_run, one_baseline_before_epoch_0
+) -> None:
+    _, tracker, _ = mcd_run
+
+    one_baseline_before_epoch_0(tracker)
+
+
+def test_an_hnn_run_logs_no_validation_baseline(hnn_run) -> None:
+    _, tracker, _ = hnn_run
+
+    assert VAL_CRPS_BASELINE not in tracker.tags
+
+
+def _train_mcd_at(
+    learning_rate: float, trained_backbone, tracker_factory, store_factory
+):
+    tracker = tracker_factory()
+    persistent = InMemoryCheckpointStore()
+    train_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        data=trained_backbone.battery.data,
+        config=TINY_MCD.model_copy(
+            update={"optimizer": OptimizerHyperparameters(learning_rate=learning_rate)}
+        ),
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store_factory(persistent),
+    )
+    return tracker, persistent
+
+
+def test_the_baseline_is_epoch_0s_score_of_a_posterior_that_barely_moved(
+    trained_backbone, tracker_factory, store_factory
+) -> None:
+    tracker, _ = _train_mcd_at(1e-12, trained_backbone, tracker_factory, store_factory)
+
+    assert tracker.history(VAL_CRPS_BASELINE)[0] == pytest.approx(
+        tracker.history("posterior/validation/crps")[0], rel=1e-5
+    )
+
+
+def test_the_best_epoch_ignores_a_baseline_lower_than_every_epoch(
+    trained_backbone, tracker_factory, store_factory
+) -> None:
+    # An LR this large makes every epoch worse than the warm start.
+    tracker, persistent = _train_mcd_at(
+        10.0, trained_backbone, tracker_factory, store_factory
+    )
+    baseline = tracker.history(VAL_CRPS_BASELINE)[0]
+    crps = tracker.history("posterior/validation/crps")
+    finalized = persistent.load("posterior/best")
+
+    assert baseline < min(crps)
+    assert finalized.epoch == int(np.argmin(crps))
+    assert finalized.early_stopping_state.best_score == min(crps)
+
+
+def test_the_posterior_wall_clock_excludes_the_validation_baseline(
+    trained_backbone, tracker_factory, store_factory, monkeypatch
+) -> None:
+    # The baseline advances a fake clock by an hour; the cost must not see it.
+    hour = 3600.0
+    offset = 0.0
+    real_perf_counter = method_run.time.perf_counter
+    real_baseline = method_run._log_validation_baseline
+
+    def slow_baseline(*args, **kwargs) -> None:
+        nonlocal offset
+        real_baseline(*args, **kwargs)
+        offset += hour
+
+    monkeypatch.setattr(
+        method_run,
+        "time",
+        SimpleNamespace(perf_counter=lambda: real_perf_counter() + offset),
+    )
+    monkeypatch.setattr(method_run, "_log_validation_baseline", slow_baseline)
+    tracker, _ = _train_mcd_at(1e-3, trained_backbone, tracker_factory, store_factory)
+
+    assert 0 < tracker.history(COST_WALL_CLOCK)[0] < hour

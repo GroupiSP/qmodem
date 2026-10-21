@@ -17,7 +17,7 @@ from qmodem.battery.data_generation import (
     bernoulli_policy_choice,
     gaussian_noise,
     log_simulation_config,
-    write_histories,
+    write_split_histories,
 )
 from qmodem.battery.policies import VariableDischargeCurrentPolicy, plot_current_profile
 from qmodem.tracking import MLFlowSetup, track_dataframe, track_mlflow
@@ -36,6 +36,15 @@ def make_simulator_config(
     rng: np.random.Generator,
     hp: Hyperparameters,
 ) -> sb.SimulationConfig:
+    """Build the two-policy simulation config whose random draws come from ``rng``.
+
+    Args:
+        rng: Generator of the policy choice and of the process and measurement noise.
+        hp: Data-generation hyperparameters.
+
+    Returns:
+        The simulation config.
+    """
     return sb.SimulationConfig(
         current_policies=[constant_cruise_policy, variable_cruise_policy],
         policy_choice_distribution=functools.partial(
@@ -57,27 +66,36 @@ def make_simulator_config(
 
 
 def main() -> None:
-    load_dotenv(override=True)
+    load_dotenv()
 
     hp = Hyperparameters()
 
     RAW_DATA_DIR = pathlib.Path(os.environ["RAW_DATA_DIR_MULTI"])
+    existing = [RAW_DATA_DIR / f for f in ("train.csv", "test.csv")]
+    if any(f.exists() for f in existing):
+        raise FileExistsError(
+            f"{RAW_DATA_DIR} already holds generated data; point RAW_DATA_DIR_MULTI "
+            "to a new directory instead of overwriting it."
+        )
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     # MLFlow setup
     tracking_setup = MLFlowSetup(run_name="generate_histories")
 
     with track_mlflow(tracking_setup):
-        train_rng = np.random.default_rng(seed=hp.train_seed)
-        test_rng = np.random.default_rng(seed=hp.test_seed)
-
         mlflow.log_params(dataclasses.asdict(hp))
 
-        train_df = write_histories(
-            make_simulator_config(train_rng, hp),
-            n_histories=hp.n_histories_train + hp.n_histories_val,
+        make_config = functools.partial(make_simulator_config, hp=hp)
+        # Train, backbone validation set and posterior validation set: contiguous
+        # run_id blocks of train.csv, each with fixed policy counts and its own
+        # random stream spawned from train_seed.
+        train_df = write_split_histories(
+            make_config, hp.train_stream_splits(), hp.train_seed
         )
-        test_config = make_simulator_config(test_rng, hp)
-        test_df = write_histories(test_config, n_histories=hp.n_histories_test)
+        test_df = write_split_histories(make_config, [hp.test_split()], hp.test_seed)
+        # The pickled test config keeps the 70/30 policy prior only for the
+        # evaluation reference band; the test histories use fixed policy counts.
+        test_config = make_simulator_config(np.random.default_rng(hp.test_seed), hp)
 
         train_df = add_rul_series(train_df)
         test_df = add_rul_series(test_df)

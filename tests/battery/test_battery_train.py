@@ -7,7 +7,9 @@ import sys
 from typing import Any
 
 import jax
+import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 import sklearn.preprocessing as skpp
 from flax import nnx
@@ -16,7 +18,8 @@ from hypothesis import strategies as st
 from pydantic import ValidationError
 from stagereg.core import Checkpoint, flatten_parameters, is_finalized
 
-from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE
+from qmodem.battery.data_processing import FEATURES, WINDOW_SIZE, ValidationSet
+from qmodem.battery.methods.mcd import MCDConfig
 from qmodem.battery.train import (
     MeanHyperparameters,
     MeanNetworkHyperparameters,
@@ -24,7 +27,9 @@ from qmodem.battery.train import (
     StageScheduleHyperparameters,
     TrackedBackbone,
     backbone_keys,
+    backbone_optimizer,
     load_backbone_hyperparameters,
+    steps_per_epoch,
     track_backbone_run,
     train_backbone,
     train_mean_stage,
@@ -130,6 +135,110 @@ def test_backbone_keys_are_reproducible_and_distinct_across_streams_and_seeds(
         assert not np.array_equal(
             jax.random.key_data(others[0]), jax.random.key_data(keys[0])
         )
+
+
+def test_a_backbone_run_is_selected_on_the_backbone_validation_set(
+    trained_backbone, only_serving, tracker_factory, store_factory
+) -> None:
+    data = only_serving(trained_backbone.battery.data, ValidationSet.BACKBONE)
+    tracker = tracker_factory()
+
+    train_backbone(
+        data=data,
+        mean_hp=trained_backbone.mean_hp,
+        variance_hp=trained_backbone.variance_hp,
+        seed=trained_backbone.seed,
+        tracker=tracker,
+        store=store_factory(),
+    )
+
+    for stage in ("mean", "variance"):
+        assert tracker.history(f"{stage}/validation/loss") == pytest.approx(
+            trained_backbone.tracker.history(f"{stage}/validation/loss")
+        )
+
+
+# --- Mean and variance stage optimizer: per-epoch cosine LR decay ---------
+
+
+def _step_sizes(
+    transformation: optax.GradientTransformation, n_steps: int
+) -> list[float]:
+    """Adam's step size at each of ``n_steps`` steps under a constant unit gradient.
+
+    Under a constant gradient Adam's bias-corrected update is ``lr / (1 + eps)``,
+    so the step size reads off the learning rate of every step.
+    """
+    parameters = jnp.zeros(())
+    gradient = jnp.ones(())
+    opt_state = transformation.init(parameters)
+    sizes = []
+    for _ in range(n_steps):
+        updates, opt_state = transformation.update(gradient, opt_state, parameters)
+        sizes.append(float(-updates))
+    return sizes
+
+
+@settings(deadline=None, max_examples=25)
+@given(
+    learning_rate=st.floats(1e-5, 1e-1),
+    max_epochs=st.integers(1, 12),
+    steps_per_epoch=st.integers(1, 4),
+)
+def test_backbone_optimizer_decays_the_learning_rate_per_epoch_to_one_percent(
+    learning_rate: float, max_epochs: int, steps_per_epoch: int
+) -> None:
+    transformation = backbone_optimizer(
+        OptimizerHyperparameters(learning_rate=learning_rate),
+        max_epochs=max_epochs,
+        steps_per_epoch=steps_per_epoch,
+    )
+
+    sizes = _step_sizes(transformation, (max_epochs + 1) * steps_per_epoch)
+    per_epoch = [
+        sizes[e * steps_per_epoch : (e + 1) * steps_per_epoch]
+        for e in range(max_epochs + 1)
+    ]
+
+    assert sizes[0] == pytest.approx(learning_rate, rel=1e-4)
+    assert per_epoch[max_epochs][0] == pytest.approx(0.01 * learning_rate, rel=1e-4)
+    assert all(b <= a * (1 + 1e-4) for a, b in zip(sizes, sizes[1:], strict=False))
+    assert all(
+        epoch == pytest.approx([epoch[0]] * len(epoch), rel=1e-4) for epoch in per_epoch
+    )
+
+
+@settings(deadline=None, max_examples=10)
+@given(learning_rate=st.floats(1e-5, 1e-1))
+def test_the_posterior_optimizer_keeps_a_constant_learning_rate(
+    learning_rate: float,
+) -> None:
+    config = MCDConfig(optimizer=OptimizerHyperparameters(learning_rate=learning_rate))
+    method = config.posterior_spec().build_method(jax.random.key(0))
+
+    sizes = _step_sizes(method.optimizer, 20)
+
+    assert sizes == pytest.approx([learning_rate] * 20, rel=1e-4)
+
+
+@given(batch_size=st.integers(-8, 0))
+def test_a_non_positive_batch_size_has_no_steps_per_epoch(
+    synthetic_battery, batch_size: int
+) -> None:
+    with pytest.raises(ValueError, match="batch_size"):
+        steps_per_epoch(synthetic_battery.data, batch_size)
+
+
+@given(batch_size=st.integers(1, 200))
+def test_every_training_window_fits_in_the_steps_of_an_epoch(
+    synthetic_battery, batch_size: int
+) -> None:
+    n_windows = len(synthetic_battery.data.train)
+
+    steps = steps_per_epoch(synthetic_battery.data, batch_size)
+
+    assert steps * batch_size >= n_windows
+    assert steps == 1 or (steps - 1) * batch_size < n_windows
 
 
 def test_backbone_returns_finalized_mean_and_variance_checkpoints(
@@ -426,7 +535,9 @@ np.savez(
 def test_backbone_checkpoints_and_scalers_restore_in_a_fresh_process(
     mlflow_backbone, tmp_path
 ) -> None:
-    inputs = np.asarray(mlflow_backbone.reference.battery.data.val.features[:5])
+    inputs = np.asarray(
+        mlflow_backbone.reference.battery.data.posterior_val.features[:5]
+    )
     features = np.linspace(0.5, 1.5, 2 * WINDOW_SIZE).reshape(WINDOW_SIZE, 2)
     targets = np.linspace(0.0, 1.0, 4).reshape(4, 1)
     out = tmp_path / "restored.npz"

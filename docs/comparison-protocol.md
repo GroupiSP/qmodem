@@ -7,10 +7,13 @@ comparison protocol
 ├─ methods     core: HNN · MCD · BBB · pSGLD (conditional) · Q-AVI
 │              arms: ablation (C-AVI) · sensitivity (N_eff)
 ├─ backbone    one backbone run per protocol seed, shared; conv layer inferred
+├─ data        one data-gen run; train 10 · backbone val 20 · posterior val 20 · test 20
+│              fixed 70/30 policy counts per split
 ├─ seeds       R = 5, dataset fixed, keys derived from r, paired by seed
 ├─ posterior   N = #windows; M = 100 draws × 1 aleatoric noise sample
 ├─ tuning      50 TPE trials per posterior stage on seed 0, HPs frozen; fixed prior
-│              one shared validation criterion: validation CRPS, M_val = 100
+│              one shared validation criterion: validation CRPS, M_val = 100,
+│              on the posterior validation set; mean/variance on the backbone validation set
 ├─ metrics     expected CRPS (grid-free), RMSE, coverage@0.95, WSU per trajectory
 │              sample-based; t0 dropped; mean over test cases (+ per policy)
 ├─ validity    a failed check invalidates the seed for all methods
@@ -44,7 +47,17 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
 ## 3. Seeds and repetitions
 
 - **R = 5 protocol seeds**, r = 0…4. Increase to 10 if the across-seed std of a primary metric is comparable to the method differences.
-- The dataset is **fixed**: one data-generation run (`DATA_GEN_RUN_ID_MULTI`), not resampled per seed.
+- The dataset is **fixed**: one data-generation run (`DATA_GEN_RUN_ID_MULTI`), not resampled per seed. It is the run generated with the four splits below, not data-gen run `e52603fb…` behind the `stages` experiment ([#121](https://github.com/GroupiSP/qmodem/issues/121)).
+- The data-generation run has **four splits**. Policies are assigned by **fixed counts** per split (70/30, in a seeded random order), never by i.i.d. draws, so every split has policy-1 histories:
+
+  | Split | Histories | Policy 0 / policy 1 | Used by |
+  |---|---|---|---|
+  | train | 10 | 7 / 3 | every stage's training loss |
+  | backbone validation set | 20 | 14 / 6 | mean and variance stages: early stopping, best checkpoint, HPO |
+  | posterior validation set | 20 | 14 / 6 | the validation criterion (§5) |
+  | test | 20 | 14 / 6 | evaluation only (§6) |
+
+  Train, backbone validation set and posterior validation set are contiguous `run_id` blocks, in that order. Their sizes and policy counts are logged as params of the data-generation run, and data loading slices them by `run_id` range. The two validation sets are **disjoint**, so no posterior stage is judged on histories its backbone was selected on ([ADR 0001](adr/0001-disjoint-validation-sets.md)).
 - Every RNG key derives from r. The backbone uses r directly. Method runs use `fold_in(r, method)` for posterior init, draws and evaluation.
 - Methods are compared **paired by seed**, because they share the backbone run within a seed.
 
@@ -56,7 +69,7 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
 ## 5. Tuning
 
 - **Equal budget**: each method's posterior stage gets the same Optuna budget (number of trials, TPE sampler, sampler seed, objective) on the backbone run of **seed 0**. The selected HPs are **frozen** across all R seeds. MCD's dropout rate and Q-AVI's λ, S, k and learning rates are all tuned within that budget. Q-AVI has more HPs, and the equal budget is a deliberate handicap. C-AVI gets its own equal budget over Q-AVI's search space, latent-map width h derived from (q, L) ([#100](https://github.com/GroupiSP/qmodem/issues/100)).
-- **One validation criterion** is shared by every method with a posterior stage: the **mean sample CRPS** (stagereg `crps`, energy form) of the posterior predictive against the observed validation target ([#101](https://github.com/GroupiSP/qmodem/issues/101)). Validation targets are single observations of held-out histories, so the window mean estimates the same expected CRPS as the test metric. `nll`, RMSE and coverage are logged as diagnostics and never select anything.
+- **One validation criterion** is shared by every method with a posterior stage: the **mean sample CRPS** (stagereg `crps`, energy form) of the posterior predictive against the observed validation target ([#101](https://github.com/GroupiSP/qmodem/issues/101)), computed on the **posterior validation set** (§3). Validation targets are single observations of held-out histories, so the window mean estimates the same expected CRPS as the test metric. `nll`, RMSE and coverage are logged as diagnostics and never select anything.
 - **Validation draws**: M_val = M = 100 draws × 1 aleatoric noise sample (`num_draws = predictive_sample_count = 100`), with a **fixed draw key** per run. A smaller M_val is ruled out: the plug-in CRPS is biased by E|X − X'| / (2M), which favours narrow predictives. M_val is independent of Q-AVI's training-loss S.
 - **Role of the criterion per method**:
 
@@ -65,11 +78,13 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
   | MCD, BBB, Q-AVI, C-AVI | ✅ | ✅ | best-epoch validation CRPS |
   | pSGLD | — (last epoch: a stopper would truncate the chain) | — | validation CRPS of the final retained chain |
 
+- **Posterior baseline**: before posterior epoch 0, every method run with a posterior stage computes the validation criterion once (same draw key and M_val) and logs it as `val_crps_baseline`. It is diagnostic only: it never feeds early stopping, the best checkpoint or the HPO objective. HNN logs none.
+- **Validation set per stage**: the mean and variance stages (early stopping, best checkpoint, mean and variance studies) use the **backbone validation set**. Every posterior stage, posterior study and the draws-per-second probe use the **posterior validation set**. The two selection steps never share a history ([ADR 0001](adr/0001-disjoint-validation-sets.md)).
 - **Patience**: one shared patience for every method that early-stops, generous (≈ 20% of the max-epoch cap) so that it covers Q-AVI's adversarial oscillations, with `min_delta = 0`. It is fixed and never tuned. Method-specific patience is ruled out as unequal treatment.
 - **Prior**: one fixed prior for every method, stagereg's `IsotropicGaussianPrior(precision=1.0)`. It is part of the shared posterior problem and is never tuned.
 - **Budget**: **50 trials** per posterior study, `TPESampler` with a fixed sampler seed, and a `MedianPruner` with `n_startup_trials = 5` and `n_warmup_steps = 60`. Every method reports per-epoch validation CRPS. pSGLD reports the CRPS of its running chain after burn-in. HNN has no study.
 - **Caps**: MCD, BBB, Q-AVI and C-AVI train for at most **300 epochs**, with a shared **patience of 60** and `min_delta = 0`. pSGLD runs a fixed **300 epochs**. The first 100 epochs are burn-in, and `thinning` is derived so that exactly M = 100 samples are retained.
-- **Shared, untuned settings**: batch size 32; Adam at a constant learning rate, with no schedule.
+- **Shared, untuned settings**: batch size 32. The posterior stage uses Adam at a constant learning rate, with no schedule. The mean and variance stages use Adam with **cosine LR decay** from `lr` to `0.01·lr` over the stage's `max_epochs`, stepped per epoch; the floor ratio 0.01 is fixed and never tuned ([#121](https://github.com/GroupiSP/qmodem/issues/121)).
 - **Search spaces** (ranges on a log scale are marked *log*):
 
   | Method | Tuned HPs |
@@ -80,10 +95,10 @@ Fixed by [#92](https://github.com/GroupiSP/qmodem/issues/92) and [#93](https://g
   | Q-AVI | λ 1e-4–1 *log*; S ∈ {1, 4, 8, 16}; k ∈ {1, 2, 3, 5}; q 3–6; L 1–4; generator LR and discriminator LR, each 1e-5–1e-2 *log*; discriminator fixed (64-64 LeakyReLU MLP) |
   | C-AVI | as Q-AVI; h derived from (q, L) |
 
-- **Variance stage**: a variance-only study (20 trials, TPE, median pruning) runs on seed 0's frozen mean checkpoint after the mean study ([#99](https://github.com/GroupiSP/qmodem/issues/99)). It tunes only the variance LR (1e-4–1e-2, *log*) and minimizes best-epoch validation Gamma NLL, the stage's own loss. Cap, patience and batch size are inherited from the mean study.
+- **Variance stage**: a variance-only study (20 trials, TPE, median pruning) runs on seed 0's frozen mean checkpoint after the mean study ([#99](https://github.com/GroupiSP/qmodem/issues/99)). It tunes only the variance LR (1e-4–1e-2, *log*) and minimizes best-epoch validation Gamma NLL on the backbone validation set, the stage's own loss. Cap, patience and batch size are inherited from the mean study.
 - **Study runs**: there is one top-level `role=hpo_study` run per (stage, method), tagged `stage`, `method`, `backbone_run_id` (the seed-0 backbone) and `n_trials`. It logs the selected params as `best.*`. Its trials are `role=hpo_trial` children. They restore that backbone and all use the same key, `fold_in(0, method)`. Method runs, seed 0 included, are always **re-trained** from the frozen HPs and never reuse a trial.
 
-Decided in [How are the variance and posterior stages tuned under an equal budget? (#102)](https://github.com/GroupiSP/qmodem/issues/102).
+Decided in [How are the variance and posterior stages tuned under an equal budget? (#102)](https://github.com/GroupiSP/qmodem/issues/102). Validation sets per stage, posterior baseline and mean/variance LR decay decided in [Spec: disjoint, policy-stratified validation sets + backbone LR decay (#121)](https://github.com/GroupiSP/qmodem/issues/121).
 
 ## 6. Evaluation
 

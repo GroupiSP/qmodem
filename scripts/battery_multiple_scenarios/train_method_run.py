@@ -62,7 +62,7 @@ from qmodem.battery.method_run import (
 from qmodem.battery.posterior_hpo import frozen_method_config
 from qmodem.battery.train import Method
 from qmodem.script_session import script_session
-from qmodem.tracking import Role, RunSelector
+from qmodem.tracking import Role, RunSelector, log_window_counts
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +213,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
         logger.info(
             "Method run %s (%s, seed %d)", run.run_id, method.value, backbone.seed
+        )
+        log_window_counts(
+            run.run_id,
+            backbone.data.window_counts(),
+            logger=logger,
+            client=session.client,
         )
         session.attach_log(run.run_id, "training_log.txt")
 

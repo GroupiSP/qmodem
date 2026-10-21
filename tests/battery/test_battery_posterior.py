@@ -19,7 +19,24 @@ from qmodem.battery.posterior import (
     FixedKeyPredictor,
     PosteriorKeys,
     parameter_count,
+    posterior_loader,
 )
+
+
+def test_the_posterior_stage_validates_on_the_posterior_validation_set(
+    synthetic_battery,
+) -> None:
+    data = synthetic_battery.data
+    loader = posterior_loader(data, batch_size=8, key=jax.random.key(0))
+
+    (batch,) = loader(split="validation", epoch=0)
+
+    np.testing.assert_array_equal(
+        np.asarray(batch.inputs), np.asarray(data.posterior_val.features)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(batch.targets), np.asarray(data.posterior_val.targets)
+    )
 
 
 @dataclasses.dataclass(frozen=True)

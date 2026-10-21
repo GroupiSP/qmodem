@@ -59,6 +59,7 @@ from qmodem.script_session import ScriptSession, script_session
 from qmodem.tracking import (
     Role,
     RunSelector,
+    log_window_counts,
     protocol_override_tags,
 )
 
@@ -167,13 +168,7 @@ def tuned_backbone(
         expected_data_generation_run_id=os.environ.get("DATA_GEN_RUN_ID_MULTI"),
         client=session.client,
     )
-    logger.info(
-        "Backbone run %s (seed %d): %d train, %d validation windows",
-        backbone_run_id,
-        backbone.seed,
-        len(backbone.data.train),
-        len(backbone.data.val),
-    )
+    logger.info("Backbone run %s (seed %d)", backbone_run_id, backbone.seed)
     return backbone_run_id, backbone
 
 
@@ -214,6 +209,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             search_space(method)
             .apply(result.best_params, base)
             .posterior_hyperparameters(),
+        )
+        log_window_counts(
+            result.run_id,
+            backbone.data.window_counts(),
+            logger=logger,
+            client=session.client,
         )
         session.attach_log(result.run_id, "study_log.txt")
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Disjoint backbone and posterior validation sets, with fixed per-split policy
+  counts and one random stream per split ([#121]).
+- Backbones trained before the cosine learning-rate decay (constant-LR optimizer
+  state) no longer restore and must be retrained ([#121]).
+- The pickled test simulation config keeps the 70/30 Bernoulli policy prior only
+  for the evaluation reference band; the histories use fixed policy counts
+  ([#121]).
+
 ## [0.2.1] - 2026-10-20
 
 qmodem now runs on stagereg `0.3.0` ([#130]).
@@ -115,6 +125,7 @@ Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 [#98]: https://github.com/GroupiSP/qmodem/issues/98
 [#103]: https://github.com/GroupiSP/qmodem/issues/103
 [#118]: https://github.com/GroupiSP/qmodem/pull/118
+[#121]: https://github.com/GroupiSP/qmodem/issues/121
 [#130]: https://github.com/GroupiSP/qmodem/issues/130
 [#132]: https://github.com/GroupiSP/qmodem/issues/132
 [PennyLaneAI/pennylane#9930]: https://github.com/PennyLaneAI/pennylane/issues/9930
