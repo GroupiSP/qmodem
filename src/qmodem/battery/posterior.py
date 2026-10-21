@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -92,6 +93,8 @@ Diagnostic only: it never feeds the early stopper, checkpoint selection or HPO.
 COST_WALL_CLOCK = "cost/posterior/wall_clock_seconds"
 COST_TRAINABLE_PARAMETERS = "cost/posterior/trainable_parameters"
 COST_DRAWS_PER_SECOND = "cost/posterior/draws_per_second"
+DRAWS_PER_SECOND_REPEATS = 5
+"""Timed calls of the draws-per-second probe; it reports their median."""
 COST_SCAFFOLDING_PARAMETERS = "cost/posterior/scaffolding_parameters"
 """Parameters trained only to fit the posterior, not part of it (AVI's discriminator);
 logged only by methods that have any."""
@@ -396,20 +399,43 @@ def parameter_count(tree: PyTree) -> int:
     return sum(math.prod(leaf.shape) for leaf in jax.tree.leaves(tree))
 
 
-def draws_per_second(draw: Callable[[], jax.Array], num_draws: int) -> float:
-    """Measure the throughput of a draw function after one warm-up call.
+def draws_per_second(
+    draw: Callable[[], jax.Array],
+    num_draws: int,
+    repeats: int = DRAWS_PER_SECOND_REPEATS,
+    clock: Callable[[], float] = time.perf_counter,
+) -> float:
+    """Measure the compiled throughput of a draw function.
+
+    ``draw`` is first called eagerly, which materializes any posterior state
+    cached on first use (pSGLD's retained samples) outside a trace. It is then
+    compiled with ``jax.jit``, called once to compile and timed over ``repeats``
+    calls. The median call time is robust to the large spread of single timed
+    calls (#135).
 
     Args:
-        draw: Takes ``num_draws`` draws and returns them.
+        draw: Takes ``num_draws`` draws and returns them. Must be jittable.
         num_draws: The number of draws one call takes.
+        repeats: The number of timed calls, positive.
+        clock: Returns the current time in seconds.
 
     Returns:
-        Draws per second of the second call.
+        Draws per second of the median timed call.
+
+    Raises:
+        ValueError: If ``repeats`` is not positive.
     """
-    jax.block_until_ready(draw())  # compile
-    start = time.perf_counter()
-    jax.block_until_ready(draw())
-    return num_draws / max(time.perf_counter() - start, 1e-9)
+    if repeats <= 0:
+        raise ValueError("repeats must be positive.")
+    jax.block_until_ready(draw())  # materialize cached state
+    compiled = jax.jit(draw)
+    jax.block_until_ready(compiled())  # compile
+    seconds = []
+    for _ in range(repeats):
+        start = clock()
+        jax.block_until_ready(compiled())
+        seconds.append(clock() - start)
+    return num_draws / max(statistics.median(seconds), 1e-9)
 
 
 @dataclasses.dataclass

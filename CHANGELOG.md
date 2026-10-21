@@ -27,6 +27,9 @@ qmodem now runs on stagereg `0.4.0` ([#135]).
   randomness differ from older runs: validation keys each batch's predictive
   samples separately and no longer advances the run's key. Posterior HPO studies
   and method runs must be rerun; backbone runs are unaffected ([#135]).
+- `cost/posterior/draws_per_second` now times the jit-compiled draw function and
+  reports the median of 5 calls (was one eager call), so it is higher and not
+  comparable with older runs ([#135]).
 
 ## [0.2.1] - 2026-10-20
 
