@@ -78,8 +78,12 @@ _Avoid_: val_A, holdout
 The held-out histories, disjoint from the backbone validation set, on which the validation criterion is computed.
 _Avoid_: val_B, holdout
 
+**Validation timestamps**:
+The fixed, evenly spaced points of each history of a validation set at which every validation score is computed, the same for every epoch, trial and method; the validation counterpart of a test case's evaluation timestamps.
+_Avoid_: Validation windows (suggests every window), validation subsample
+
 **Validation criterion**:
-The single score on the posterior validation set that selects a posterior stage's best checkpoint, stops it early and serves as its HPO objective, shared by every method of the comparison protocol.
+The single score, at the validation timestamps of the posterior validation set, that selects a posterior stage's best checkpoint, stops it early and serves as its HPO objective, shared by every method of the comparison protocol.
 _Avoid_: Validation loss (training losses differ by method), monitored metric (the stopper's mechanism, not the protocol's choice)
 
 **Ablation arm**:
