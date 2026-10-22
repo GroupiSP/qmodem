@@ -10,7 +10,15 @@ import pytest
 from flax import nnx
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from stagereg.core import InMemoryCheckpointStore, is_finalized
+from stagereg.core import (
+    InMemoryCheckpointStore,
+    IntervalCoverage,
+    NegativeLogLikelihood,
+    RootMeanSquaredError,
+    SampleContinuousRankedProbabilityScore,
+    is_finalized,
+)
+from stagereg.jax import MetricSuite, PosteriorPredictivePredictor
 
 from qmodem.battery import method_run
 from qmodem.battery.data_processing import ValidationSet
@@ -33,7 +41,10 @@ from qmodem.battery.posterior import (
     COST_WALL_CLOCK,
     INFERRED_SUBNETWORK,
     VAL_CRPS_BASELINE,
+    PosteriorKeys,
     PosteriorStageHyperparameters,
+    posterior_loader,
+    score_validation,
 )
 from qmodem.battery.train import Method, OptimizerHyperparameters, backbone_keys
 
@@ -253,14 +264,60 @@ def test_a_bbb_run_logs_only_its_posterior_hyperparameters_with_the_dataset_size
     }
 
 
-def test_a_bbb_run_logs_the_shared_validation_criterion_and_diagnostics(
-    bbb_run,
+def test_a_bbb_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
+    bbb_run, crps_per_epoch_and_diagnostics_once
 ) -> None:
-    _, tracker, _ = bbb_run
+    _, tracker, persistent = bbb_run
     epochs = len(tracker.history("posterior/train/loss"))
 
-    for metric in ("crps", "nll", "rmse", "coverage_95"):
-        assert len(tracker.history(f"posterior/validation/{metric}")) == epochs
+    assert len(tracker.history("posterior/validation/crps")) == epochs
+    crps_per_epoch_and_diagnostics_once(
+        tracker, persistent.load("posterior/best").epoch
+    )
+
+
+def _full_suite() -> MetricSuite:
+    """The pre-#139 per-epoch suite: CRPS plus the three diagnostics."""
+    return MetricSuite(
+        epoch=(
+            NegativeLogLikelihood(),
+            SampleContinuousRankedProbabilityScore(name="crps"),
+            RootMeanSquaredError(),
+            IntervalCoverage(level=0.95, name="coverage_95"),
+        ),
+        predictor=PosteriorPredictivePredictor(),
+        predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
+    )
+
+
+@pytest.mark.parametrize("fixture", ["bbb_run", "mcd_run"])
+def test_the_diagnostics_and_best_crps_are_the_full_suites_scores_of_the_best_epoch(
+    fixture, request, trained_backbone
+) -> None:
+    # The full suite on the finalized posterior, under the stage's validation key,
+    # reproduces both the logged diagnostics and the best epoch's logged CRPS.
+    run, tracker, persistent = request.getfixturevalue(fixture)
+    config = TINY_BBB if fixture == "bbb_run" else TINY_MCD
+    keys = PosteriorKeys.of(run.key)
+    full = score_validation(
+        lambda inputs, key: run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT),
+        posterior_loader(
+            trained_backbone.battery.data,
+            batch_size=config.stage.batch_size,
+            key=keys.loader,
+        ),
+        keys.validation,
+        _full_suite(),
+    )
+    best = persistent.load("posterior/best").epoch
+    crps_steps = tracker.steps("posterior/validation/crps")
+    best_crps = tracker.history("posterior/validation/crps")[crps_steps.index(best)]
+
+    assert full["crps"] == pytest.approx(best_crps, rel=1e-5)
+    for name in ("nll", "rmse", "coverage_95"):
+        assert tracker.history(f"posterior/validation/{name}") == [
+            pytest.approx(full[name], rel=1e-5)
+        ]
 
 
 @settings(max_examples=10, deadline=None)
@@ -408,6 +465,16 @@ def test_mcd_draws_differ_but_each_is_one_function_across_input_subsets(
             assert not np.allclose(whole[i], whole[j])
 
 
+def test_an_mcd_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
+    mcd_run, crps_per_epoch_and_diagnostics_once
+) -> None:
+    _, tracker, persistent = mcd_run
+
+    crps_per_epoch_and_diagnostics_once(
+        tracker, persistent.load("posterior/best").epoch
+    )
+
+
 def test_an_mcd_run_finalizes_its_best_epoch_on_validation_crps(mcd_run) -> None:
     run, tracker, persistent = mcd_run
     crps = tracker.history("posterior/validation/crps")
@@ -432,8 +499,6 @@ def test_an_mcd_run_logs_its_cost_and_only_its_posterior_hyperparameters(
         **TINY_MCD.posterior_hyperparameters(),
         "dataset_size": len(trained_backbone.battery.data.train),
     }
-    for metric in ("crps", "nll", "rmse", "coverage_95"):
-        assert tracker.history(f"posterior/validation/{metric}")
 
 
 @settings(max_examples=10, deadline=None)

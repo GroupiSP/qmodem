@@ -185,6 +185,16 @@ def test_an_avi_run_logs_one_validation_baseline_before_its_first_epoch(
     one_baseline_before_epoch_0(tracker)
 
 
+def test_an_avi_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
+    avi_run, crps_per_epoch_and_diagnostics_once
+) -> None:
+    _, tracker, persistent = avi_run
+
+    crps_per_epoch_and_diagnostics_once(
+        tracker, persistent.load("posterior/best").epoch
+    )
+
+
 def test_an_avi_run_finalizes_its_best_epoch_on_validation_crps(avi_run) -> None:
     _, tracker, persistent = avi_run
     crps = tracker.history("posterior/validation/crps")

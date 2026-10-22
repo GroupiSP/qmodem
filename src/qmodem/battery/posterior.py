@@ -9,6 +9,8 @@ for MCD, the posterior network) differs. This module owns what is shared:
 - the validation criterion: mean sample CRPS of the posterior predictive over
   ``PREDICTIVE_SAMPLE_COUNT`` draws, under one validation key per method run
   (``validation_metrics``, ``PosteriorKeys.validation``, ADR 0002),
+- the validation diagnostics NLL, RMSE and coverage@0.95, scored once on the best
+  checkpoint (``diagnostic_metrics``, ``validation_diagnostics``),
 - early stopping on validation CRPS (``posterior_early_stopper``),
 - the stage schedule, batch size and dataset size (``PosteriorStageHyperparameters``),
 - the per-method plug-in (``PosteriorSpec``) and the stage builder
@@ -83,6 +85,9 @@ PREDICTIVE_SAMPLE_COUNT = 100
 
 VALIDATION_METRIC = "crps"
 """The validation criterion: early-stopping and HPO metric of every posterior."""
+
+VALIDATION_TAG_PREFIX = f"{Stage.POSTERIOR}/validation/"
+"""Prefix of the posterior stage's validation metric tags (stagereg's naming)."""
 
 VAL_CRPS_BASELINE = "val_crps_baseline"
 """The validation criterion of the warm-started posterior, before epoch 0.
@@ -206,11 +211,30 @@ class PosteriorKeys:
 
 
 def validation_metrics() -> MetricSuite:
-    """Return the shared validation metric suite of every posterior stage.
+    """Return the per-epoch validation suite of every posterior stage: CRPS only.
 
-    CRPS is the criterion; NLL, RMSE and the 95% coverage are diagnostics. Each
-    epoch scores ``PREDICTIVE_SAMPLE_COUNT`` mixture samples of the posterior
-    predictive; stagereg keys them per batch from the stage's validation key.
+    CRPS is the validation criterion, the only metric that drives early stopping,
+    checkpoint selection and HPO. Each epoch scores ``PREDICTIVE_SAMPLE_COUNT``
+    mixture samples of the posterior predictive; stagereg keys them per batch
+    from the stage's validation key. The diagnostics are scored once, on the
+    best checkpoint (``diagnostic_metrics``).
+
+    Returns:
+        The metric suite.
+    """
+    return MetricSuite(
+        epoch=(SampleContinuousRankedProbabilityScore(name=VALIDATION_METRIC),),
+        predictor=PosteriorPredictivePredictor(),
+        predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
+    )
+
+
+def diagnostic_metrics() -> MetricSuite:
+    """Return the validation diagnostics: NLL, RMSE and the 95% coverage.
+
+    They never drive selection, so a posterior stage scores them once, on its
+    best checkpoint, from the same ``PREDICTIVE_SAMPLE_COUNT`` predictive samples
+    as the criterion (``validation_diagnostics``).
 
     Returns:
         The metric suite.
@@ -218,7 +242,6 @@ def validation_metrics() -> MetricSuite:
     return MetricSuite(
         epoch=(
             NegativeLogLikelihood(),
-            SampleContinuousRankedProbabilityScore(name=VALIDATION_METRIC),
             RootMeanSquaredError(),
             IntervalCoverage(
                 level=PRIMARY_COVERAGE_LEVEL, name=coverage_key(PRIMARY_COVERAGE_LEVEL)
@@ -229,31 +252,32 @@ def validation_metrics() -> MetricSuite:
     )
 
 
-def validation_crps(
+def score_validation(
     predictive: Callable[[PyTree, jax.Array], PosteriorPredictive],
     loader: LoaderFactory,
     validation_key: jax.Array,
-) -> float:
-    """Score the validation criterion of a posterior predictive once.
+    suite: MetricSuite,
+) -> dict[str, float]:
+    """Score a metric suite on the validation batches, as a posterior epoch does.
 
-    The score is the one every posterior epoch reports: it derives its keys from
-    ``validation_key`` exactly as stagereg's posterior validation does (``split``
-    into a draw key and a metric key, then ``fold_in(metric_key, batch_index)``),
-    and scores ``validation_metrics()`` over the loader's ``"validation"`` batches.
+    The keys derive from ``validation_key`` exactly as stagereg's posterior
+    validation derives them (``split`` into a draw key and a metric key, then
+    ``fold_in(metric_key, batch_index)``), so for the same posterior every suite
+    scores the same predictive samples as the stage's epochs.
 
     Args:
         predictive: Maps validation inputs and the draw key to the posterior
             predictive with ``PREDICTIVE_SAMPLE_COUNT`` draws.
         loader: The posterior stage's loader.
         validation_key: The stage's validation key (``PosteriorKeys.validation``).
+        suite: The epoch metrics to score.
 
     Returns:
-        The validation CRPS.
+        The suite's metrics by name.
 
     Raises:
-        RuntimeError: If the validation metric suite has no predictor.
+        RuntimeError: If the suite has no predictor.
     """
-    suite = validation_metrics()
     predictor = suite.predictor
     if predictor is None:
         raise RuntimeError("The validation metric suite has no predictor.")
@@ -270,7 +294,52 @@ def validation_crps(
     metrics = reduce_metric_suite(
         suite=suite, losses=None, batch_metric_values={}, epoch_metric_parts=parts
     )
-    return metrics[VALIDATION_METRIC]
+    return {name: float(value) for name, value in metrics.items()}
+
+
+def validation_crps(
+    predictive: Callable[[PyTree, jax.Array], PosteriorPredictive],
+    loader: LoaderFactory,
+    validation_key: jax.Array,
+) -> float:
+    """Score the validation criterion of a posterior predictive once.
+
+    The score is the one every posterior epoch reports (``score_validation`` of
+    ``validation_metrics()``).
+
+    Args:
+        predictive: Maps validation inputs and the draw key to the posterior
+            predictive with ``PREDICTIVE_SAMPLE_COUNT`` draws.
+        loader: The posterior stage's loader.
+        validation_key: The stage's validation key (``PosteriorKeys.validation``).
+
+    Returns:
+        The validation CRPS.
+    """
+    return score_validation(predictive, loader, validation_key, validation_metrics())[
+        VALIDATION_METRIC
+    ]
+
+
+def validation_diagnostics(
+    predictive: Callable[[PyTree, jax.Array], PosteriorPredictive],
+    loader: LoaderFactory,
+    validation_key: jax.Array,
+) -> dict[str, float]:
+    """Score the validation diagnostics of a posterior predictive once.
+
+    Args:
+        predictive: Maps validation inputs and the draw key to the posterior
+            predictive with ``PREDICTIVE_SAMPLE_COUNT`` draws.
+        loader: The posterior stage's loader.
+        validation_key: The stage's validation key (``PosteriorKeys.validation``).
+
+    Returns:
+        NLL, RMSE and the 95% coverage, keyed by their validation tags
+        (``posterior/validation/<name>``), as the epochs log the criterion.
+    """
+    scores = score_validation(predictive, loader, validation_key, diagnostic_metrics())
+    return {f"{VALIDATION_TAG_PREFIX}{name}": value for name, value in scores.items()}
 
 
 def posterior_loader(

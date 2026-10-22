@@ -89,6 +89,7 @@ from .posterior import (
     parameter_count,
     posterior_loader,
     validation_crps,
+    validation_diagnostics,
 )
 from .train import (
     MEAN_CHECKPOINT_KEY,
@@ -410,8 +411,10 @@ def train_method_run(
     shared posterior stage (``build_posterior_stage``) and finalizes its best
     epoch on validation CRPS into ``store`` (``posterior/best``). Before epoch 0
     it logs the warm start's validation CRPS once (``VAL_CRPS_BASELINE``,
-    diagnostic only, never a ``posterior/best`` candidate). HNN trains and
-    saves nothing. Every method run logs its posterior hyperparameters (with the
+    diagnostic only, never a ``posterior/best`` candidate). Each epoch validates
+    on CRPS only; NLL, RMSE and coverage@0.95 are scored once, on the finalized
+    checkpoint, and logged at its epoch (``_log_validation_diagnostics``). HNN
+    trains and saves nothing. Every method run logs its posterior hyperparameters (with the
     dataset size N), its method metrics (``PosteriorSpec.method_metrics``) and its
     cost metrics (``cost/posterior/...``).
 
@@ -550,6 +553,7 @@ def _train_posterior(
     trained = dataclasses.replace(
         run, posterior=method.posterior(), checkpoint=checkpoint
     )
+    _log_validation_diagnostics(trained, loader=loader, keys=keys, tracker=tracker)
     log_cost(
         tracker,
         _cost(
@@ -601,6 +605,42 @@ def _log_validation_baseline(
         keys.validation,
     )
     tracker.log_metrics({VAL_CRPS_BASELINE: baseline}, step=0)
+
+
+def _log_validation_diagnostics(
+    run: MethodRun,
+    *,
+    loader: LoaderFactory,
+    keys: PosteriorKeys,
+    tracker: ExperimentTracker,
+) -> None:
+    """Log the validation diagnostics of the finalized posterior, once.
+
+    NLL, RMSE and the 95% coverage are scored on the best checkpoint with the
+    stage's validation key and ``PREDICTIVE_SAMPLE_COUNT`` draws, i.e. on the same
+    predictive samples as that epoch's CRPS. They are logged at the best epoch's
+    step under the per-epoch validation names. stagereg's ``MetricSuite`` has no
+    final-only metrics, so qmodem scores them here.
+
+    Args:
+        run: The method run with its finalized posterior and checkpoint.
+        loader: The posterior stage's loader.
+        keys: The posterior-stage keys.
+        tracker: Receives the diagnostics at step = the best epoch.
+
+    Raises:
+        ValueError: If the run has no finalized checkpoint.
+    """
+    if run.checkpoint is None:
+        raise ValueError("the run has no finalized posterior checkpoint.")
+    diagnostics = validation_diagnostics(
+        lambda inputs, draw_key: run.predictive(
+            inputs, draw_key, PREDICTIVE_SAMPLE_COUNT
+        ),
+        loader,
+        keys.validation,
+    )
+    tracker.log_metrics(diagnostics, step=run.checkpoint.epoch)
 
 
 def restore_method_run(

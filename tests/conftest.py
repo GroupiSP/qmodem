@@ -121,6 +121,17 @@ class InMemoryTracker:
         """
         return [values[tag] for values, _ in self.metrics if tag in values]
 
+    def steps(self, tag: str) -> list[int]:
+        """Return the steps one metric tag was logged at, in logging order.
+
+        Args:
+            tag: A stagereg metric tag, e.g. ``"posterior/validation/nll"``.
+
+        Returns:
+            The steps of the values logged under ``tag``.
+        """
+        return [step for values, step in self.metrics if tag in values]
+
 
 def _synthetic_histories(lengths: tuple[int, ...], seed: int) -> pd.DataFrame:
     """Build discharge histories with the columns of the battery CSV files.
@@ -340,6 +351,44 @@ def assert_one_baseline_before_epoch_0(tracker: InMemoryTracker) -> None:
 def one_baseline_before_epoch_0() -> Any:
     """The baseline-logging check ``assert_one_baseline_before_epoch_0``."""
     return assert_one_baseline_before_epoch_0
+
+
+VALIDATION_DIAGNOSTICS: tuple[str, ...] = ("nll", "rmse", "coverage_95")
+"""The posterior validation diagnostics, scored once on the best checkpoint."""
+
+
+def assert_crps_per_epoch_and_diagnostics_once(
+    tracker: InMemoryTracker, best_epoch: int
+) -> None:
+    """Assert a run's posterior validation suite: CRPS per epoch, diagnostics once.
+
+    Args:
+        tracker: The method run's tracker.
+        best_epoch: The epoch of the finalized ``posterior/best`` checkpoint.
+
+    Raises:
+        AssertionError: If a validation epoch logs anything but ``crps``, or a
+            diagnostic is missing, repeated, non-finite or not at the best epoch.
+    """
+    crps_steps = tracker.steps("posterior/validation/crps")
+    assert crps_steps
+    assert best_epoch in crps_steps
+    for name in VALIDATION_DIAGNOSTICS:
+        tag = f"posterior/validation/{name}"
+        assert tracker.steps(tag) == [best_epoch]
+        assert np.isfinite(tracker.history(tag)[0])
+    epoch_entries = [
+        values for values, _ in tracker.metrics if "posterior/validation/crps" in values
+    ]
+    for values in epoch_entries:
+        validation = {tag for tag in values if tag.startswith("posterior/validation/")}
+        assert validation == {"posterior/validation/crps"}
+
+
+@pytest.fixture(scope="session")
+def crps_per_epoch_and_diagnostics_once() -> Any:
+    """The validation-suite check ``assert_crps_per_epoch_and_diagnostics_once``."""
+    return assert_crps_per_epoch_and_diagnostics_once
 
 
 @dataclasses.dataclass(frozen=True)

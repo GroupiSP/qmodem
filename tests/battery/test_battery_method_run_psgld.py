@@ -128,6 +128,16 @@ def test_a_psgld_run_validates_only_after_its_first_retained_sample(
     assert len(tracker.history("posterior/validation/crps")) == EPOCHS - first_validated
 
 
+def test_a_psgld_run_validates_on_crps_and_diagnoses_its_last_epoch_once(
+    psgld_run, crps_per_epoch_and_diagnostics_once
+) -> None:
+    _, tracker, persistent = psgld_run
+
+    crps_per_epoch_and_diagnostics_once(
+        tracker, persistent.load("posterior/best").epoch
+    )
+
+
 def test_a_psgld_run_logs_one_validation_baseline_before_its_burn_in(
     psgld_run, one_baseline_before_epoch_0
 ) -> None:

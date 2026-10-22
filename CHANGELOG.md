@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A posterior epoch validates on CRPS only. `nll`, `rmse` and `coverage_95` are
+  scored once, on the best checkpoint and from the same predictive samples, and
+  logged at the best epoch's step under their existing names. CRPS, selection,
+  early stopping and HPO are unchanged ([#139]).
+
 ## [0.3.0] - 2026-10-21
 
 qmodem now runs on stagereg `0.4.0` ([#135]).
@@ -144,5 +151,6 @@ Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 [#130]: https://github.com/GroupiSP/qmodem/issues/130
 [#132]: https://github.com/GroupiSP/qmodem/issues/132
 [#135]: https://github.com/GroupiSP/qmodem/issues/135
+[#139]: https://github.com/GroupiSP/qmodem/issues/139
 [PennyLaneAI/pennylane#9930]: https://github.com/PennyLaneAI/pennylane/issues/9930
 [GroupiSP/stagereg#136]: https://github.com/GroupiSP/stagereg/issues/136
