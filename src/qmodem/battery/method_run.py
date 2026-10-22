@@ -76,6 +76,7 @@ from .methods.psgld import PSGLDConfig as PSGLDConfig
 from .methods.registry import METHODS
 from .models import MeanNet, VarianceNet
 from .posterior import (
+    DRAWS_PER_SECOND_WINDOWS,
     POSTERIOR_CHECKPOINT_KEY,
     PREDICTIVE_SAMPLE_COUNT,
     VAL_CRPS_BASELINE,
@@ -349,9 +350,10 @@ def _posterior_validation_inputs(data: PreparedData) -> jax.Array:
         data: Prepared train and validation windows.
 
     Returns:
-        Every posterior validation set window ``(B, W, C)``.
+        The first ``DRAWS_PER_SECOND_WINDOWS`` posterior validation set windows
+        ``(B, W, C)``, or all of them if there are fewer.
     """
-    return jnp.asarray(data.posterior_val.features)
+    return jnp.asarray(data.posterior_val.features[:DRAWS_PER_SECOND_WINDOWS])
 
 
 def _cost(
@@ -366,7 +368,8 @@ def _cost(
 
     Args:
         run: The trained method run.
-        data: Its windows (the draws are timed at the validation windows).
+        data: Its windows (the draws are timed at the first posterior validation
+            windows, ``_posterior_validation_inputs``).
         wall_clock_seconds: The posterior stage's wall-clock time.
         trainable_parameters: The posterior's trainable parameter count.
         scaffolding_parameters: The count of parameters trained only to fit the

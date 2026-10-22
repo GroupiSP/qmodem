@@ -143,7 +143,7 @@ A failed check **invalidates the seed for all methods**, and the seed is re-run.
 |---|---|---|
 | **T1** | RMSE, CRPS, coverage@0.95, WSU per method (mean ± std), plus per-policy columns | overall ranking |
 | **T2** | paired Δ vs BBB and vs HNN (bootstrap CI), plus per-policy columns; one row per arm | is Q-AVI's gain real |
-| **T3** | posterior-stage wall-clock, trainable params, draws/s per method | cost of each method |
+| **T3** | posterior-stage wall-clock, trainable params, draws/s per method (timed on the first 1024 posterior-validation windows, `DRAWS_PER_SECOND_WINDOWS`) | cost of each method |
 | **F1** | reliability curve: empirical vs nominal coverage at levels 0.5…0.95 | calibration beyond one level |
 | **F2** | epistemic / aleatoric variance decomposition over SoC0, per method, one representative case **per current policy**, event marked | does Q-AVI add epistemic spread, and where |
 | **F3** | per-test-case CRPS bars, all methods, grouped by policy | is the gain uniform |
