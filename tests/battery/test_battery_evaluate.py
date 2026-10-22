@@ -22,6 +22,7 @@ from qmodem.battery.evaluate import (
     aggregate,
     case_metrics,
     evaluate_predictive_model,
+    evaluation_indices,
     log_evaluation,
     metric_table,
 )
@@ -374,3 +375,23 @@ def test_every_case_gets_a_rul_figure_next_to_its_predictive_samples(
         figure = tracker.artifacts[f"{prefix}/rul_over_time"]
         assert isinstance(figure, Figure)
         assert figure.axes[0].get_title().startswith(prediction.samples.name)
+
+
+@pytest.mark.parametrize(
+    ("n_rows", "n_timestamps", "expected"),
+    [
+        (10, 4, [0, 3, 6, 9]),
+        (7, 3, [0, 3, 6]),
+        (5, 5, [0, 1, 2, 3, 4]),
+        (3, 5, [0, 0, 1, 1, 2]),
+    ],
+)
+def test_the_evaluation_indices_are_the_pinned_linspace_rows(
+    n_rows: int, n_timestamps: int, expected: list[int]
+) -> None:
+    # Pins test-set scoring: values (duplicates kept when n_timestamps > n_rows)
+    # and the int32 dtype.
+    indices = evaluation_indices(n_rows, n_timestamps)
+
+    assert indices.dtype == np.int32
+    assert indices.tolist() == expected

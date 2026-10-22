@@ -81,7 +81,11 @@ PRIOR_PRECISION = 1.0
 """Precision of the isotropic Gaussian prior shared by every posterior."""
 
 PREDICTIVE_SAMPLE_COUNT = 100
-"""Draws (and predictive samples) per window: validation and evaluation alike."""
+"""Draws (and predictive samples) per window: validation and evaluation alike.
+
+It sets the draws per window; the number of validation windows per history is
+``data_processing.VALIDATION_TIMESTAMP_COUNT`` (ADR 0003).
+"""
 
 VALIDATION_METRIC = "crps"
 """The validation criterion: early-stopping and HPO metric of every posterior."""

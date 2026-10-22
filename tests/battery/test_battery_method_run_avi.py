@@ -33,6 +33,8 @@ from qmodem.battery.posterior import (
     COST_SCAFFOLDING_PARAMETERS,
     COST_TRAINABLE_PARAMETERS,
     INFERRED_SUBNETWORK,
+    VALIDATION_METRIC,
+    VALIDATION_TAG_PREFIX,
     PosteriorStageHyperparameters,
     parameter_count,
 )
@@ -40,6 +42,8 @@ from qmodem.battery.train import Method
 from qmodem.tracking import MLflowCheckpointStore
 
 PREDICTIVE_SAMPLE_COUNT = 100
+CRPS = f"{VALIDATION_TAG_PREFIX}{VALIDATION_METRIC}"
+"""The per-epoch posterior validation criterion's tag."""
 
 TINY_AVI = AVIHyperparameters(n_qubits=3, n_layers=1, num_draws=2)
 TINY_STAGE = PosteriorStageHyperparameters(max_epochs=5, patience=2)
@@ -197,7 +201,7 @@ def test_an_avi_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
 
 def test_an_avi_run_finalizes_its_best_epoch_on_validation_crps(avi_run) -> None:
     _, tracker, persistent = avi_run
-    crps = tracker.history("posterior/validation/crps")
+    crps = tracker.history(CRPS)
 
     assert persistent.load("posterior/best").epoch == int(np.argmin(crps))
 

@@ -57,6 +57,6 @@ Backbone set: max(50, 10) = 50; posterior set: 10; **K = 50**.
 
 - Any change of K, or a return to full-set validation, changes every validation score and selection. Such a change must supersede this ADR and requires rerunning the backbone and posterior studies.
 - `val_crps_baseline` uses the validation timestamps (it reads the reduced posterior validation set), so it still equals epoch 0's score ([ADR 0002](0002-posterior-validation-key-per-method-run.md)).
-- K is logged on every run as the `validation_timestamps` param, and `windows_backbone_val` / `windows_posterior_val` count the reduced sets.
+- K is logged on every run as the `validation_timestamp_count` param, and `windows_backbone_val` / `windows_posterior_val` count the reduced sets.
 - No existing run is invalidated: `stages_disjoint_val` holds only data generation.
 - ADRs 0001 and 0002 stay in force.

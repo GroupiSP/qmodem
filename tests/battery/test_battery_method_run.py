@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import jax
@@ -10,15 +12,8 @@ import pytest
 from flax import nnx
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from stagereg.core import (
-    InMemoryCheckpointStore,
-    IntervalCoverage,
-    NegativeLogLikelihood,
-    RootMeanSquaredError,
-    SampleContinuousRankedProbabilityScore,
-    is_finalized,
-)
-from stagereg.jax import MetricSuite, PosteriorPredictivePredictor
+from stagereg.core import InMemoryCheckpointStore, is_finalized
+from stagereg.jax import MetricSuite
 
 from qmodem.battery import method_run
 from qmodem.battery.data_processing import ValidationSet
@@ -42,14 +37,20 @@ from qmodem.battery.posterior import (
     DRAWS_PER_SECOND_WINDOWS,
     INFERRED_SUBNETWORK,
     VAL_CRPS_BASELINE,
+    VALIDATION_METRIC,
+    VALIDATION_TAG_PREFIX,
     PosteriorKeys,
     PosteriorStageHyperparameters,
+    diagnostic_metrics,
     posterior_loader,
     score_validation,
+    validation_metrics,
 )
 from qmodem.battery.train import Method, OptimizerHyperparameters, backbone_keys
 
 PREDICTIVE_SAMPLE_COUNT = 100
+CRPS = f"{VALIDATION_TAG_PREFIX}{VALIDATION_METRIC}"
+"""The per-epoch posterior validation criterion's tag."""
 COST_TAGS = {COST_WALL_CLOCK, COST_TRAINABLE_PARAMETERS, COST_DRAWS_PER_SECOND}
 
 
@@ -233,7 +234,7 @@ def test_the_same_seed_gives_identical_finalized_bbb_checkpoints_and_draws(
 
 def test_a_bbb_run_finalizes_its_best_epoch_on_validation_crps(bbb_run) -> None:
     run, tracker, persistent = bbb_run
-    crps = tracker.history("posterior/validation/crps")
+    crps = tracker.history(CRPS)
     finalized = persistent.load("posterior/best")
 
     assert is_finalized(finalized)
@@ -271,24 +272,28 @@ def test_a_bbb_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
     _, tracker, persistent = bbb_run
     epochs = len(tracker.history("posterior/train/loss"))
 
-    assert len(tracker.history("posterior/validation/crps")) == epochs
+    assert len(tracker.history(CRPS)) == epochs
     crps_per_epoch_and_diagnostics_once(
         tracker, persistent.load("posterior/best").epoch
     )
 
 
 def _full_suite() -> MetricSuite:
-    """The pre-#139 per-epoch suite: CRPS plus the three diagnostics."""
-    return MetricSuite(
-        epoch=(
-            NegativeLogLikelihood(),
-            SampleContinuousRankedProbabilityScore(name="crps"),
-            RootMeanSquaredError(),
-            IntervalCoverage(level=0.95, name="coverage_95"),
-        ),
-        predictor=PosteriorPredictivePredictor(),
-        predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
-    )
+    """Compose the pre-#139 per-epoch suite: the criterion plus the diagnostics.
+
+    Returns:
+        ``validation_metrics()`` and ``diagnostic_metrics()`` merged into one
+        suite, so one pass scores all of them on the same predictive samples.
+
+    Raises:
+        ValueError: If the two suites' predictors or sample counts differ.
+    """
+    criterion, diagnostics = validation_metrics(), diagnostic_metrics()
+    if criterion.predictive_sample_count != diagnostics.predictive_sample_count:
+        raise ValueError("the suites score different predictive sample counts.")
+    if type(criterion.predictor) is not type(diagnostics.predictor):
+        raise ValueError("the suites use different predictors.")
+    return dataclasses.replace(criterion, epoch=criterion.epoch + diagnostics.epoch)
 
 
 @pytest.mark.parametrize("fixture", ["bbb_run", "mcd_run"])
@@ -311,12 +316,12 @@ def test_the_diagnostics_and_best_crps_are_the_full_suites_scores_of_the_best_ep
         _full_suite(),
     )
     best = persistent.load("posterior/best").epoch
-    crps_steps = tracker.steps("posterior/validation/crps")
-    best_crps = tracker.history("posterior/validation/crps")[crps_steps.index(best)]
+    crps_steps = tracker.steps(CRPS)
+    best_crps = tracker.history(CRPS)[crps_steps.index(best)]
 
     assert full["crps"] == pytest.approx(best_crps, rel=1e-5)
     for name in ("nll", "rmse", "coverage_95"):
-        assert tracker.history(f"posterior/validation/{name}") == [
+        assert tracker.history(f"{VALIDATION_TAG_PREFIX}{name}") == [
             pytest.approx(full[name], rel=1e-5)
         ]
 
@@ -378,7 +383,23 @@ def probe_inputs(monkeypatch) -> list[np.ndarray]:
     seen: list[np.ndarray] = []
     probe = method_run.draws_per_second
 
-    def spy(draw, inputs, key, num_draws):
+    def spy(
+        draw: Callable[[jax.Array, jax.Array], jax.Array],
+        inputs: jax.Array,
+        key: jax.Array,
+        num_draws: int,
+    ) -> float:
+        """Record the probed inputs, then time them with the real probe.
+
+        Args:
+            draw: The method run's draw function.
+            inputs: The windows the probe times.
+            key: The probe's draw key.
+            num_draws: Draws per timed call.
+
+        Returns:
+            The real probe's draws per second.
+        """
         seen.append(np.asarray(inputs))
         return probe(draw, inputs, key, num_draws)
 
@@ -418,7 +439,7 @@ def test_a_method_run_reads_only_the_posterior_validation_set(
     np.testing.assert_array_equal(inputs, windows[: min(1024, len(windows))])
     if isinstance(config, MCDConfig):
         _, reference, _ = mcd_run
-        for tag in ("posterior/validation/crps", VAL_CRPS_BASELINE):
+        for tag in (CRPS, VAL_CRPS_BASELINE):
             assert tracker.history(tag) == pytest.approx(reference.history(tag))
 
 
@@ -526,7 +547,7 @@ def test_an_mcd_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
 
 def test_an_mcd_run_finalizes_its_best_epoch_on_validation_crps(mcd_run) -> None:
     run, tracker, persistent = mcd_run
-    crps = tracker.history("posterior/validation/crps")
+    crps = tracker.history(CRPS)
     finalized = persistent.load("posterior/best")
 
     assert is_finalized(finalized)
@@ -664,7 +685,7 @@ def test_the_baseline_is_epoch_0s_score_of_a_posterior_that_barely_moved(
     tracker, _ = _train_mcd_at(1e-12, trained_backbone, tracker_factory, store_factory)
 
     assert tracker.history(VAL_CRPS_BASELINE)[0] == pytest.approx(
-        tracker.history("posterior/validation/crps")[0], rel=1e-5
+        tracker.history(CRPS)[0], rel=1e-5
     )
 
 
@@ -676,7 +697,7 @@ def test_the_best_epoch_ignores_a_baseline_lower_than_every_epoch(
         10.0, trained_backbone, tracker_factory, store_factory
     )
     baseline = tracker.history(VAL_CRPS_BASELINE)[0]
-    crps = tracker.history("posterior/validation/crps")
+    crps = tracker.history(CRPS)
     finalized = persistent.load("posterior/best")
 
     assert baseline < min(crps)

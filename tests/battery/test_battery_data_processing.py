@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from collections.abc import Callable
 
 import jax
 import numpy as np
@@ -21,6 +22,7 @@ from qmodem.battery.data_processing import (
     PreparedData,
     SplitSizes,
     ValidationSet,
+    evenly_spaced_indices,
     make_data_pipeline,
     make_loader,
     posterior_dataset_size,
@@ -33,6 +35,9 @@ seeds = st.integers(min_value=0, max_value=2**31 - 1)
 epochs = st.integers(min_value=0, max_value=10_000)
 batch_sizes = st.integers(min_value=1, max_value=64)
 validation_sets = st.sampled_from(ValidationSet)
+
+HistoryBuilder = Callable[[tuple[int, ...], int], pd.DataFrame]
+"""``synthetic_histories(lengths, seed)``: discharge histories of given lengths."""
 
 
 def _stack(batches: list, field: str) -> np.ndarray:
@@ -149,12 +154,12 @@ def test_the_window_counts_name_every_split_and_k(synthetic_battery) -> None:
         "windows_train": 85,
         "windows_backbone_val": 26,
         "windows_posterior_val": 41,
-        "validation_timestamps": 50,
+        "validation_timestamp_count": 50,
     }
 
 
 def test_the_window_counts_reflect_the_validation_timestamps(
-    synthetic_histories,
+    synthetic_histories: HistoryBuilder,
 ) -> None:
     # Windows per history: backbone (16, 10), posterior (12, 21, 8); K = 9.
     data = _prepare(synthetic_histories, [25, 19], [21, 30, 17], k=9)
@@ -163,7 +168,7 @@ def test_the_window_counts_reflect_the_validation_timestamps(
         "windows_train": 85,
         "windows_backbone_val": 9 + 9,
         "windows_posterior_val": 9 + 9 + 8,
-        "validation_timestamps": 9,
+        "validation_timestamp_count": 9,
     }
 
 
@@ -355,6 +360,37 @@ def test_split_sizes_round_trip_through_the_logged_data_generation_params(
     assert SplitSizes.from_params(logged) == sizes
 
 
+# --- Evenly spaced indices (validation and evaluation timestamps) -----------------
+
+
+@settings(deadline=None, max_examples=50)
+@given(
+    n=st.integers(1, 500),
+    num=st.integers(2, 500),
+    dtype=st.sampled_from([np.int32, np.int64]),
+)
+def test_evenly_spaced_indices_span_both_ends_with_near_equal_gaps(
+    n: int, num: int, dtype: type
+) -> None:
+    indices = evenly_spaced_indices(n, num, dtype=dtype)
+
+    assert indices.dtype == dtype
+    assert len(indices) == num
+    assert indices[0] == 0
+    assert indices[-1] == n - 1
+    gaps = np.diff(indices)
+    assert np.all(gaps >= 0)  # non-decreasing
+    assert gaps.max() - gaps.min() <= 1  # evenly spaced
+
+
+@settings(deadline=None, max_examples=50)
+@given(n=st.integers(1, 500), num=st.integers(2, 500))
+def test_evenly_spaced_indices_are_distinct_while_they_fit(n: int, num: int) -> None:
+    indices = evenly_spaced_indices(n, min(num, n))
+
+    assert len(np.unique(indices)) == len(indices)
+
+
 # --- The validation timestamps of both validation sets ----------------------------
 
 ALL_WINDOWS = 10**6
@@ -367,21 +403,44 @@ validation_timestamp_counts = st.integers(2, 40)
 
 
 def _prepare(
-    synthetic_histories,
+    synthetic_histories: HistoryBuilder,
     backbone_lengths: list[int],
     posterior_lengths: list[int],
     k: int,
 ) -> PreparedData:
+    """Prepare fixed training histories and the given validation histories.
+
+    Args:
+        synthetic_histories: The history builder fixture.
+        backbone_lengths: Row count of each backbone validation history.
+        posterior_lengths: Row count of each posterior validation history.
+        k: K, the validation timestamps per history.
+
+    Returns:
+        The prepared windows, with fresh train-fitted scalers.
+
+    Raises:
+        ValueError: If ``k < 2``.
+    """
     splits = HistorySplits(
         train=synthetic_histories(TRAIN_LENGTHS, seed=0),
         backbone_val=synthetic_histories(tuple(backbone_lengths), seed=1),
         posterior_val=synthetic_histories(tuple(posterior_lengths), seed=2),
     )
-    return prepare_windows(splits, make_data_pipeline(), validation_timestamps=k)
+    return prepare_windows(splits, make_data_pipeline(), validation_timestamp_count=k)
 
 
 def _windows_per_history(lengths: list[int]) -> list[int]:
-    # Stride 1; a history shorter than a window is padded into one window.
+    """Count the stride-1 windows of each history.
+
+    A history shorter than a window is padded into one window.
+
+    Args:
+        lengths: Row count of each history.
+
+    Returns:
+        The stride-1 window count of each history.
+    """
     return [max(length - WINDOW_SIZE + 1, 1) for length in lengths]
 
 
@@ -390,9 +449,17 @@ def _selected_positions(
 ) -> list[list[int]]:
     """Locate each reduced window among the stride-1 windows of its history.
 
+    Args:
+        reduced: The validation set at its validation timestamps.
+        full: The same set with every stride-1 window (``ALL_WINDOWS``).
+        lengths: Row count of each history of the set.
+
     Returns:
         Per history, the stride-1 index of each of its reduced windows, in the
         reduced set's order.
+
+    Raises:
+        AssertionError: If a reduced window is none of the stride-1 windows.
     """
     full_flat = np.asarray(full.features).reshape(len(full), -1)
     reduced_flat = np.asarray(reduced.features).reshape(len(reduced), -1)
@@ -407,27 +474,76 @@ def _selected_positions(
     ]
 
 
+@dataclasses.dataclass(frozen=True)
+class ReducedSet:
+    """One validation set at its validation timestamps, beside its full version.
+
+    Attributes:
+        which: The validation set.
+        reduced: Its windows at the validation timestamps.
+        full: All its stride-1 windows.
+        lengths: Row count of each of its histories.
+    """
+
+    which: ValidationSet
+    reduced: ArrayDataSource
+    full: ArrayDataSource
+    lengths: list[int]
+
+    def positions(self) -> list[list[int]]:
+        """Return per history the stride-1 index of each reduced window.
+
+        Returns:
+            See ``_selected_positions``.
+        """
+        return _selected_positions(self.reduced, self.full, self.lengths)
+
+
+def _reduced_sets(
+    synthetic_histories: HistoryBuilder,
+    backbone: list[int],
+    posterior: list[int],
+    k: int,
+) -> list[ReducedSet]:
+    """Prepare both validation sets at K and at every window.
+
+    Args:
+        synthetic_histories: The history builder fixture.
+        backbone: Row count of each backbone validation history.
+        posterior: Row count of each posterior validation history.
+        k: K, the validation timestamps per history.
+
+    Returns:
+        The backbone and the posterior validation set, in that order.
+
+    Raises:
+        ValueError: If ``k < 2``.
+    """
+    data = _prepare(synthetic_histories, backbone, posterior, k)
+    full = _prepare(synthetic_histories, backbone, posterior, ALL_WINDOWS)
+    return [
+        ReducedSet(which, data.validation(which), full.validation(which), lengths)
+        for which, lengths in (
+            (ValidationSet.BACKBONE, backbone),
+            (ValidationSet.POSTERIOR, posterior),
+        )
+    ]
+
+
 @settings(deadline=None, max_examples=25)
 @given(
     backbone=history_lengths, posterior=history_lengths, k=validation_timestamp_counts
 )
 def test_every_validation_history_contributes_min_k_and_its_window_count(
-    synthetic_histories, backbone: list[int], posterior: list[int], k: int
+    synthetic_histories: HistoryBuilder,
+    backbone: list[int],
+    posterior: list[int],
+    k: int,
 ) -> None:
-    data = _prepare(synthetic_histories, backbone, posterior, k)
-    full = _prepare(synthetic_histories, backbone, posterior, ALL_WINDOWS)
-
-    for which, lengths in (
-        (ValidationSet.BACKBONE, backbone),
-        (ValidationSet.POSTERIOR, posterior),
-    ):
-        assert len(full.validation(which)) == sum(_windows_per_history(lengths))
-        positions = _selected_positions(
-            data.validation(which), full.validation(which), lengths
-        )
-        assert [len(p) for p in positions] == [
-            min(k, n) for n in _windows_per_history(lengths)
-        ]
+    for vset in _reduced_sets(synthetic_histories, backbone, posterior, k):
+        windows = _windows_per_history(vset.lengths)
+        assert len(vset.full) == sum(windows)
+        assert [len(p) for p in vset.positions()] == [min(k, n) for n in windows]
 
 
 @settings(deadline=None, max_examples=25)
@@ -435,19 +551,14 @@ def test_every_validation_history_contributes_min_k_and_its_window_count(
     backbone=history_lengths, posterior=history_lengths, k=validation_timestamp_counts
 )
 def test_validation_windows_are_evenly_spaced_stride_1_windows_in_order_with_both_ends(
-    synthetic_histories, backbone: list[int], posterior: list[int], k: int
+    synthetic_histories: HistoryBuilder,
+    backbone: list[int],
+    posterior: list[int],
+    k: int,
 ) -> None:
-    data = _prepare(synthetic_histories, backbone, posterior, k)
-    full = _prepare(synthetic_histories, backbone, posterior, ALL_WINDOWS)
-
-    for which, lengths in (
-        (ValidationSet.BACKBONE, backbone),
-        (ValidationSet.POSTERIOR, posterior),
-    ):
-        positions = _selected_positions(
-            data.validation(which), full.validation(which), lengths
-        )
-        for selected, n in zip(positions, _windows_per_history(lengths), strict=True):
+    for vset in _reduced_sets(synthetic_histories, backbone, posterior, k):
+        windows = _windows_per_history(vset.lengths)
+        for selected, n in zip(vset.positions(), windows, strict=True):
             assert selected[0] == 0
             assert selected[-1] == n - 1
             gaps = np.diff(selected)
@@ -461,7 +572,10 @@ def test_validation_windows_are_evenly_spaced_stride_1_windows_in_order_with_bot
     backbone=history_lengths, posterior=history_lengths, k=validation_timestamp_counts
 )
 def test_the_validation_timestamps_are_deterministic(
-    synthetic_histories, backbone: list[int], posterior: list[int], k: int
+    synthetic_histories: HistoryBuilder,
+    backbone: list[int],
+    posterior: list[int],
+    k: int,
 ) -> None:
     first = _prepare(synthetic_histories, backbone, posterior, k)
     second = _prepare(synthetic_histories, backbone, posterior, k)
@@ -482,7 +596,7 @@ def test_the_validation_timestamps_are_deterministic(
     other_k=validation_timestamp_counts,
 )
 def test_the_training_windows_are_the_same_for_any_k(
-    synthetic_histories,
+    synthetic_histories: HistoryBuilder,
     backbone: list[int],
     posterior: list[int],
     k: int,
@@ -505,33 +619,46 @@ def test_the_training_windows_are_the_same_for_any_k(
     backbone=history_lengths, posterior=history_lengths, k=validation_timestamp_counts
 )
 def test_the_validation_sets_stay_disjoint(
-    synthetic_histories, backbone: list[int], posterior: list[int], k: int
+    synthetic_histories: HistoryBuilder,
+    backbone: list[int],
+    posterior: list[int],
+    k: int,
 ) -> None:
-    data = _prepare(synthetic_histories, backbone, posterior, k)
-    full = _prepare(synthetic_histories, backbone, posterior, ALL_WINDOWS)
+    # Every validation window is one of its own set's windows, and none is a
+    # window of the other validation set.
+    backbone_set, posterior_set = _reduced_sets(
+        synthetic_histories, backbone, posterior, k
+    )
 
-    # Every backbone window is one of the backbone set's own windows, and none is
-    # a posterior validation set window (and vice versa).
-    for which, other in (
-        (ValidationSet.BACKBONE, ValidationSet.POSTERIOR),
-        (ValidationSet.POSTERIOR, ValidationSet.BACKBONE),
-    ):
-        own = np.asarray(full.validation(which).features).reshape(
-            len(full.validation(which)), -1
-        )
-        foreign = np.asarray(full.validation(other).features).reshape(
-            len(full.validation(other)), -1
-        )
-        for window in np.asarray(data.validation(which).features).reshape(
-            len(data.validation(which)), -1
-        ):
+    def flat(source: ArrayDataSource) -> np.ndarray:
+        return np.asarray(source.features).reshape(len(source), -1)
+
+    for vset, other in ((backbone_set, posterior_set), (posterior_set, backbone_set)):
+        own, foreign = flat(vset.full), flat(other.full)
+        for window in flat(vset.reduced):
             assert np.abs(own - window).max(-1).min() < 1e-6
             assert np.abs(foreign - window).max(-1).min() > 1e-6
 
 
 @pytest.mark.parametrize("k", [-1, 0, 1])
 def test_fewer_than_two_validation_timestamps_are_refused(
-    synthetic_histories, k: int
+    synthetic_histories: HistoryBuilder, k: int
 ) -> None:
     with pytest.raises(ValueError, match="K must be at least 2"):
         _prepare(synthetic_histories, [25], [25], k)
+
+
+@pytest.mark.parametrize("which", list(ValidationSet))
+def test_an_empty_validation_set_is_refused(
+    synthetic_histories: HistoryBuilder, which: ValidationSet
+) -> None:
+    some = synthetic_histories((25,), seed=1)
+    none = some.iloc[:0]
+    splits = HistorySplits(
+        train=synthetic_histories(TRAIN_LENGTHS, seed=0),
+        backbone_val=none if which is ValidationSet.BACKBONE else some,
+        posterior_val=none if which is ValidationSet.POSTERIOR else some,
+    )
+
+    with pytest.raises(ValueError, match="validation set has no histories"):
+        prepare_windows(splits, make_data_pipeline())

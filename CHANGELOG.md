@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scored once, on the best checkpoint and from the same predictive samples, and
   logged at the best epoch's step under their existing names. CRPS, selection,
   early stopping and HPO are unchanged ([#139]).
+- Both validation sets are scored only at their validation timestamps: K = 50
+  evenly spaced windows per history (`VALIDATION_TIMESTAMP_COUNT`, first and last
+  window included), the rule of a test case's evaluation timestamps. Training
+  windows stay stride-1, so N is unchanged. **This changes every validation
+  score** (backbone stages, posterior stages, both HPO studies and
+  `val_crps_baseline`), so validation scores are not comparable with earlier runs.
+  K is logged as the `validation_timestamp_count` param; `windows_backbone_val`
+  and `windows_posterior_val` count the reduced sets. See ADR 0003 ([#142]).
+- The draws-per-second probe (`cost/posterior/draws_per_second`, table T3) times
+  the first 1024 posterior validation windows (`DRAWS_PER_SECOND_WINDOWS`), or all
+  of them if there are fewer, independent of K ([#140]).
+- An empty validation set is refused with a `ValueError` when the windows are
+  prepared.
 
 ## [0.3.0] - 2026-10-21
 
@@ -152,5 +165,7 @@ Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 [#132]: https://github.com/GroupiSP/qmodem/issues/132
 [#135]: https://github.com/GroupiSP/qmodem/issues/135
 [#139]: https://github.com/GroupiSP/qmodem/issues/139
+[#140]: https://github.com/GroupiSP/qmodem/issues/140
+[#142]: https://github.com/GroupiSP/qmodem/issues/142
 [PennyLaneAI/pennylane#9930]: https://github.com/PennyLaneAI/pennylane/issues/9930
 [GroupiSP/stagereg#136]: https://github.com/GroupiSP/stagereg/issues/136
