@@ -100,6 +100,13 @@ COST_TRAINABLE_PARAMETERS = "cost/posterior/trainable_parameters"
 COST_DRAWS_PER_SECOND = "cost/posterior/draws_per_second"
 DRAWS_PER_SECOND_REPEATS = 5
 """Timed calls of the draws-per-second probe; it reports their median."""
+DRAWS_PER_SECOND_WINDOWS = 1024
+"""Windows timed by the draws-per-second probe (cost protocol, table T3).
+
+The probe times the first ``DRAWS_PER_SECOND_WINDOWS`` windows of the posterior
+validation set, or all of them if there are fewer. The count is independent of
+the validation-timestamp count, so T3 stays comparable whatever that count is.
+"""
 COST_SCAFFOLDING_PARAMETERS = "cost/posterior/scaffolding_parameters"
 """Parameters trained only to fit the posterior, not part of it (AVI's discriminator);
 logged only by methods that have any."""
@@ -445,7 +452,8 @@ class PosteriorCost:
             train, finalize); zero without a posterior stage.
         trainable_parameters: Number of parameters of the posterior the method
             trains.
-        draws_per_second: Posterior draws per second at the validation windows.
+        draws_per_second: Posterior draws per second at the first
+            ``DRAWS_PER_SECOND_WINDOWS`` posterior validation windows.
         scaffolding_parameters: Number of parameters trained only to fit the
             posterior (AVI's discriminator), or ``None`` if there are none.
     """

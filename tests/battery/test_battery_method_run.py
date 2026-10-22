@@ -39,6 +39,7 @@ from qmodem.battery.posterior import (
     COST_DRAWS_PER_SECOND,
     COST_TRAINABLE_PARAMETERS,
     COST_WALL_CLOCK,
+    DRAWS_PER_SECOND_WINDOWS,
     INFERRED_SUBNETWORK,
     VAL_CRPS_BASELINE,
     PosteriorKeys,
@@ -371,17 +372,39 @@ def mcd_run(trained_backbone, tracker_factory, store_factory):
     return run, tracker, persistent
 
 
+@pytest.fixture
+def probe_inputs(monkeypatch) -> list[np.ndarray]:
+    """Record the inputs of every draws-per-second probe of a method run."""
+    seen: list[np.ndarray] = []
+    probe = method_run.draws_per_second
+
+    def spy(draw, inputs, key, num_draws):
+        seen.append(np.asarray(inputs))
+        return probe(draw, inputs, key, num_draws)
+
+    monkeypatch.setattr(method_run, "draws_per_second", spy)
+    return seen
+
+
 @pytest.mark.parametrize("config", [HNNConfig(), TINY_MCD], ids=["hnn", "mcd"])
 def test_a_method_run_reads_only_the_posterior_validation_set(
-    config, mcd_run, trained_backbone, only_serving, tracker_factory, store_factory
+    config,
+    mcd_run,
+    trained_backbone,
+    only_serving,
+    tracker_factory,
+    store_factory,
+    probe_inputs,
 ) -> None:
     # The posterior stage, its baseline and the draws-per-second probe all run on
     # the posterior validation set; reading the backbone one would fail.
     tracker = tracker_factory()
+    data = trained_backbone.battery.data
+    windows = np.asarray(data.posterior_val.features)
 
     train_method_run(
         backbone=_fresh_backbone_handle(trained_backbone, store_factory),
-        data=only_serving(trained_backbone.battery.data, ValidationSet.POSTERIOR),
+        data=only_serving(data, ValidationSet.POSTERIOR),
         config=config,
         seed=trained_backbone.seed,
         tracker=tracker,
@@ -389,10 +412,36 @@ def test_a_method_run_reads_only_the_posterior_validation_set(
     )
 
     assert COST_DRAWS_PER_SECOND in tracker.tags
+    # The probe times the first min(1024, n) posterior validation windows.
+    assert DRAWS_PER_SECOND_WINDOWS == 1024
+    (inputs,) = probe_inputs
+    np.testing.assert_array_equal(inputs, windows[: min(1024, len(windows))])
     if isinstance(config, MCDConfig):
         _, reference, _ = mcd_run
         for tag in ("posterior/validation/crps", VAL_CRPS_BASELINE):
             assert tracker.history(tag) == pytest.approx(reference.history(tag))
+
+
+@pytest.mark.parametrize("cap", [1, 3])
+def test_the_draws_per_second_probe_times_only_the_first_windows(
+    cap, trained_backbone, tracker_factory, store_factory, probe_inputs, monkeypatch
+) -> None:
+    # A posterior validation set larger than the window count is cut to its head.
+    monkeypatch.setattr(method_run, "DRAWS_PER_SECOND_WINDOWS", cap)
+    windows = np.asarray(trained_backbone.battery.data.posterior_val.features)
+    assert len(windows) > cap
+
+    train_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        data=trained_backbone.battery.data,
+        config=HNNConfig(),
+        seed=trained_backbone.seed,
+        tracker=tracker_factory(),
+        store=store_factory(),
+    )
+
+    (inputs,) = probe_inputs
+    np.testing.assert_array_equal(inputs, windows[:cap])
 
 
 def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(
