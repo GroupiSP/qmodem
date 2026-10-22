@@ -163,6 +163,12 @@ def _synthetic_histories(lengths: tuple[int, ...], seed: int) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+@pytest.fixture(scope="session")
+def synthetic_histories() -> Any:
+    """The history builder ``_synthetic_histories(lengths, seed)``."""
+    return _synthetic_histories
+
+
 @dataclasses.dataclass(frozen=True)
 class SyntheticBattery:
     """Tiny prepared battery data plus the facts it was built from.
