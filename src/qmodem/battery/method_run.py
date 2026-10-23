@@ -347,14 +347,20 @@ def _require_registered(config: MethodConfig) -> None:
 def _posterior_validation_inputs(data: PreparedData) -> jax.Array:
     """Return the inputs of the draws-per-second probe.
 
+    Always ``DRAWS_PER_SECOND_WINDOWS`` windows: the posterior validation set's,
+    cycled if it has fewer. Throughput depends on the batch size, which K would
+    otherwise change.
+
     Args:
         data: Prepared train and validation windows.
 
     Returns:
         The first ``DRAWS_PER_SECOND_WINDOWS`` posterior validation set windows
-        ``(B, W, C)``, or all of them if there are fewer.
+        ``(DRAWS_PER_SECOND_WINDOWS, W, C)``, repeated cyclically if there are
+        fewer.
     """
-    return jnp.asarray(data.posterior_val.features[:DRAWS_PER_SECOND_WINDOWS])
+    features = data.posterior_val.features
+    return jnp.asarray(features[np.arange(DRAWS_PER_SECOND_WINDOWS) % len(features)])
 
 
 def _cost(

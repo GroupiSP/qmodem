@@ -108,8 +108,8 @@ DRAWS_PER_SECOND_WINDOWS = 1024
 """Windows timed by the draws-per-second probe (cost protocol, table T3).
 
 The probe times the first ``DRAWS_PER_SECOND_WINDOWS`` windows of the posterior
-validation set, or all of them if there are fewer. The count is independent of
-the validation-timestamp count, so T3 stays comparable whatever that count is.
+validation set, cycled if it has fewer. The count is independent of the
+validation-timestamp count, so T3 stays comparable whatever that count is.
 """
 COST_SCAFFOLDING_PARAMETERS = "cost/posterior/scaffolding_parameters"
 """Parameters trained only to fit the posterior, not part of it (AVI's discriminator);

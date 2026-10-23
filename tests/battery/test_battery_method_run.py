@@ -47,6 +47,7 @@ from qmodem.battery.posterior import (
     validation_metrics,
 )
 from qmodem.battery.train import Method, OptimizerHyperparameters, backbone_keys
+from qmodem.data import ArrayDataSource
 
 PREDICTIVE_SAMPLE_COUNT = 100
 CRPS = f"{VALIDATION_TAG_PREFIX}{VALIDATION_METRIC}"
@@ -433,10 +434,10 @@ def test_a_method_run_reads_only_the_posterior_validation_set(
     )
 
     assert COST_DRAWS_PER_SECOND in tracker.tags
-    # The probe times the first min(1024, n) posterior validation windows.
+    # The probe times 1024 posterior validation windows, cycled if there are fewer.
     assert DRAWS_PER_SECOND_WINDOWS == 1024
     (inputs,) = probe_inputs
-    np.testing.assert_array_equal(inputs, windows[: min(1024, len(windows))])
+    np.testing.assert_array_equal(inputs, windows[np.arange(1024) % len(windows)])
     if isinstance(config, MCDConfig):
         _, reference, _ = mcd_run
         for tag in (CRPS, VAL_CRPS_BASELINE):
@@ -463,6 +464,24 @@ def test_the_draws_per_second_probe_times_only_the_first_windows(
 
     (inputs,) = probe_inputs
     np.testing.assert_array_equal(inputs, windows[:cap])
+
+
+@settings(deadline=None)
+@given(n_windows=st.integers(1, 40), cap=st.integers(1, 40))
+def test_the_draws_per_second_probe_size_is_independent_of_the_validation_set_size(
+    n_windows: int, cap: int
+) -> None:
+    # Throughput depends on the batch size, so the probe must not shrink with K.
+    features = np.arange(n_windows)[:, None, None].astype(np.float32)
+    data = SimpleNamespace(
+        posterior_val=ArrayDataSource(features=features, targets=features[:, 0, 0])
+    )
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(method_run, "DRAWS_PER_SECOND_WINDOWS", cap)
+        inputs = np.asarray(method_run._posterior_validation_inputs(data))
+
+    assert inputs.shape == (cap, 1, 1)
+    np.testing.assert_array_equal(inputs[:, 0, 0], np.arange(cap) % n_windows)
 
 
 def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(

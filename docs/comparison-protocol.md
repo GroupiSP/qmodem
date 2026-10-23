@@ -139,7 +139,7 @@ A seed enters the results only if all checks hold. A failure **invalidates the s
 |---|---|---|
 | **T1** | RMSE, CRPS, coverage@0.95, WSU per method (mean ± std) + per-policy columns | overall ranking |
 | **T2** | paired Δ vs BBB and HNN (bootstrap CI) + per-policy columns; one row per arm | is Q-AVI's gain real |
-| **T3** | posterior-stage wall-clock, trainable params, draws/s (first 1024 posterior-validation windows, `DRAWS_PER_SECOND_WINDOWS`) | cost |
+| **T3** | posterior-stage wall-clock, trainable params, draws/s (first 1024 posterior-validation windows, cycled if fewer; `DRAWS_PER_SECOND_WINDOWS`) | cost |
 | **F1** | reliability curve: empirical vs nominal coverage, levels 0.5…0.95 | calibration beyond one level |
 | **F2** | epistemic / aleatoric variance over SoC0, per method, representative case per policy, event marked | where Q-AVI adds epistemic spread |
 | **F3** | per-test-case CRPS bars, all methods, grouped by policy | is the gain uniform |
