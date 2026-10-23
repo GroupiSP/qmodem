@@ -12,12 +12,21 @@ import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from stagereg.core import (
+    SampleContinuousRankedProbabilityScore,
+    expected_gaussian_mixture_crps,
+)
+from stagereg.jax import MetricSuite, PosteriorPredictive, PosteriorPredictivePredictor
 
 from qmodem.battery.posterior import (
     PosteriorKeys,
+    diagnostic_metrics,
     draws_per_second,
     parameter_count,
     posterior_loader,
+    score_validation,
+    validation_crps,
+    validation_metrics,
 )
 
 
@@ -130,3 +139,74 @@ def test_draws_per_second_passes_inputs_and_key_at_runtime() -> None:
     draws_per_second(draw, _INPUTS, _KEY, 1, repeats=1)
 
     assert traced == [False, True]  # one eager call, one trace
+
+
+# --- the validation criterion: closed-form CRPS of the posterior predictive -------
+
+
+def _toy_predictive(num_draws: int, variance: float):
+    """A posterior predictive whose draws depend on the inputs and the draw key."""
+
+    def predictive(inputs: jax.Array, key: jax.Array) -> PosteriorPredictive:
+        location = jnp.mean(inputs, axis=tuple(range(1, inputs.ndim)))[:, None]
+        offsets = jax.random.normal(key, (num_draws, 1, 1))
+        return PosteriorPredictive(
+            draws=location[None] + offsets,
+            aleatoric_variance=jnp.full(location.shape, variance),
+        )
+
+    return predictive
+
+
+@settings(max_examples=10, deadline=None)
+@given(
+    seed=st.integers(0, 2**16),
+    num_draws=st.integers(1, 8),
+    variance=st.floats(1e-2, 4.0),
+    batch_size=st.integers(1, 64),
+)
+def test_validation_crps_is_the_closed_form_mixture_crps_of_the_validation_targets(
+    synthetic_battery, seed: int, num_draws: int, variance: float, batch_size: int
+) -> None:
+    data = synthetic_battery.data
+    predictive = _toy_predictive(num_draws, variance)
+    validation_key = jax.random.key(seed)
+    loader = posterior_loader(data, batch_size=batch_size, key=jax.random.key(0))
+
+    crps = validation_crps(predictive, loader, validation_key)
+
+    # Only the draw key of stagereg's split selects the draws (ADR 0002).
+    draw_key, _ = jax.random.split(validation_key)
+    features = data.posterior_val.features
+    targets = np.asarray(data.posterior_val.targets).reshape(-1, 1)
+    mixture = predictive(features, draw_key)
+    expected = expected_gaussian_mixture_crps(
+        np.asarray(mixture.draws)[..., 0].T,
+        np.asarray(mixture.aleatoric_variance)[:, 0],
+        targets,
+    )
+    assert crps == pytest.approx(float(np.mean(expected)), rel=1e-5)
+
+
+@pytest.mark.parametrize("suite", [validation_metrics, diagnostic_metrics])
+def test_no_validation_suite_requests_predictive_samples(suite) -> None:
+    metrics = suite()
+
+    assert metrics.predictive_sample_count is None
+    assert not metrics.prediction_requirements.fields.predictive_samples
+
+
+def test_scoring_a_suite_that_draws_predictive_samples_is_refused(
+    synthetic_battery,
+) -> None:
+    sampled = MetricSuite(
+        epoch=(SampleContinuousRankedProbabilityScore(name="crps"),),
+        predictor=PosteriorPredictivePredictor(),
+        predictive_sample_count=10,
+    )
+    loader = posterior_loader(
+        synthetic_battery.data, batch_size=8, key=jax.random.key(0)
+    )
+
+    with pytest.raises(ValueError, match="predictive samples"):
+        score_validation(_toy_predictive(2, 1.0), loader, jax.random.key(0), sampled)

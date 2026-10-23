@@ -55,7 +55,7 @@ _names = st.text(alphabet="abcdefghijklmnopqrstuvwxyz_", min_size=1, max_size=12
 
 
 def test_stagereg_version_is_the_installed_distribution_version() -> None:
-    assert stagereg_version() == importlib.metadata.version("stagereg") == "0.4.0"
+    assert stagereg_version() == importlib.metadata.version("stagereg") == "0.5.0"
 
 
 @_MLFLOW_SETTINGS
@@ -126,7 +126,7 @@ def test_backbone_tags_identify_role_seed_data_and_stagereg() -> None:
         "role": "backbone",
         "seed": "3",
         "data_generation_run_id": "abc",
-        "stagereg_version": "0.4.0",
+        "stagereg_version": "0.5.0",
     }
 
 

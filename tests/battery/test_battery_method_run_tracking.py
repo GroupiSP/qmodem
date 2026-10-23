@@ -100,7 +100,7 @@ def test_the_method_run_is_a_tagged_child_of_its_backbone(
         "method": "hnn",
         "seed": str(trained_backbone.seed),
     }
-    assert run.data.tags["stagereg_version"] == "0.4.0"
+    assert run.data.tags["stagereg_version"] == "0.5.0"
     assert run.info.status == "FINISHED"
 
 

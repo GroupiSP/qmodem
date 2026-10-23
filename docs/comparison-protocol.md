@@ -71,10 +71,10 @@ Every method with a posterior stage gets the **same Optuna budget** on seed 0's 
 | Setting | Value | Applies to |
 |---|---|---|
 | Study budget | 50 trials, `TPESampler` (fixed seed), `MedianPruner(n_startup_trials=5, n_warmup_steps=60)` | every posterior study |
-| Validation criterion | mean sample CRPS (stagereg `crps`, energy form) on the posterior validation set; the only per-epoch score | every posterior stage |
-| Validation draws | M_val = 100 draws × 1 noise sample, one validation key per method run ([ADR 0002](adr/0002-posterior-validation-key-per-method-run.md)); smaller M_val ruled out (plug-in CRPS bias favours narrow predictives); independent of Q-AVI's S | every posterior stage |
+| Validation criterion | mean closed-form CRPS of the posterior predictive (the mixture over the M_val draws; stagereg `ClosedFormContinuousRankedProbabilityScore`, name `crps`) against the posterior validation targets; no predictive samples, no MC noise; the only per-epoch score ([ADR 0004](adr/0004-closed-form-crps.md)) | every posterior stage |
+| Validation draws | M_val = 100 posterior draws, no noise samples; one validation key per method run, of which only the draw key is used ([ADR 0002](adr/0002-posterior-validation-key-per-method-run.md)); M_val kept equal to the evaluation's M for validation/evaluation parity ([ADR 0004](adr/0004-closed-form-crps.md)); independent of Q-AVI's S | every posterior stage |
 | Validation timestamps | K = 50 evenly spaced windows per history (min(K, n), ends included); training stays stride-1 ([ADR 0003](adr/0003-validation-at-fixed-timestamps.md)) | both validation sets |
-| Diagnostics | `nll`, `rmse`, `coverage_95` scored once on the best checkpoint, same samples, logged at the best epoch; never select | every posterior stage |
+| Diagnostics | `nll`, `rmse`, `coverage_95` scored once on the best checkpoint, same draws, exact for the mixture, logged at the best epoch; never select | every posterior stage |
 | Baseline | `val_crps_baseline`, criterion before epoch 0, same key; diagnostic only | every posterior stage |
 | Cap / patience | 300 epochs / 60 (≈ 20% of cap, covers Q-AVI's oscillations), `min_delta = 0`; shared, never tuned | MCD, BBB, Q-AVI, C-AVI |
 | Chain | fixed 300 epochs, first 100 burn-in, `thinning` set so M = 100 samples are retained | pSGLD |

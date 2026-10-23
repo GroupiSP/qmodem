@@ -437,7 +437,7 @@ def test_the_backbone_run_carries_its_four_tags(mlflow_backbone) -> None:
         "role": "backbone",
         "seed": str(mlflow_backbone.reference.seed),
         "data_generation_run_id": _DATA_GENERATION_RUN_ID,
-        "stagereg_version": "0.4.0",
+        "stagereg_version": "0.5.0",
     }
     assert run.info.status == "FINISHED"
 

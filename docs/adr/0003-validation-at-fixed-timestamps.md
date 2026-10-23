@@ -13,7 +13,7 @@ Validating every stride-1 window (~14k windows per set of 20 histories, 100 pred
 | Option | Verdict |
 |---|---|
 | Full stride-1 validation (status quo) | Rejected: slow, and weights histories by their window count (485–842), so long histories dominate. |
-| Fewer predictive samples | Rejected: breaks the "validation and evaluation alike" invariant of `PREDICTIVE_SAMPLE_COUNT`; the plug-in CRPS bias favours narrow predictives. |
+| Fewer predictive samples | Rejected: breaks the "validation and evaluation alike" invariant of `PREDICTIVE_SAMPLE_COUNT`; the plug-in CRPS bias favours narrow predictives. *Note*: the bias rationale is superseded by [ADR 0004](0004-closed-form-crps.md) (validation draws no predictive samples); M_val is kept for validation/evaluation parity. |
 | Random window subsample | Rejected: does not guarantee every degradation stage of a history is represented. |
 | Separate K per validation set | Rejected: "validation timestamps" should have one meaning. |
 | **K evenly spaced windows per history, K from a study** | Chosen: deterministic, equal weight per history (keeps the policy stratification of [ADR 0001](0001-disjoint-validation-sets.md)), mirrors the test set's evaluation timestamps. |
