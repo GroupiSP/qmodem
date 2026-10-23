@@ -6,14 +6,18 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import pytest
-from hypothesis import given, settings
+from forecast_strategies import FINITE, LEVELS, case_predictives, evaluated_cases
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
+from hypothesis.extra.numpy import arrays
 from matplotlib.figure import Figure
 from stagereg.core import expected_gaussian_mixture_crps, wsu
 from stagereg.jax import PosteriorPredictive
@@ -22,48 +26,34 @@ from qmodem.battery.evaluate import (
     EvaluatedCase,
     Evaluation,
     EvaluationParameters,
+    PredictiveModel,
     aggregate,
     case_metrics,
     evaluate_predictive_model,
     evaluation_indices,
+    interval_coverage,
+    interval_wsu,
     log_evaluation,
     metric_table,
+    unscale_predictive,
 )
 from qmodem.battery.forecasts import CasePredictive, ReferenceSamples
 
-_FINITE = st.floats(-50.0, 50.0, allow_nan=False, width=32)
+
+class _ShiftedInterval:
+    """A bare ``IntervalForecast``: the band ``[centre - level, centre + level]``."""
+
+    def __init__(self, centre: np.ndarray) -> None:
+        self.centre = centre
+
+    def interval(self, level: float) -> tuple[np.ndarray, np.ndarray]:
+        return self.centre - level, self.centre + level
 
 
-@st.composite
-def evaluated_cases(draw: st.DrawFn, *, name: str = "case_0", policy: int = 0):
-    """A test case with t0 plus at least two evaluated timestamps."""
-    n_times = draw(st.integers(3, 7))
-    n_draws = draw(st.integers(1, 12))
-    n_ref = draw(st.integers(2, 12))
-    steps = draw(st.lists(st.floats(0.5, 20.0), min_size=n_times, max_size=n_times))
-    arrays = st.lists(_FINITE, min_size=1, max_size=1).map(lambda v: v[0])
-
-    def matrix(rows: int, cols: int) -> np.ndarray:
-        values = draw(st.lists(arrays, min_size=rows * cols, max_size=rows * cols))
-        return np.asarray(values, dtype=np.float64).reshape(rows, cols)
-
-    variance = draw(
-        st.lists(st.floats(0.01, 25.0), min_size=n_times - 1, max_size=n_times - 1)
-    )
-    return EvaluatedCase(
-        name=name,
-        policy=policy,
-        times=np.cumsum(steps),
-        targets=matrix(n_times, 1)[:, 0],
-        reference=ReferenceSamples(matrix(n_times, n_ref)),
-        predictive=CasePredictive(
-            draw_means=matrix(n_times - 1, n_draws),
-            aleatoric_variance=np.asarray(variance),
-        ),
-    )
-
-
-def _assert_metrics_close(actual: dict, expected: dict, tol: float = 1e-9) -> None:
+def _assert_metrics_close(
+    actual: Mapping[str, float], expected: Mapping[str, float], tol: float = 1e-9
+) -> None:
+    """Assert two metric rows share their keys and agree within ``tol``."""
     assert actual.keys() == expected.keys()
     for key in expected:
         assert actual[key] == pytest.approx(expected[key], rel=tol, abs=tol), key
@@ -71,7 +61,9 @@ def _assert_metrics_close(actual: dict, expected: dict, tol: float = 1e-9) -> No
 
 @settings(max_examples=50, deadline=None)
 @given(case=evaluated_cases(), t0_values=st.data())
-def test_the_t0_row_never_changes_a_metric(case: EvaluatedCase, t0_values) -> None:
+def test_the_t0_row_never_changes_a_metric(
+    case: EvaluatedCase, t0_values: st.DataObject
+) -> None:
     other = t0_values.draw(evaluated_cases())
     n_ref = case.reference.samples.shape[1]
     replaced = dataclasses.replace(
@@ -179,6 +171,9 @@ def test_metrics_are_equivariant_under_an_affine_rul_map(
 ) -> None:
     # Mapping the targets, references and predictive by y -> a y + b scales CRPS,
     # RMSE and WSU by a, and leaves coverage unchanged.
+    # A target on an interval edge may flip sides by rounding: not a property.
+    edges = np.stack(case.predictive.interval(0.5))
+    assume(np.all(np.abs(edges - case.targets[1:]) > 1e-6))
     mapped = dataclasses.replace(
         case,
         targets=scale * case.targets + shift,
@@ -191,6 +186,61 @@ def test_metrics_are_equivariant_under_an_affine_rul_map(
     for metric in ("crps", "rmse", "wsu"):
         assert actual[metric] == pytest.approx(scale * expected[metric], rel=1e-6)
     assert actual["coverage_50"] == expected["coverage_50"]
+
+
+@settings(max_examples=30, deadline=None)
+@given(
+    centre=st.integers(2, 7).flatmap(
+        lambda n: arrays(np.float64, (n,), elements=FINITE)
+    ),
+    level=LEVELS,
+    shift=st.floats(-2.0, 2.0),
+)
+def test_coverage_counts_targets_inside_any_interval_forecast(
+    centre: np.ndarray, level: float, shift: float
+) -> None:
+    # Targets centre + shift lie inside [centre - level, centre + level] iff
+    # |shift| <= level.
+    assume(abs(abs(shift) - level) > 1e-6)
+    inside = interval_coverage(centre + shift, _ShiftedInterval(centre), level)
+
+    assert inside == (1.0 if abs(shift) <= level else 0.0)
+
+
+@settings(max_examples=30, deadline=None)
+@given(
+    case=evaluated_cases(),
+    low=LEVELS,
+    high=LEVELS,
+    shift=st.floats(-100.0, 100.0),
+)
+def test_wsu_of_any_interval_forecast_scales_with_its_width_not_its_centre(
+    case: EvaluatedCase, low: float, high: float, shift: float
+) -> None:
+    # A band of constant width 2 * level: WSU is proportional to the width and
+    # blind to where the band sits.
+    forecast = _ShiftedInterval(case.targets[1:])
+    shifted = _ShiftedInterval(case.targets[1:] + shift)
+
+    assert interval_wsu(forecast, case.times, low) * high == pytest.approx(
+        interval_wsu(forecast, case.times, high) * low
+    )
+    assert interval_wsu(shifted, case.times, low) == pytest.approx(
+        interval_wsu(forecast, case.times, low), abs=1e-9
+    )
+
+
+@settings(max_examples=30, deadline=None)
+@given(case=evaluated_cases())
+def test_case_metrics_score_the_predictive_through_the_interval_consumers(
+    case: EvaluatedCase,
+) -> None:
+    metrics = case_metrics(case, coverage_levels=(0.5,), wsu_level=0.9)
+
+    assert metrics["coverage_50"] == interval_coverage(
+        case.targets[1:], case.predictive, 0.5
+    )
+    assert metrics["wsu"] == interval_wsu(case.predictive, case.times, 0.9)
 
 
 def test_rmse_and_coverage_on_a_worked_example() -> None:
@@ -273,7 +323,9 @@ ALEATORIC_VARIANCE = 0.25
 class _OffsetModel:
     """Draw s predicts the window's last load plus ``OFFSETS[s % 8]``."""
 
-    def predictive(self, inputs, key, num_draws):
+    def predictive(
+        self, inputs: jax.Array, key: jax.Array, num_draws: int
+    ) -> PosteriorPredictive:
         last_load = inputs[:, -1, :1]
         offsets = jnp.asarray(np.resize(OFFSETS, num_draws))[:, None, None]
         return PosteriorPredictive(
@@ -282,15 +334,47 @@ class _OffsetModel:
         )
 
 
-class _AffineTarget:
-    """Inverse target scaling ``y -> 2 y + 1``."""
+class _KeyedDrawModel:
+    """``_OffsetModel``'s draw set, in an order the key selects.
 
-    def inverse_transform(self, x):
-        return 2.0 * np.asarray(x) + 1.0
+    Every key yields the same draws, so only noise sampled from the key could make two
+    evaluations differ.
+    """
+
+    def predictive(
+        self, inputs: jax.Array, key: jax.Array, num_draws: int
+    ) -> PosteriorPredictive:
+        offsets = jax.random.permutation(
+            key, jnp.asarray(np.resize(OFFSETS, num_draws))
+        )
+        last_load = inputs[:, -1, :1]
+        return PosteriorPredictive(
+            draws=last_load[None] + offsets[:, None, None],
+            aleatoric_variance=jnp.full(last_load.shape, ALEATORIC_VARIANCE),
+        )
+
+
+class _AffineTarget:
+    """Inverse target scaling ``y -> scale * y + shift`` (default ``2 y + 1``)."""
+
+    def __init__(self, scale: float = 2.0, shift: float = 1.0) -> None:
+        self.scale = scale
+        self.shift = shift
+
+    def inverse_transform(self, x: np.ndarray) -> np.ndarray:
+        return self.scale * np.asarray(x) + self.shift
+
+
+class _CubicTarget:
+    """A non-affine inverse target scaling ``y -> y**3 + y``."""
+
+    def inverse_transform(self, x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x)
+        return x**3 + x
 
 
 class _IdentityFeatures:
-    def transform(self, x):
+    def transform(self, x: np.ndarray) -> np.ndarray:
         return np.asarray(x)
 
 
@@ -314,8 +398,11 @@ def _test_histories() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True).sample(frac=1.0, random_state=0)
 
 
+DriverInputs = tuple[pd.DataFrame, dict[str, np.ndarray]]
+
+
 @pytest.fixture(scope="module")
-def driver_inputs():
+def driver_inputs() -> DriverInputs:
     histories = _test_histories()
     rng = np.random.default_rng(0)
     reference = {
@@ -325,10 +412,15 @@ def driver_inputs():
     return histories, reference
 
 
-def _evaluate(driver_inputs, key=0, num_draws=100):
+def _evaluate(
+    driver_inputs: DriverInputs,
+    key: int = 0,
+    num_draws: int = 100,
+    model: PredictiveModel | None = None,
+) -> Evaluation:
     histories, reference = driver_inputs
     return evaluate_predictive_model(
-        _OffsetModel(),
+        _OffsetModel() if model is None else model,
         test_histories=histories,
         reference_samples=reference,
         x_scaler=_IdentityFeatures(),
@@ -343,17 +435,19 @@ def _evaluate(driver_inputs, key=0, num_draws=100):
 
 
 @pytest.fixture(scope="module")
-def evaluation(driver_inputs) -> Evaluation:
+def evaluation(driver_inputs: DriverInputs) -> Evaluation:
     return _evaluate(driver_inputs)
 
 
-def _logged_metrics(tracker) -> dict[str, float]:
+def _logged_metrics(tracker: Any) -> dict[str, float]:
     return {
         key: value for values, _ in tracker.metrics for key, value in values.items()
     }
 
 
-def test_every_evaluated_timestamp_gets_the_draws_in_rul_units(evaluation) -> None:
+def test_every_evaluated_timestamp_gets_the_draws_in_rul_units(
+    evaluation: Evaluation,
+) -> None:
     assert [case.name for case in evaluation.cases] == ["case_0", "case_1", "case_2"]
     assert [case.policy for case in evaluation.cases] == [0, 1, 0]
     offsets = np.resize(OFFSETS, 100)
@@ -374,13 +468,68 @@ def test_every_evaluated_timestamp_gets_the_draws_in_rul_units(evaluation) -> No
 
 
 def test_given_the_draws_the_metrics_do_not_depend_on_the_key(
-    driver_inputs, evaluation
+    driver_inputs: DriverInputs,
 ) -> None:
-    # _OffsetModel's draws ignore the key, so only sampled noise could differ.
-    assert _evaluate(driver_inputs, key=1).table == evaluation.table
+    first, second = (
+        _evaluate(driver_inputs, key=key, model=_KeyedDrawModel()) for key in (0, 1)
+    )
+
+    for one, other in zip(first.cases, second.cases, strict=True):
+        # The keys order the draws differently, but select the same draw set ...
+        assert not np.array_equal(
+            one.predictive.draw_means, other.predictive.draw_means
+        )
+        np.testing.assert_allclose(
+            np.sort(one.predictive.draw_means, axis=1),
+            np.sort(other.predictive.draw_means, axis=1),
+        )
+        # ... so, with no noise sampled, every metric agrees to rounding.
+        _assert_metrics_close(first.table[one.name], second.table[other.name], 1e-12)
 
 
-def test_the_table_and_aggregate_follow_the_cases(evaluation) -> None:
+@settings(max_examples=50, deadline=None)
+@given(
+    predictive=case_predictives(),
+    level=LEVELS,
+    scale=st.floats(0.1, 10.0),
+    shift=st.floats(-1e3, 1e3),
+)
+def test_the_unscaled_predictive_is_equivariant_under_the_affine_target_scaler(
+    predictive: CasePredictive, level: float, scale: float, shift: float
+) -> None:
+    scaled = PosteriorPredictive(
+        draws=jnp.asarray(predictive.draw_means.T[..., None]),
+        aleatoric_variance=jnp.asarray(predictive.aleatoric_variance[:, None]),
+    )
+    # The same predictive, in the float32 precision the model hands over.
+    reference = unscale_predictive(scaled, _AffineTarget(1.0, 0.0))
+
+    unscaled = unscale_predictive(scaled, _AffineTarget(scale, shift))
+
+    np.testing.assert_allclose(
+        unscaled.mean(), scale * reference.mean() + shift, rtol=1e-9, atol=1e-9
+    )
+    np.testing.assert_allclose(
+        unscaled.aleatoric_variance,
+        scale**2 * reference.aleatoric_variance,
+        rtol=1e-12,
+    )
+    for got, want in zip(
+        unscaled.interval(level), reference.interval(level), strict=True
+    ):
+        np.testing.assert_allclose(got, scale * want + shift, rtol=1e-7, atol=1e-6)
+
+
+def test_a_non_affine_target_scaler_is_rejected() -> None:
+    scaled = PosteriorPredictive(
+        draws=jnp.zeros((2, 3, 1)), aleatoric_variance=jnp.ones((3, 1))
+    )
+
+    with pytest.raises(ValueError, match="affine"):
+        unscale_predictive(scaled, _CubicTarget())
+
+
+def test_the_table_and_aggregate_follow_the_cases(evaluation: Evaluation) -> None:
     assert evaluation.table == metric_table(
         evaluation.cases, coverage_levels=(0.5, 0.95)
     )
@@ -390,7 +539,7 @@ def test_the_table_and_aggregate_follow_the_cases(evaluation) -> None:
 
 
 def test_the_evaluation_is_logged_per_case_overall_and_per_policy(
-    evaluation, tracker_factory
+    evaluation: Evaluation, tracker_factory: Callable[[], Any]
 ) -> None:
     tracker = tracker_factory()
 
@@ -407,7 +556,7 @@ def test_the_evaluation_is_logged_per_case_overall_and_per_policy(
 
 
 def test_the_artifact_holds_exactly_the_posterior_predictive(
-    evaluation, tracker_factory
+    evaluation: Evaluation, tracker_factory: Callable[[], Any]
 ) -> None:
     tracker = tracker_factory()
 
@@ -429,7 +578,7 @@ def test_the_artifact_holds_exactly_the_posterior_predictive(
 
 
 def test_the_case_rebuilt_from_the_artifact_reproduces_every_logged_metric(
-    evaluation, tracker_factory
+    evaluation: Evaluation, tracker_factory: Callable[[], Any]
 ) -> None:
     tracker = tracker_factory()
 
@@ -443,12 +592,18 @@ def test_the_case_rebuilt_from_the_artifact_reproduces_every_logged_metric(
         rebuilt = case_metrics(
             EvaluatedCase.from_artifact(artifact), coverage_levels=(0.5, 0.95)
         )
-        for metric, value in rebuilt.items():
-            assert logged[f"evaluation/test/{case.name}/{metric}"] == value
+        _assert_metrics_close(
+            rebuilt,
+            {
+                metric: logged[f"evaluation/test/{case.name}/{metric}"]
+                for metric in rebuilt
+            },
+            tol=1e-12,
+        )
 
 
 def test_every_case_gets_a_rul_figure_next_to_its_predictive(
-    evaluation, tracker_factory
+    evaluation: Evaluation, tracker_factory: Callable[[], Any]
 ) -> None:
     tracker = tracker_factory()
 

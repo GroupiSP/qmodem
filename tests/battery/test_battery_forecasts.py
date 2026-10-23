@@ -3,12 +3,15 @@ predictive)."""
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
+from forecast_strategies import LEVELS, case_predictives
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 from scipy import special
 from stagereg.core import expected_gaussian_mixture_crps
+from stagereg.jax import PosteriorPredictive
 
 from qmodem.battery.forecasts import CasePredictive, IntervalForecast, ReferenceSamples
 
@@ -17,11 +20,10 @@ _SAMPLES = st.tuples(st.integers(1, 6), st.integers(1, 20)).flatmap(
         np.float64, shape, elements=st.floats(-1e3, 1e3, allow_nan=False)
     )
 )
-_LEVELS = st.floats(0.01, 0.99)
 
 
 @settings(max_examples=50, deadline=None)
-@given(samples=_SAMPLES, level=_LEVELS)
+@given(samples=_SAMPLES, level=LEVELS)
 def test_the_reference_interval_is_the_empirical_central_interval(
     samples: np.ndarray, level: float
 ) -> None:
@@ -52,7 +54,7 @@ def test_the_reference_interval_interpolates_the_percentiles() -> None:
 
 
 @settings(max_examples=50, deadline=None)
-@given(samples=_SAMPLES, low=_LEVELS, high=_LEVELS)
+@given(samples=_SAMPLES, low=LEVELS, high=LEVELS)
 def test_reference_intervals_are_nested_in_the_level(
     samples: np.ndarray, low: float, high: float
 ) -> None:
@@ -67,7 +69,7 @@ def test_reference_intervals_are_nested_in_the_level(
 
 
 @settings(max_examples=25, deadline=None)
-@given(samples=_SAMPLES, level=_LEVELS, seed=st.integers(0, 2**32 - 1))
+@given(samples=_SAMPLES, level=LEVELS, seed=st.integers(0, 2**32 - 1))
 def test_the_reference_interval_is_invariant_to_permuting_samples(
     samples: np.ndarray, level: float, seed: int
 ) -> None:
@@ -87,26 +89,6 @@ def test_reference_samples_are_an_interval_forecast() -> None:
 
 # --- The posterior predictive of one test case -----------------------------------
 
-_MEANS = st.tuples(st.integers(1, 5), st.integers(1, 8)).flatmap(
-    lambda shape: arrays(
-        np.float64, shape, elements=st.floats(-100.0, 100.0, allow_nan=False)
-    )
-)
-
-
-@st.composite
-def case_predictives(draw: st.DrawFn) -> CasePredictive:
-    """A posterior predictive with 1-5 timestamps and 1-8 draws."""
-    means = draw(_MEANS)
-    variance = draw(
-        arrays(
-            np.float64,
-            means.shape[:1],
-            elements=st.floats(0.01, 100.0, allow_nan=False),
-        )
-    )
-    return CasePredictive(draw_means=means, aleatoric_variance=variance)
-
 
 @settings(max_examples=50, deadline=None)
 @given(predictive=case_predictives())
@@ -119,7 +101,7 @@ def test_the_predictive_mean_is_the_average_draw_mean(
 
 
 @settings(max_examples=50, deadline=None)
-@given(predictive=case_predictives(), level=_LEVELS)
+@given(predictive=case_predictives(), level=LEVELS)
 def test_the_predictive_interval_edges_are_the_central_mixture_quantiles(
     predictive: CasePredictive, level: float
 ) -> None:
@@ -138,7 +120,7 @@ def test_the_predictive_interval_edges_are_the_central_mixture_quantiles(
 
 
 @settings(max_examples=50, deadline=None)
-@given(predictive=case_predictives(), low=_LEVELS, high=_LEVELS)
+@given(predictive=case_predictives(), low=LEVELS, high=LEVELS)
 def test_predictive_intervals_are_nested_in_the_level(
     predictive: CasePredictive, low: float, high: float
 ) -> None:
@@ -154,7 +136,7 @@ def test_predictive_intervals_are_nested_in_the_level(
 @settings(max_examples=50, deadline=None)
 @given(
     predictive=case_predictives(),
-    level=_LEVELS,
+    level=LEVELS,
     scale=st.floats(0.1, 10.0),
     shift=st.floats(-1e3, 1e3),
 )
@@ -179,7 +161,7 @@ def test_the_predictive_is_equivariant_under_an_affine_map(
 @settings(max_examples=50, deadline=None)
 @given(predictive=case_predictives(), data=st.data())
 def test_the_predictive_crps_is_the_mixture_crps_without_the_t0_reference_row(
-    predictive: CasePredictive, data
+    predictive: CasePredictive, data: st.DataObject
 ) -> None:
     n_ref = data.draw(st.integers(1, 6))
     reference = data.draw(
@@ -200,7 +182,7 @@ def test_the_predictive_crps_is_the_mixture_crps_without_the_t0_reference_row(
 
 
 @settings(max_examples=25, deadline=None)
-@given(predictive=case_predictives(), level=_LEVELS, seed=st.integers(0, 2**32 - 1))
+@given(predictive=case_predictives(), level=LEVELS, seed=st.integers(0, 2**32 - 1))
 def test_the_predictive_is_invariant_to_permuting_draws(
     predictive: CasePredictive, level: float, seed: int
 ) -> None:
@@ -222,3 +204,24 @@ def test_the_case_predictive_is_an_interval_forecast() -> None:
     )
 
     assert isinstance(predictive, IntervalForecast)
+
+
+@settings(max_examples=25, deadline=None)
+@given(predictive=case_predictives(), level=LEVELS)
+def test_the_predictive_interval_agrees_with_stageregs_mixture_quantile(
+    predictive: CasePredictive, level: float
+) -> None:
+    # stagereg runs in float32 here; the float64 interval must agree to that
+    # precision and is never less accurate (see the mixture-CDF test above).
+    mixture = PosteriorPredictive(
+        draws=jnp.asarray(predictive.draw_means.T),
+        aleatoric_variance=jnp.asarray(predictive.aleatoric_variance),
+    )
+    lower, upper = predictive.interval(level)
+
+    np.testing.assert_allclose(
+        lower, mixture.quantile((1 - level) / 2), rtol=1e-4, atol=1e-3
+    )
+    np.testing.assert_allclose(
+        upper, mixture.quantile((1 + level) / 2), rtol=1e-4, atol=1e-3
+    )

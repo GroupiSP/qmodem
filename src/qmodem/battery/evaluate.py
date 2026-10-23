@@ -30,7 +30,7 @@ from stagereg.core import ExperimentTracker, coverage, rmse, wsu
 from stagereg.jax import PosteriorPredictive
 
 from .data_processing import FEATURES, WINDOW_SIZE, evenly_spaced_indices
-from .forecasts import CasePredictive, ReferenceSamples
+from .forecasts import CasePredictive, IntervalForecast, ReferenceSamples
 from .rul_plot import plot_rul_over_time
 
 PRIMARY_COVERAGE_LEVEL = 0.95
@@ -108,6 +108,17 @@ class EvaluatedCase:
         """
 
         def array(key: str) -> np.ndarray:
+            """Return the artifact field ``key`` as a float64 array.
+
+            Args:
+                key: Field name.
+
+            Returns:
+                The field's values.
+
+            Raises:
+                KeyError: If the field is missing.
+            """
             return np.asarray(artifact[key], dtype=np.float64)
 
         return cls(
@@ -135,6 +146,52 @@ def coverage_key(level: float) -> str:
     return f"coverage_{100 * level:g}"
 
 
+def interval_coverage(
+    targets: np.ndarray, forecast: IntervalForecast, level: float
+) -> float:
+    """Return the share of targets inside the forecast's central interval.
+
+    Args:
+        targets: Realized value of each forecast row.
+        forecast: Any interval forecast, one row per target.
+        level: Nominal level of the interval.
+
+    Returns:
+        stagereg's coverage of the ``level`` interval.
+
+    Raises:
+        ValueError: If a value is not finite or the shapes differ (see
+            ``stagereg.core.coverage``).
+    """
+    return coverage(targets, *forecast.interval(level))
+
+
+def interval_wsu(forecast: IntervalForecast, times: np.ndarray, level: float) -> float:
+    """Return stagereg's per-trajectory WSU of the forecast's central interval.
+
+    The forecast has no row at t0: ``times`` has one more entry than the forecast
+    rows, ``times[0]`` being t0, the time origin.
+
+    Args:
+        forecast: Any interval forecast, one row per timestamp after t0.
+        times: Strictly increasing timestamps, t0 first.
+        level: Nominal level of the interval.
+
+    Returns:
+        The WSU of the ``level`` interval.
+
+    Raises:
+        ValueError: If the shapes do not match, fewer than two timestamps follow
+            t0, or ``times`` is not strictly increasing (see
+            ``stagereg.core.wsu``).
+    """
+    lower, upper = forecast.interval(level)
+    # stagereg's wsu takes the origin from x[0] and never reads lower[0]/upper[0].
+    return wsu(
+        np.concatenate([lower[:1], lower]), np.concatenate([upper[:1], upper]), times
+    )
+
+
 def case_metrics(
     case: EvaluatedCase,
     coverage_levels: Sequence[float] = (PRIMARY_COVERAGE_LEVEL,),
@@ -147,9 +204,10 @@ def case_metrics(
     - ``crps``: mean over timestamps of the closed-form expected CRPS against the
       reference samples (``CasePredictive.crps``).
     - ``rmse``: of the mixture mean against the realized targets.
-    - ``coverage_<level>``: share of targets inside the central mixture interval.
+    - ``coverage_<level>``: share of targets inside the central mixture interval
+      (``interval_coverage``).
     - ``wsu``: stagereg's per-trajectory WSU of the ``wsu_level`` mixture interval,
-      with t0 as the time origin.
+      with t0 as the time origin (``interval_wsu``).
 
     Args:
         case: The evaluated test case.
@@ -170,14 +228,8 @@ def case_metrics(
         "rmse": rmse(targets, predictive.mean()),
     }
     for level in coverage_levels:
-        metrics[coverage_key(level)] = coverage(targets, *predictive.interval(level))
-    lower, upper = predictive.interval(wsu_level)
-    # stagereg's wsu takes the origin from x[0] and never reads lower[0]/upper[0].
-    metrics["wsu"] = wsu(
-        np.concatenate([lower[:1], lower]),
-        np.concatenate([upper[:1], upper]),
-        case.times,
-    )
+        metrics[coverage_key(level)] = interval_coverage(targets, predictive, level)
+    metrics["wsu"] = interval_wsu(predictive, case.times, wsu_level)
     return metrics
 
 
@@ -388,16 +440,25 @@ def _windows(features: np.ndarray, ends: np.ndarray, window_size: int) -> np.nda
 def _unscale_affine(y_scaler: TargetScaler) -> tuple[float, float]:
     """Return the scale ``a`` and shift ``b`` of the affine inverse scaling.
 
+    ``a`` and ``b`` are read off the probes 0 and 1; a third probe, 2, checks
+    that the scaling is affine.
+
     Args:
-        y_scaler: The target scaler (affine).
+        y_scaler: The target scaler.
 
     Returns:
         ``(a, b)`` with ``inverse_transform(y) == a * y + b``.
+
+    Raises:
+        ValueError: If the inverse scaling is not affine.
     """
-    zero, one = np.asarray(
-        y_scaler.inverse_transform(np.array([[0.0], [1.0]])), dtype=np.float64
+    zero, one, two = np.asarray(
+        y_scaler.inverse_transform(np.array([[0.0], [1.0], [2.0]])), dtype=np.float64
     ).ravel()
-    return float(one - zero), float(zero)
+    scale, shift = one - zero, zero
+    if not np.isclose(two, 2.0 * scale + shift, rtol=1e-9, atol=1e-9 * abs(scale)):
+        raise ValueError("The target scaler's inverse transform is not affine.")
+    return float(scale), float(shift)
 
 
 def unscale_predictive(
@@ -415,6 +476,9 @@ def unscale_predictive(
 
     Returns:
         The case's posterior predictive in RUL units.
+
+    Raises:
+        ValueError: If the target scaler is not affine.
     """
     draws = np.asarray(predictive.draws, dtype=np.float64)[..., 0]  # (M, T-1)
     if predictive.draw_mask is not None:
@@ -423,10 +487,7 @@ def unscale_predictive(
         np.asarray(predictive.aleatoric_variance, dtype=np.float64),
         (draws.shape[1], 1),
     )[:, 0]
-    # Contiguous, like an array read back from the artifact: same summation order.
-    scaled = CasePredictive(
-        draw_means=np.ascontiguousarray(draws.T), aleatoric_variance=variance.copy()
-    )
+    scaled = CasePredictive(draw_means=draws.T, aleatoric_variance=variance)
     return scaled.affine(*_unscale_affine(y_scaler))
 
 
@@ -461,8 +522,8 @@ def predict_case(
         The evaluated case, in RUL units.
 
     Raises:
-        ValueError: If the case has several policies, or the reference samples
-            do not have one row per timestamp.
+        ValueError: If the case has several policies, the reference samples do
+            not have one row per timestamp, or the target scaler is not affine.
     """
     history = history.sort_values("time").reset_index(drop=True)
     policy = _case_policy(history, reference_samples, name=name, parameters=parameters)

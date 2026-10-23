@@ -14,11 +14,12 @@ from __future__ import annotations
 import dataclasses
 from typing import Protocol, runtime_checkable
 
-import jax
-import jax.numpy as jnp
 import numpy as np
+from scipy import special
 from stagereg.core import expected_gaussian_mixture_crps
-from stagereg.jax import PosteriorPredictive
+
+_BISECTION_STEPS = 100
+"""Halvings of the quantile bracket, past float64 resolution for RUL brackets."""
 
 
 @runtime_checkable
@@ -107,8 +108,9 @@ class CasePredictive:
     def interval(self, level: float) -> tuple[np.ndarray, np.ndarray]:
         """Return the exact central mixture interval of each timestamp.
 
-        The edges are stagereg's mixture quantiles at ``(1 -/+ level) / 2``,
-        computed in double precision.
+        The edges are the mixture quantiles at ``(1 -/+ level) / 2``, found in
+        double precision as stagereg's ``PosteriorPredictive.quantile`` finds
+        them (``_mixture_quantile``).
 
         Args:
             level: Nominal coverage level in ``(0, 1)``.
@@ -121,15 +123,12 @@ class CasePredictive:
         """
         if not 0.0 < level < 1.0:
             raise ValueError("level must be strictly between 0 and 1.")
-        with jax.enable_x64(True):
-            mixture = PosteriorPredictive(
-                draws=jnp.asarray(self.draw_means.T, dtype=jnp.float64),
-                aleatoric_variance=jnp.asarray(
-                    self.aleatoric_variance, dtype=jnp.float64
-                ),
-            )
-            lower = np.asarray(mixture.quantile((1.0 - level) / 2.0))
-            upper = np.asarray(mixture.quantile((1.0 + level) / 2.0))
+        lower = _mixture_quantile(
+            self.draw_means, self.aleatoric_variance, (1.0 - level) / 2.0
+        )
+        upper = _mixture_quantile(
+            self.draw_means, self.aleatoric_variance, (1.0 + level) / 2.0
+        )
         return lower, upper
 
     def crps(self, reference: ReferenceSamples) -> np.ndarray:
@@ -150,3 +149,33 @@ class CasePredictive:
         return expected_gaussian_mixture_crps(
             self.draw_means, self.aleatoric_variance, reference.samples[1:]
         )
+
+
+def _mixture_quantile(
+    draw_means: np.ndarray, variance: np.ndarray, probability: float
+) -> np.ndarray:
+    """Invert the mixture CDF ``(1/M) sum_m Phi((x - mu_m) / s)`` per timestamp.
+
+    It is stagereg's ``PosteriorPredictive.quantile`` algorithm in NumPy float64,
+    so it needs no JAX double-precision mode: the draws' Gaussian quantiles
+    ``mu_m + s * Phi^-1(p)`` bracket the mixture quantile, and the bracket is
+    halved ``_BISECTION_STEPS`` times.
+
+    Args:
+        draw_means: Mean of each draw ``(T, M)``.
+        variance: The variance every draw shares ``(T,)``.
+        probability: The cumulative probability, strictly between 0 and 1.
+
+    Returns:
+        The mixture quantile of each timestamp ``(T,)``.
+    """
+    means = np.asarray(draw_means, dtype=np.float64)
+    scale = np.sqrt(np.asarray(variance, dtype=np.float64))[:, None]
+    component = means + special.ndtri(probability) * scale
+    low, high = component.min(axis=1), component.max(axis=1)
+    for _ in range(_BISECTION_STEPS):
+        middle = 0.5 * (low + high)
+        below = special.ndtr((middle[:, None] - means) / scale).mean(axis=1)
+        below = below < probability
+        low, high = np.where(below, middle, low), np.where(below, high, middle)
+    return 0.5 * (low + high)

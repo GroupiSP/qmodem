@@ -16,6 +16,7 @@ from qmodem.battery.rul_plot import (
     PREDICTED_LABEL,
     REFERENCE_LABEL,
     TARGET_LABEL,
+    fill_interval,
     plot_rul_over_time,
 )
 
@@ -53,6 +54,15 @@ def _line(ax: Axes, label: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _band(ax: Axes, label: str) -> np.ndarray:
+    """Return the outline vertices ``(N, 2)`` of the band whose label starts so.
+
+    Args:
+        ax: The figure's axes.
+        label: Prefix of the band's legend label.
+
+    Returns:
+        The ``(time, RUL)`` vertices of the band's polygon.
+    """
     (band,) = [
         c
         for c in ax.collections
@@ -62,16 +72,24 @@ def _band(ax: Axes, label: str) -> np.ndarray:
 
 
 def _band_extent(ax: Axes, label: str) -> tuple[float, float]:
-    (band,) = [
-        c
-        for c in ax.collections
-        if isinstance(c, PolyCollection) and c.get_label().startswith(label)
-    ]
-    y = band.get_paths()[0].vertices[:, 1]
+    """Return the lowest and highest RUL of a band (see ``_band``)."""
+    y = _band(ax, label)[:, 1]
     return float(y.min()), float(y.max())
 
 
-def test_the_figure_has_one_titled_axes_with_a_non_negative_rul_axis(case) -> None:
+def _assert_band_edges(
+    vertices: np.ndarray, times: np.ndarray, lower: np.ndarray, upper: np.ndarray
+) -> None:
+    """Assert a band's outline spans ``[lower, upper]`` at each timestamp."""
+    for t, low, high in zip(times, lower, upper, strict=True):
+        at_t = vertices[np.isclose(vertices[:, 0], t), 1]
+        assert at_t.min() == pytest.approx(low)
+        assert at_t.max() == pytest.approx(high)
+
+
+def test_the_figure_has_one_titled_axes_with_a_non_negative_rul_axis(
+    case: EvaluatedCase,
+) -> None:
     ax = _axes(plot_rul_over_time(case, level=0.95))
 
     assert ax.get_title() == "case_4 (policy 2)"
@@ -80,7 +98,7 @@ def test_the_figure_has_one_titled_axes_with_a_non_negative_rul_axis(case) -> No
 
 
 def test_the_target_spans_every_timestamp_and_the_line_is_the_mixture_mean(
-    case,
+    case: EvaluatedCase,
 ) -> None:
     ax = _axes(plot_rul_over_time(case, level=0.95))
 
@@ -92,7 +110,7 @@ def test_the_target_spans_every_timestamp_and_the_line_is_the_mixture_mean(
     np.testing.assert_allclose(predicted_y, case.predictive.draw_means.mean(axis=1))
 
 
-def test_the_reference_band_is_the_reference_interval(case) -> None:
+def test_the_reference_band_is_the_reference_interval(case: EvaluatedCase) -> None:
     ax = _axes(plot_rul_over_time(case, level=0.9))
 
     lower, upper = case.reference.interval(0.9)
@@ -103,20 +121,31 @@ def test_the_reference_band_is_the_reference_interval(case) -> None:
 
 @settings(max_examples=10, deadline=None)
 @given(level=st.floats(0.05, 0.99))
-def test_the_predictive_band_edges_are_the_mixture_quantiles(case, level) -> None:
+def test_the_predictive_band_edges_are_the_mixture_quantiles(
+    case: EvaluatedCase, level: float
+) -> None:
     vertices = _band(_axes(plot_rul_over_time(case, level=level)), PREDICTED_LABEL)
 
-    lower, upper = case.predictive.interval(level)
-    times = case.times[1:]
-    for t, low, high in zip(times, lower, upper, strict=True):
-        at_t = vertices[np.isclose(vertices[:, 0], t), 1]
-        assert at_t.min() == pytest.approx(low)
-        assert at_t.max() == pytest.approx(high)
+    _assert_band_edges(vertices, case.times[1:], *case.predictive.interval(level))
+
+
+@settings(max_examples=10, deadline=None)
+@given(level=st.floats(0.05, 0.99))
+def test_any_interval_forecast_fills_its_interval(
+    case: EvaluatedCase, level: float
+) -> None:
+    ax = Figure().add_subplot()
+
+    fill_interval(ax, case.times, case.reference, level, color="k", label="band")
+
+    _assert_band_edges(_band(ax, "band"), case.times, *case.reference.interval(level))
 
 
 @settings(max_examples=25, deadline=None)
 @given(seed=st.integers(0, 2**32 - 1))
-def test_the_figure_is_invariant_to_permuting_samples_and_draws(case, seed) -> None:
+def test_the_figure_is_invariant_to_permuting_samples_and_draws(
+    case: EvaluatedCase, seed: int
+) -> None:
     rng = np.random.default_rng(seed)
     permuted = EvaluatedCase(
         name=case.name,
@@ -146,7 +175,9 @@ def test_the_figure_is_invariant_to_permuting_samples_and_draws(case, seed) -> N
     low=st.floats(0.05, 0.9),
     gap=st.floats(0.01, 0.09),
 )
-def test_a_wider_level_never_narrows_the_band(case, low, gap) -> None:
+def test_a_wider_level_never_narrows_the_band(
+    case: EvaluatedCase, low: float, gap: float
+) -> None:
     narrow = _axes(plot_rul_over_time(case, level=low))
     wide = _axes(plot_rul_over_time(case, level=low + gap))
 

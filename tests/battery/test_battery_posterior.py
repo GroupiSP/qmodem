@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import statistics
+from collections.abc import Callable
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -210,3 +212,36 @@ def test_scoring_a_suite_that_draws_predictive_samples_is_refused(
 
     with pytest.raises(ValueError, match="predictive samples"):
         score_validation(_toy_predictive(2, 1.0), loader, jax.random.key(0), sampled)
+
+
+class _KeySpyPredictor:
+    """``PosteriorPredictivePredictor`` recording the metric key of every batch."""
+
+    def __init__(self) -> None:
+        self.inner = PosteriorPredictivePredictor()
+        self.metric_keys: list[jax.Array] = []
+
+    def __call__(
+        self,
+        forward: Callable[[jax.Array], PosteriorPredictive],
+        batch: Any,
+        requirements: Any,
+        key: jax.Array,
+    ) -> Any:
+        self.metric_keys.append(key)
+        return self.inner(forward, batch, requirements, key)
+
+
+def test_the_metric_key_is_never_the_draw_key(synthetic_battery: Any) -> None:
+    spy = _KeySpyPredictor()
+    suite = dataclasses.replace(validation_metrics(), predictor=spy)
+    loader = posterior_loader(
+        synthetic_battery.data, batch_size=8, key=jax.random.key(0)
+    )
+    validation_key = jax.random.key(3)
+
+    score_validation(_toy_predictive(2, 1.0), loader, validation_key, suite)
+
+    draw_key, _ = jax.random.split(validation_key)
+    assert spy.metric_keys
+    assert _bits(draw_key) not in [_bits(key) for key in spy.metric_keys]

@@ -274,9 +274,10 @@ def score_validation(
 
     The draw key derives from ``validation_key`` exactly as stagereg's posterior
     validation derives it (the first half of ``split``), so for the same
-    posterior every suite scores the same draws as the stage's epochs. No
-    validation metric draws predictive samples, so the metric half of the split
-    is unused (ADR 0002).
+    posterior every suite scores the same draws as the stage's epochs. The
+    metric half of the split is folded per batch into the predictor's metric
+    key, never shared with the draws; no validation metric samples the
+    predictive, so no score reads it (ADR 0002).
 
     Args:
         predictive: Maps validation inputs and the draw key to the posterior
@@ -297,16 +298,16 @@ def score_validation(
         raise RuntimeError("The validation metric suite has no predictor.")
     if suite.prediction_requirements.fields.predictive_samples:
         raise ValueError("validation suites must not draw predictive samples.")
-    draw_key, _ = jax.random.split(validation_key)
+    draw_key, metric_key = jax.random.split(validation_key)
     parts = [
-        # The predictor's metric key is unused: nothing samples the predictive.
+        # The per-batch metric key is unused: nothing samples the predictive.
         predictor(
             lambda inputs: predictive(inputs, draw_key),
             batch,
             suite.prediction_requirements,
-            draw_key,
+            jax.random.fold_in(metric_key, index),
         )
-        for batch in loader(split="validation", epoch=0)
+        for index, batch in enumerate(loader(split="validation", epoch=0))
     ]
     metrics = reduce_metric_suite(
         suite=suite, losses=None, batch_metric_values={}, epoch_metric_parts=parts

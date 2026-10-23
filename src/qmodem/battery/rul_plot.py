@@ -2,17 +2,22 @@
 
 The figure shows the realized RUL and the simulator's reference band over every
 timestamp, and the predictive mean and band from the first evaluated timestamp on
-(t0 has no prediction). Both bands are ``IntervalForecast`` intervals: the
-reference band is the empirical ``ReferenceSamples`` interval; the predictive line is
-the exact ``CasePredictive`` mean and its band the exact central mixture interval,
-the same interval the coverage metric of ``qmodem.battery.evaluate`` scores.
+(t0 has no prediction). Both bands are ``IntervalForecast`` intervals, drawn by
+``fill_interval``: the reference band is the empirical ``ReferenceSamples``
+interval; the predictive line is the exact ``CasePredictive`` mean and its band the
+exact central mixture interval, the same interval the coverage metric of
+``qmodem.battery.evaluate`` scores.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+
+from .forecasts import IntervalForecast
 
 if TYPE_CHECKING:
     from .evaluate import EvaluatedCase
@@ -20,6 +25,30 @@ if TYPE_CHECKING:
 TARGET_LABEL = "True RUL"
 REFERENCE_LABEL = "Reference RUL"
 PREDICTED_LABEL = "Predicted RUL"
+
+
+def fill_interval(
+    ax: Axes,
+    times: np.ndarray,
+    forecast: IntervalForecast,
+    level: float,
+    *,
+    color: str,
+    label: str,
+) -> None:
+    """Shade the central interval of a forecast over time.
+
+    Args:
+        ax: The axes to draw on.
+        times: Timestamp of each forecast row.
+        forecast: Any interval forecast, one row per timestamp.
+        level: Nominal level of the interval.
+        color: Fill colour.
+        label: Legend label.
+    """
+    ax.fill_between(
+        times, *forecast.interval(level), color=color, alpha=0.25, label=label
+    )
 
 
 def plot_rul_over_time(case: EvaluatedCase, *, level: float) -> Figure:
@@ -40,11 +69,12 @@ def plot_rul_over_time(case: EvaluatedCase, *, level: float) -> Figure:
     band = f"{100 * level:g}% band"
 
     ax.plot(case.times, case.targets, color="black", label=TARGET_LABEL)
-    ax.fill_between(
+    fill_interval(
+        ax,
         case.times,
-        *case.reference.interval(level),
+        case.reference,
+        level,
         color="tab:blue",
-        alpha=0.25,
         label=f"{REFERENCE_LABEL} {band}",
     )
     times = case.times[1:]
@@ -56,11 +86,12 @@ def plot_rul_over_time(case: EvaluatedCase, *, level: float) -> Figure:
         markersize=3,
         label=PREDICTED_LABEL,
     )
-    ax.fill_between(
+    fill_interval(
+        ax,
         times,
-        *case.predictive.interval(level),
+        case.predictive,
+        level,
         color="tab:orange",
-        alpha=0.25,
         label=f"{PREDICTED_LABEL} {band}",
     )
 
