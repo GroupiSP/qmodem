@@ -2,9 +2,10 @@
 
 The figure shows the realized RUL and the simulator's reference band over every
 timestamp, and the predictive mean and band from the first evaluated timestamp on
-(t0 has no prediction). The reference band is the ``ReferenceSamples`` interval; the
-predictive band is the same empirical central band as the coverage metric of
-``qmodem.battery.evaluate``.
+(t0 has no prediction). Both bands are ``IntervalForecast`` intervals: the
+reference band is the empirical ``ReferenceSamples`` interval; the predictive line is
+the exact ``CasePredictive`` mean and its band the exact central mixture interval,
+the same interval the coverage metric of ``qmodem.battery.evaluate`` scores.
 """
 
 from __future__ import annotations
@@ -13,24 +14,22 @@ from typing import TYPE_CHECKING
 
 from matplotlib.figure import Figure
 
-from .forecasts import central_band
-
 if TYPE_CHECKING:
-    from .evaluate import CaseSamples
+    from .evaluate import EvaluatedCase
 
 TARGET_LABEL = "True RUL"
 REFERENCE_LABEL = "Reference RUL"
 PREDICTED_LABEL = "Predicted RUL"
 
 
-def plot_rul_over_time(case: CaseSamples, *, level: float) -> Figure:
+def plot_rul_over_time(case: EvaluatedCase, *, level: float) -> Figure:
     """Plot the realized, reference and predicted RUL of one test case over time.
 
     The figure is built without ``pyplot``, so it is not registered with a GUI
     backend and needs no explicit closing.
 
     Args:
-        case: The test case's samples (row 0 is t0, without prediction).
+        case: The evaluated test case (row 0 is t0, without prediction).
         level: Nominal level of the reference and predictive bands.
 
     Returns:
@@ -49,10 +48,9 @@ def plot_rul_over_time(case: CaseSamples, *, level: float) -> Figure:
         label=f"{REFERENCE_LABEL} {band}",
     )
     times = case.times[1:]
-    predictive = case.predictive_samples[1:]
     ax.plot(
         times,
-        predictive.mean(axis=1),
+        case.predictive.mean(),
         "-o",
         color="tab:orange",
         markersize=3,
@@ -60,7 +58,7 @@ def plot_rul_over_time(case: CaseSamples, *, level: float) -> Figure:
     )
     ax.fill_between(
         times,
-        *central_band(predictive, level),
+        *case.predictive.interval(level),
         color="tab:orange",
         alpha=0.25,
         label=f"{PREDICTED_LABEL} {band}",

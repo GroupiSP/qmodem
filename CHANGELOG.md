@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Validation CRPS values (per epoch, `val_crps_baseline`, posterior HPO) are not
   comparable with earlier runs**; posterior HPO studies must be rerun. See ADR 0004
   ([#145]).
+- Test evaluation scores and plots the exact posterior predictive of each test
+  case (`CasePredictive`) instead of M noisy samples: CRPS in closed form against
+  the reference samples, RMSE on the mixture mean, coverage and WSU on exact
+  mixture quantiles; the RUL-over-time figure draws the same mean and interval.
+  No aleatoric noise is sampled. **Test metrics are not comparable with earlier
+  runs.** `EvaluationParameters.num_samples` and `evaluate.py --num-samples` are
+  renamed `num_draws` / `--num-draws`; `central_band` is removed. See ADR 0004
+  ([#147]).
+- **New `evaluation/test/<case>/predictive` artifact format**: `name`, `policy`,
+  `times`, `targets`, `reference_samples`, `draw_means (T-1, M)` and
+  `aleatoric_variance (T-1,)` in RUL units; `predictive_samples` and
+  `epistemic_variance` are dropped. Older artifacts are not readable ([#147]).
 - Require `stagereg[jax]==0.5.0`.
 
 ## [0.3.1] - 2026-10-23
@@ -182,5 +194,6 @@ Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 [#140]: https://github.com/GroupiSP/qmodem/issues/140
 [#142]: https://github.com/GroupiSP/qmodem/issues/142
 [#145]: https://github.com/GroupiSP/qmodem/issues/145
+[#147]: https://github.com/GroupiSP/qmodem/issues/147
 [PennyLaneAI/pennylane#9930]: https://github.com/PennyLaneAI/pennylane/issues/9930
 [GroupiSP/stagereg#136]: https://github.com/GroupiSP/stagereg/issues/136

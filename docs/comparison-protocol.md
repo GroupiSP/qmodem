@@ -10,12 +10,12 @@ comparison protocol
 ├─ data        one data-gen run; train 10 · backbone val 20 · posterior val 20 · test 20
 │              fixed 70/30 policy counts per split
 ├─ seeds       R = 5, dataset fixed, keys derived from r, paired by seed
-├─ posterior   N = #windows; M = 100 draws × 1 aleatoric noise sample
+├─ posterior   N = #windows; M = 100 draws; scored by the exact posterior predictive
 ├─ tuning      50 TPE trials per posterior stage on seed 0, HPs frozen; fixed prior
 │              one shared validation criterion: validation CRPS, M_val = 100,
 │              on the posterior validation set; mean/variance on the backbone validation set
 ├─ metrics     expected CRPS (grid-free), RMSE, coverage@0.95, WSU per trajectory
-│              sample-based; t0 dropped; mean over test cases (+ per policy)
+│              exact mixture; t0 dropped; mean over test cases (+ per policy)
 ├─ validity    a failed check invalidates the seed for all methods
 └─ outputs     T1 · T2 · T3 · F1 · F2 · F3 · F4
 ```
@@ -104,15 +104,15 @@ Every method with a posterior stage gets the **same Optuna budget** on seed 0's 
 
 ## 6. Evaluation
 
-- **Draws**: M = 100 posterior draws per window × **one** aleatoric noise sample each; HNN gets 100 aleatoric samples from its single mean. M is never tuned per method.
+- **Draws**: M = 100 posterior draws per window, no aleatoric noise samples; the posterior predictive is the exact mixture `(1/M) Σ_m N(μ_m, s²)` ([ADR 0004](adr/0004-closed-form-crps.md)). HNN's M draws all equal its single mean (a Gaussian); pSGLD uses its retained draws. M is never tuned per method.
 - **Test cases**: all 20 test cases of the fixed run, with 100 simulator reference samples per timestamp. **t0** has no predictions: dropped from every metric, used only as WSU's time origin.
-- **Sample-based** means and intervals for every method (Q-AVI has no analytic form).
+- **Exact** means, intervals and CRPS of the mixture for every method, given the draws; no metric depends on noise.
 
 | Metric (stagereg `core.metrics`) | Definition |
 |---|---|
-| CRPS | **expected CRPS**, grid-free: `mean_j sample_crps(pred_samples, y_ref_j)` over reference samples = E_{Y∼true}[CRPS(F_pred, Y)]. Never Cramér distance |
-| RMSE | vs the predictive sample mean |
-| Coverage | empirical 2.5/97.5 percentiles, inclusive; level **0.95** is a protocol parameter |
+| CRPS | **expected CRPS**, closed form: `expected_gaussian_mixture_crps(draw_means, s², y_ref)` = E_{Y∼true}[CRPS(F_pred, Y)] over the reference samples. Never Cramér distance |
+| RMSE | vs the mixture mean |
+| Coverage | central mixture quantiles at 2.5/97.5%, inclusive; level **0.95** is a protocol parameter |
 | WSU | `core.metrics.wsu` **per trajectory**, t0 as origin; never the epoch `WeightedSpread` adapter |
 
 **Aggregation**: per test case, then **unweighted mean over test cases** (primary), plus the same mean per current policy (secondary). No pooled values.

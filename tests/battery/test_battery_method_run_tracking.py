@@ -141,7 +141,7 @@ def test_the_evaluation_is_logged_into_the_method_run_with_the_parent_scalers(
     reference = {
         f"test_case_{i}": rng.uniform(0, 250, (N_TIMESTAMPS, 7)) for i in range(2)
     }
-    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_samples=20)
+    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_draws=20)
 
     evaluation = evaluate_tracked_method_run(
         tracked.method_run_id,
@@ -246,7 +246,7 @@ def test_a_bbb_method_run_is_evaluated_from_its_restored_posterior(
     reference = {
         f"test_case_{i}": rng.uniform(0, 250, (N_TIMESTAMPS, 7)) for i in range(2)
     }
-    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_samples=20)
+    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_draws=20)
 
     evaluation = evaluate_tracked_method_run(
         tracked_bbb.run_id,
@@ -300,7 +300,7 @@ def test_an_mcd_method_run_is_evaluated_from_its_restored_posterior(
     reference = {
         f"test_case_{i}": rng.uniform(0, 250, (N_TIMESTAMPS, 7)) for i in range(2)
     }
-    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_samples=20)
+    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_draws=20)
 
     evaluation = evaluate_tracked_method_run(
         tracked_mcd.run_id,
@@ -375,7 +375,7 @@ def test_a_psgld_method_run_is_evaluated_on_all_its_retained_draws(
     reference = {
         f"test_case_{i}": rng.uniform(0, 250, (N_TIMESTAMPS, 7)) for i in range(2)
     }
-    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_samples=20)
+    parameters = EvaluationParameters(n_timestamps=N_TIMESTAMPS, num_draws=20)
 
     evaluation = evaluate_tracked_method_run(
         tracked_psgld.run_id,
@@ -394,8 +394,8 @@ def test_a_psgld_method_run_is_evaluated_on_all_its_retained_draws(
         parameters=parameters,
         key=tracked_psgld.run.evaluation_key,
     )
-    for prediction in evaluation.predictions:
-        assert prediction.samples.predictive_samples.shape[1] == TINY_PSGLD.num_samples
+    for case in evaluation.cases:
+        assert case.predictive.draw_means.shape[1] == TINY_PSGLD.num_samples
     for case, row in expected.table.items():
         assert evaluation.table[case] == pytest.approx(row)
 

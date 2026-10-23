@@ -20,3 +20,20 @@ The **validation criterion** of every posterior stage is the mean closed-form CR
 - **Validation CRPS is not comparable with earlier runs** (different estimator). Every posterior HPO study must be rerun; early-stopping decisions and best epochs change.
 - Validation needs only the draw key of `split(validation_key)` ([ADR 0002](0002-posterior-validation-key-per-method-run.md)); qmodem's `score_validation` refuses a suite that draws predictive samples.
 - M_val is no longer constrained by the plug-in bias ([ADR 0003](0003-validation-at-fixed-timestamps.md)); it is kept at 100 for validation/evaluation parity.
+
+## Test scoring ([#147](https://github.com/GroupiSP/qmodem/issues/147))
+
+Each test case's posterior predictive is held in RUL units as `CasePredictive` (`draw_means (T−1, M)`, `aleatoric_variance (T−1,)`; affine unscale `a·μ_m + b`, `a²·s²`). Every test metric is exact given the draws: CRPS is the mean closed-form mixture CRPS against the simulator reference samples (t0 dropped); RMSE is scored on the mixture mean; coverage and WSU on the central mixture interval (stagereg's mixture quantile). The RUL-over-time figure draws the same mean and interval; the reference band stays the empirical interval of the reference samples. Both bands go through one `IntervalForecast` interface. No aleatoric noise is sampled: the evaluation key only selects the draws.
+
+### Considered options
+
+| Option | Verdict |
+|---|---|
+| Sample CRPS, sample mean and empirical percentiles of M noisy predictive samples (status quo) | Rejected: MC noise in every metric and in the plot; each 95% tail rests on ~2.5 samples; the plug-in CRPS bias favours narrow predictives. |
+| **Exact mixture CRPS, mean and quantiles** | Chosen: deterministic given the draws, and figure and metrics cannot disagree. Any number of draws (pSGLD's retained chain) goes through the same path. |
+
+### Consequences
+
+- **Test metrics are not comparable with earlier runs** (different estimators).
+- The `evaluation/test/<case>/predictive` artifact stores the posterior predictive (`draw_means`, `aleatoric_variance`) instead of noisy samples and a variance split; rebuilding a case from it reproduces every logged metric. Older artifacts are not readable.
+- `EvaluationParameters.num_samples` is `num_draws` (`--num-draws` in `evaluate.py`).

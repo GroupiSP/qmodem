@@ -10,8 +10,8 @@ from matplotlib.axes import Axes
 from matplotlib.collections import PolyCollection
 from matplotlib.figure import Figure
 
-from qmodem.battery.evaluate import CaseSamples
-from qmodem.battery.forecasts import ReferenceSamples, central_band
+from qmodem.battery.evaluate import EvaluatedCase
+from qmodem.battery.forecasts import CasePredictive, ReferenceSamples
 from qmodem.battery.rul_plot import (
     PREDICTED_LABEL,
     REFERENCE_LABEL,
@@ -23,13 +23,11 @@ N_TIMES = 6
 
 
 @pytest.fixture(scope="module")
-def case() -> CaseSamples:
+def case() -> EvaluatedCase:
     rng = np.random.default_rng(0)
     times = 10.0 * np.arange(N_TIMES)
     targets = times[-1] - times + 5.0
-    predictive = targets[:, None] + rng.normal(0.0, 3.0, (N_TIMES, 40))
-    predictive[0] = np.nan  # t0 has no prediction
-    return CaseSamples(
+    return EvaluatedCase(
         name="case_4",
         policy=2,
         times=times,
@@ -37,7 +35,10 @@ def case() -> CaseSamples:
         reference=ReferenceSamples(
             targets[:, None] + rng.normal(0.0, 5.0, (N_TIMES, 30))
         ),
-        predictive_samples=predictive,
+        predictive=CasePredictive(
+            draw_means=targets[1:, None] + rng.normal(0.0, 3.0, (N_TIMES - 1, 40)),
+            aleatoric_variance=rng.uniform(1.0, 4.0, N_TIMES - 1),
+        ),
     )
 
 
@@ -49,6 +50,15 @@ def _axes(figure: Figure) -> Axes:
 def _line(ax: Axes, label: str) -> tuple[np.ndarray, np.ndarray]:
     (line,) = [line for line in ax.get_lines() if line.get_label() == label]
     return np.asarray(line.get_xdata()), np.asarray(line.get_ydata())
+
+
+def _band(ax: Axes, label: str) -> np.ndarray:
+    (band,) = [
+        c
+        for c in ax.collections
+        if isinstance(c, PolyCollection) and c.get_label().startswith(label)
+    ]
+    return band.get_paths()[0].vertices
 
 
 def _band_extent(ax: Axes, label: str) -> tuple[float, float]:
@@ -69,7 +79,9 @@ def test_the_figure_has_one_titled_axes_with_a_non_negative_rul_axis(case) -> No
     assert ax.get_legend() is not None
 
 
-def test_the_target_spans_every_timestamp_and_the_prediction_skips_t0(case) -> None:
+def test_the_target_spans_every_timestamp_and_the_line_is_the_mixture_mean(
+    case,
+) -> None:
     ax = _axes(plot_rul_over_time(case, level=0.95))
 
     target_t, target_y = _line(ax, TARGET_LABEL)
@@ -77,7 +89,7 @@ def test_the_target_spans_every_timestamp_and_the_prediction_skips_t0(case) -> N
     np.testing.assert_array_equal(target_y, case.targets)
     predicted_t, predicted_y = _line(ax, PREDICTED_LABEL)
     np.testing.assert_array_equal(predicted_t, case.times[1:])
-    np.testing.assert_allclose(predicted_y, case.predictive_samples[1:].mean(axis=1))
+    np.testing.assert_allclose(predicted_y, case.predictive.draw_means.mean(axis=1))
 
 
 def test_the_reference_band_is_the_reference_interval(case) -> None:
@@ -89,28 +101,33 @@ def test_the_reference_band_is_the_reference_interval(case) -> None:
     )
 
 
-def test_the_predictive_band_is_the_metric_central_band(case) -> None:
-    ax = _axes(plot_rul_over_time(case, level=0.9))
+@settings(max_examples=10, deadline=None)
+@given(level=st.floats(0.05, 0.99))
+def test_the_predictive_band_edges_are_the_mixture_quantiles(case, level) -> None:
+    vertices = _band(_axes(plot_rul_over_time(case, level=level)), PREDICTED_LABEL)
 
-    lower, upper = central_band(case.predictive_samples[1:], 0.9)
-    assert _band_extent(ax, PREDICTED_LABEL) == pytest.approx(
-        (lower.min(), upper.max())
-    )
+    lower, upper = case.predictive.interval(level)
+    times = case.times[1:]
+    for t, low, high in zip(times, lower, upper, strict=True):
+        at_t = vertices[np.isclose(vertices[:, 0], t), 1]
+        assert at_t.min() == pytest.approx(low)
+        assert at_t.max() == pytest.approx(high)
 
 
 @settings(max_examples=25, deadline=None)
 @given(seed=st.integers(0, 2**32 - 1))
-def test_the_figure_is_invariant_to_permuting_samples_within_a_timestamp(
-    case, seed
-) -> None:
+def test_the_figure_is_invariant_to_permuting_samples_and_draws(case, seed) -> None:
     rng = np.random.default_rng(seed)
-    permuted = CaseSamples(
+    permuted = EvaluatedCase(
         name=case.name,
         policy=case.policy,
         times=case.times,
         targets=case.targets,
         reference=ReferenceSamples(rng.permuted(case.reference.samples, axis=1)),
-        predictive_samples=rng.permuted(case.predictive_samples, axis=1),
+        predictive=CasePredictive(
+            draw_means=rng.permuted(case.predictive.draw_means, axis=1),
+            aleatoric_variance=case.predictive.aleatoric_variance,
+        ),
     )
     original = _axes(plot_rul_over_time(case, level=0.95))
     shuffled = _axes(plot_rul_over_time(permuted, level=0.95))
