@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import types
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 import jax
@@ -35,6 +35,7 @@ from qmodem.battery.data_processing import (
     make_data_pipeline,
     prepare_windows,
 )
+from qmodem.battery.posterior import VALIDATION_METRIC, VALIDATION_TAG_PREFIX
 from qmodem.battery.train import (
     BackboneCheckpoints,
     MeanHyperparameters,
@@ -121,6 +122,17 @@ class InMemoryTracker:
         """
         return [values[tag] for values, _ in self.metrics if tag in values]
 
+    def steps(self, tag: str) -> list[int]:
+        """Return the steps one metric tag was logged at, in logging order.
+
+        Args:
+            tag: A stagereg metric tag, e.g. ``"posterior/validation/nll"``.
+
+        Returns:
+            The steps of the values logged under ``tag``.
+        """
+        return [step for values, step in self.metrics if tag in values]
+
 
 def _synthetic_histories(lengths: tuple[int, ...], seed: int) -> pd.DataFrame:
     """Build discharge histories with the columns of the battery CSV files.
@@ -150,6 +162,17 @@ def _synthetic_histories(lengths: tuple[int, ...], seed: int) -> pd.DataFrame:
             )
         )
     return pd.concat(frames, ignore_index=True)
+
+
+@pytest.fixture(scope="session")
+def synthetic_histories() -> Callable[[tuple[int, ...], int], pd.DataFrame]:
+    """Provide the history builder ``_synthetic_histories(lengths, seed)``.
+
+    Returns:
+        A function from history lengths and a seed to discharge histories with
+        the battery CSV columns.
+    """
+    return _synthetic_histories
 
 
 @dataclasses.dataclass(frozen=True)
@@ -340,6 +363,52 @@ def assert_one_baseline_before_epoch_0(tracker: InMemoryTracker) -> None:
 def one_baseline_before_epoch_0() -> Any:
     """The baseline-logging check ``assert_one_baseline_before_epoch_0``."""
     return assert_one_baseline_before_epoch_0
+
+
+VALIDATION_DIAGNOSTICS: tuple[str, ...] = ("nll", "rmse", "coverage_95")
+"""The posterior validation diagnostics, scored once on the best checkpoint.
+
+Literal on purpose: the logged names are a contract, not derived from the suite.
+"""
+
+CRPS_TAG = f"{VALIDATION_TAG_PREFIX}{VALIDATION_METRIC}"
+"""The per-epoch posterior validation criterion's tag."""
+
+
+def assert_crps_per_epoch_and_diagnostics_once(
+    tracker: InMemoryTracker, best_epoch: int
+) -> None:
+    """Assert a run's posterior validation suite: CRPS per epoch, diagnostics once.
+
+    Args:
+        tracker: The method run's tracker.
+        best_epoch: The epoch of the finalized ``posterior/best`` checkpoint.
+
+    Raises:
+        AssertionError: If a validation epoch logs anything but ``crps``, or a
+            diagnostic is missing, repeated, non-finite or not at the best epoch.
+    """
+    crps_steps = tracker.steps(CRPS_TAG)
+    assert crps_steps
+    assert best_epoch in crps_steps
+    for name in VALIDATION_DIAGNOSTICS:
+        tag = f"{VALIDATION_TAG_PREFIX}{name}"
+        assert tracker.steps(tag) == [best_epoch]
+        assert np.isfinite(tracker.history(tag)[0])
+    epoch_entries = [values for values, _ in tracker.metrics if CRPS_TAG in values]
+    for values in epoch_entries:
+        validation = {tag for tag in values if tag.startswith(VALIDATION_TAG_PREFIX)}
+        assert validation == {CRPS_TAG}
+
+
+@pytest.fixture(scope="session")
+def crps_per_epoch_and_diagnostics_once() -> Callable[[InMemoryTracker, int], None]:
+    """Provide the validation-suite check of a method run's tracker.
+
+    Returns:
+        ``assert_crps_per_epoch_and_diagnostics_once(tracker, best_epoch)``.
+    """
+    return assert_crps_per_epoch_and_diagnostics_once
 
 
 @dataclasses.dataclass(frozen=True)

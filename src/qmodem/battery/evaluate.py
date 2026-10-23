@@ -35,7 +35,7 @@ from stagereg.core import (
 )
 from stagereg.jax import PosteriorPredictive
 
-from .data_processing import FEATURES, WINDOW_SIZE
+from .data_processing import FEATURES, WINDOW_SIZE, evenly_spaced_indices
 from .rul_plot import central_band, plot_rul_over_time
 
 PRIMARY_COVERAGE_LEVEL = 0.95
@@ -346,7 +346,8 @@ class Evaluation:
 def evaluation_indices(n_rows: int, n_timestamps: int) -> np.ndarray:
     """Return the row indices of the evaluation timestamps of one test case.
 
-    They match the checkpoints of ``reconstruct_true_rul_distribution``.
+    They match the checkpoints of ``reconstruct_true_rul_distribution``
+    (``data_processing.evenly_spaced_indices``).
 
     Args:
         n_rows: Number of rows of the time-sorted test case.
@@ -355,7 +356,7 @@ def evaluation_indices(n_rows: int, n_timestamps: int) -> np.ndarray:
     Returns:
         The row index of each timestamp ``(n_timestamps,)``.
     """
-    return np.linspace(0, n_rows - 1, num=n_timestamps, dtype=np.int32)
+    return evenly_spaced_indices(n_rows, n_timestamps, dtype=np.int32)
 
 
 def _windows(features: np.ndarray, ends: np.ndarray, window_size: int) -> np.ndarray:

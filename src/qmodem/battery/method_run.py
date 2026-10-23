@@ -76,6 +76,7 @@ from .methods.psgld import PSGLDConfig as PSGLDConfig
 from .methods.registry import METHODS
 from .models import MeanNet, VarianceNet
 from .posterior import (
+    DRAWS_PER_SECOND_WINDOWS,
     POSTERIOR_CHECKPOINT_KEY,
     PREDICTIVE_SAMPLE_COUNT,
     VAL_CRPS_BASELINE,
@@ -89,6 +90,7 @@ from .posterior import (
     parameter_count,
     posterior_loader,
     validation_crps,
+    validation_diagnostics,
 )
 from .train import (
     MEAN_CHECKPOINT_KEY,
@@ -345,13 +347,20 @@ def _require_registered(config: MethodConfig) -> None:
 def _posterior_validation_inputs(data: PreparedData) -> jax.Array:
     """Return the inputs of the draws-per-second probe.
 
+    Always ``DRAWS_PER_SECOND_WINDOWS`` windows: the posterior validation set's,
+    cycled if it has fewer. Throughput depends on the batch size, which K would
+    otherwise change.
+
     Args:
         data: Prepared train and validation windows.
 
     Returns:
-        Every posterior validation set window ``(B, W, C)``.
+        The first ``DRAWS_PER_SECOND_WINDOWS`` posterior validation set windows
+        ``(DRAWS_PER_SECOND_WINDOWS, W, C)``, repeated cyclically if there are
+        fewer.
     """
-    return jnp.asarray(data.posterior_val.features)
+    features = data.posterior_val.features
+    return jnp.asarray(features[np.arange(DRAWS_PER_SECOND_WINDOWS) % len(features)])
 
 
 def _cost(
@@ -366,7 +375,8 @@ def _cost(
 
     Args:
         run: The trained method run.
-        data: Its windows (the draws are timed at the validation windows).
+        data: Its windows (the draws are timed at the first posterior validation
+            windows, ``_posterior_validation_inputs``).
         wall_clock_seconds: The posterior stage's wall-clock time.
         trainable_parameters: The posterior's trainable parameter count.
         scaffolding_parameters: The count of parameters trained only to fit the
@@ -410,8 +420,10 @@ def train_method_run(
     shared posterior stage (``build_posterior_stage``) and finalizes its best
     epoch on validation CRPS into ``store`` (``posterior/best``). Before epoch 0
     it logs the warm start's validation CRPS once (``VAL_CRPS_BASELINE``,
-    diagnostic only, never a ``posterior/best`` candidate). HNN trains and
-    saves nothing. Every method run logs its posterior hyperparameters (with the
+    diagnostic only, never a ``posterior/best`` candidate). Each epoch validates
+    on CRPS only; NLL, RMSE and coverage@0.95 are scored once, on the finalized
+    checkpoint, and logged at its epoch (``_log_validation_diagnostics``). HNN
+    trains and saves nothing. Every method run logs its posterior hyperparameters (with the
     dataset size N), its method metrics (``PosteriorSpec.method_metrics``) and its
     cost metrics (``cost/posterior/...``).
 
@@ -550,6 +562,7 @@ def _train_posterior(
     trained = dataclasses.replace(
         run, posterior=method.posterior(), checkpoint=checkpoint
     )
+    _log_validation_diagnostics(trained, loader=loader, keys=keys, tracker=tracker)
     log_cost(
         tracker,
         _cost(
@@ -601,6 +614,42 @@ def _log_validation_baseline(
         keys.validation,
     )
     tracker.log_metrics({VAL_CRPS_BASELINE: baseline}, step=0)
+
+
+def _log_validation_diagnostics(
+    run: MethodRun,
+    *,
+    loader: LoaderFactory,
+    keys: PosteriorKeys,
+    tracker: ExperimentTracker,
+) -> None:
+    """Log the validation diagnostics of the finalized posterior, once.
+
+    NLL, RMSE and the 95% coverage are scored on the best checkpoint with the
+    stage's validation key and ``PREDICTIVE_SAMPLE_COUNT`` draws, i.e. on the same
+    predictive samples as that epoch's CRPS. They are logged at the best epoch's
+    step under the per-epoch validation names. stagereg's ``MetricSuite`` has no
+    final-only metrics, so qmodem scores them here.
+
+    Args:
+        run: The method run with its finalized posterior and checkpoint.
+        loader: The posterior stage's loader.
+        keys: The posterior-stage keys.
+        tracker: Receives the diagnostics at step = the best epoch.
+
+    Raises:
+        ValueError: If the run has no finalized checkpoint.
+    """
+    if run.checkpoint is None:
+        raise ValueError("the run has no finalized posterior checkpoint.")
+    diagnostics = validation_diagnostics(
+        lambda inputs, draw_key: run.predictive(
+            inputs, draw_key, PREDICTIVE_SAMPLE_COUNT
+        ),
+        loader,
+        keys.validation,
+    )
+    tracker.log_metrics(diagnostics, step=run.checkpoint.epoch)
 
 
 def restore_method_run(

@@ -24,12 +24,16 @@ from qmodem.battery.posterior import (
     COST_SECONDS_PER_EPOCH,
     COST_TRAINABLE_PARAMETERS,
     INFERRED_SUBNETWORK,
+    VALIDATION_METRIC,
+    VALIDATION_TAG_PREFIX,
     PosteriorStageHyperparameters,
     posterior_loader,
 )
 from qmodem.battery.train import Method
 
 EPOCHS = 8
+CRPS = f"{VALIDATION_TAG_PREFIX}{VALIDATION_METRIC}"
+"""The per-epoch posterior validation criterion's tag."""
 TINY_PSGLD = PSGLDConfig(
     burn_in_epochs=3,
     num_samples=6,
@@ -125,7 +129,17 @@ def test_a_psgld_run_validates_only_after_its_first_retained_sample(
     first_validated = (schedule.burn_in + schedule.thinning - 1) // steps
 
     assert len(tracker.history("posterior/train/loss")) == EPOCHS
-    assert len(tracker.history("posterior/validation/crps")) == EPOCHS - first_validated
+    assert len(tracker.history(CRPS)) == EPOCHS - first_validated
+
+
+def test_a_psgld_run_validates_on_crps_and_diagnoses_its_last_epoch_once(
+    psgld_run, crps_per_epoch_and_diagnostics_once
+) -> None:
+    _, tracker, persistent = psgld_run
+
+    crps_per_epoch_and_diagnostics_once(
+        tracker, persistent.load("posterior/best").epoch
+    )
 
 
 def test_a_psgld_run_logs_one_validation_baseline_before_its_burn_in(

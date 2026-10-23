@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - 2026-10-23
+
+### Changed
+
+- A posterior epoch validates on CRPS only. `nll`, `rmse` and `coverage_95` are
+  scored once, on the best checkpoint and from the same predictive samples, and
+  logged at the best epoch's step under their existing names. CRPS, selection,
+  early stopping and HPO are unchanged ([#139]).
+- Both validation sets are scored only at their validation timestamps: K = 50
+  evenly spaced windows per history (`VALIDATION_TIMESTAMP_COUNT`, first and last
+  window included), the rule of a test case's evaluation timestamps. Training
+  windows stay stride-1, so N is unchanged. **This changes every validation
+  score** (backbone stages, posterior stages, both HPO studies and
+  `val_crps_baseline`), so validation scores are not comparable with earlier runs.
+  K is logged as the `validation_timestamp_count` param; `windows_backbone_val`
+  and `windows_posterior_val` count the reduced sets. See ADR 0003 ([#142]).
+- The draws-per-second probe (`cost/posterior/draws_per_second`, table T3) times
+  the first 1024 posterior validation windows (`DRAWS_PER_SECOND_WINDOWS`), or all
+  of them if there are fewer, independent of K ([#140]).
+- An empty validation set is refused with a `ValueError` when the windows are
+  prepared.
 
 ## [0.3.0] - 2026-10-21
 
@@ -132,7 +152,7 @@ longer be loaded or selected ([#103], [#118]).
 
 Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 
-[Unreleased]: https://github.com/GroupiSP/qmodem/compare/v0.3.0...HEAD
+[0.3.1]: https://github.com/GroupiSP/qmodem/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/GroupiSP/qmodem/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/GroupiSP/qmodem/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/GroupiSP/qmodem/compare/v0.1.0...v0.2.0
@@ -144,5 +164,8 @@ Last pre-stagereg release, including CMAPSS. Tagged without a GitHub release.
 [#130]: https://github.com/GroupiSP/qmodem/issues/130
 [#132]: https://github.com/GroupiSP/qmodem/issues/132
 [#135]: https://github.com/GroupiSP/qmodem/issues/135
+[#139]: https://github.com/GroupiSP/qmodem/issues/139
+[#140]: https://github.com/GroupiSP/qmodem/issues/140
+[#142]: https://github.com/GroupiSP/qmodem/issues/142
 [PennyLaneAI/pennylane#9930]: https://github.com/PennyLaneAI/pennylane/issues/9930
 [GroupiSP/stagereg#136]: https://github.com/GroupiSP/stagereg/issues/136

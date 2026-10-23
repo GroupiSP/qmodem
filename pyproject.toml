@@ -1,6 +1,6 @@
 [project]
 name = "qmodem"
-version = "0.3.0"
+version = "0.3.1"
 description = "QMoDeM: Quantum-aided Models for Decision Making."
 readme = "README.md"
 authors = [

@@ -36,6 +36,14 @@ WINDOW_SIZE = 10
 FEATURES: tuple[str, ...] = ("load", "voltage")
 """Input channels of every window."""
 
+VALIDATION_TIMESTAMP_COUNT = 50
+"""K: windows per history of both validation sets (ADR 0003).
+
+Each validation history contributes ``min(K, n)`` of its ``n`` stride-1 windows,
+evenly spaced and including the first and last. Changing it changes every
+validation score and supersedes ADR 0003.
+"""
+
 TRAIN_SPLIT = "train"
 VALIDATION_SPLIT = "validation"
 
@@ -57,14 +65,18 @@ class PreparedData:
     """Windowed, scaled train data and both validation sets.
 
     Attributes:
-        train: Training windows and targets.
-        backbone_val: Backbone validation set windows and targets.
-        posterior_val: Posterior validation set windows and targets.
+        train: Training windows and targets (stride 1).
+        backbone_val: Backbone validation set windows and targets, at its
+            validation timestamps.
+        posterior_val: Posterior validation set windows and targets, at its
+            validation timestamps.
+        validation_timestamp_count: K, the validation timestamps per history.
     """
 
     train: ArrayDataSource
     backbone_val: ArrayDataSource
     posterior_val: ArrayDataSource
+    validation_timestamp_count: int = VALIDATION_TIMESTAMP_COUNT
 
     def validation(self, which: ValidationSet) -> ArrayDataSource:
         """Return the windows of one validation set.
@@ -81,16 +93,17 @@ class PreparedData:
         }[which]
 
     def window_counts(self) -> dict[str, int]:
-        """Return the window count of each split, keyed for MLflow params.
+        """Return the window count of each split and K, keyed for MLflow params.
 
         Returns:
             ``{"windows_train": ..., "windows_backbone_val": ...,
-            "windows_posterior_val": ...}``.
+            "windows_posterior_val": ..., "validation_timestamp_count": K}``.
         """
         return {
             "windows_train": len(self.train),
             "windows_backbone_val": len(self.backbone_val),
             "windows_posterior_val": len(self.posterior_val),
+            "validation_timestamp_count": self.validation_timestamp_count,
         }
 
 
@@ -255,13 +268,90 @@ def make_data_pipeline(
     )
 
 
+def evenly_spaced_indices(
+    n: int, num: int, *, dtype: type[np.integer] = np.int64
+) -> np.ndarray:
+    """Return ``num`` evenly spaced indices into ``n`` items, both ends included.
+
+    The one timestamp rule of qmodem: a test case's evaluation timestamps
+    (``evaluate.evaluation_indices``) and a validation history's validation
+    timestamps (``validation_timestamp_indices``) both use it.
+
+    Args:
+        n: Number of items indexed (rows or windows).
+        num: Number of indices. Above ``n``, indices repeat.
+        dtype: Integer dtype of the indices.
+
+    Returns:
+        The non-decreasing indices ``(num,)``, from ``0`` to ``n - 1``.
+    """
+    return np.linspace(0, n - 1, num=num, dtype=dtype)
+
+
+def validation_timestamp_indices(n_windows: int, k: int) -> np.ndarray:
+    """Return the indices of one history's validation timestamps.
+
+    ``min(k, n_windows)`` evenly spaced indices (``evenly_spaced_indices``, as a
+    test case's evaluation timestamps), the first and last window included.
+
+    Args:
+        n_windows: The history's number of stride-1 windows.
+        k: K, the validation timestamps per history.
+
+    Returns:
+        The increasing, distinct window indices ``(min(k, n_windows),)``.
+
+    Raises:
+        ValueError: If ``k < 2`` (the last window would be dropped).
+    """
+    if k < 2:
+        raise ValueError(f"K must be at least 2 to keep the last window, got {k}.")
+    return evenly_spaced_indices(n_windows, min(k, n_windows))
+
+
+def _validation_windows(
+    histories: pd.DataFrame, pipeline: DataPipeline, k: int
+) -> ArrayDataSource:
+    """Window one validation set at its validation timestamps.
+
+    Args:
+        histories: The validation set's histories, with a ``run_id`` column.
+        pipeline: The data pipeline, in ``TRANSFORM`` mode.
+        k: K, the validation timestamps per history.
+
+    Returns:
+        Per history, in ``run_id`` order of appearance, its selected windows.
+
+    Raises:
+        ValueError: If ``histories`` is empty.
+    """
+    if histories.empty:
+        # Explicit: there is no K-subset of nothing, and an empty set would leave
+        # the stage it validates without a criterion.
+        raise ValueError("A validation set has no histories.")
+    features, targets = [], []
+    for _, history in histories.groupby("run_id", sort=False):
+        X, y = pipeline(history)
+        keep = validation_timestamp_indices(len(y), k)
+        features.append(np.asarray(X)[keep])
+        targets.append(np.asarray(y)[keep])
+    return ArrayDataSource(
+        features=jnp.asarray(np.concatenate(features)),
+        targets=jnp.asarray(np.concatenate(targets)),
+    )
+
+
 def prepare_windows(
     splits: HistorySplits,
     pipeline: DataPipeline,
     *,
     fit_scalers: bool = True,
+    validation_timestamp_count: int = VALIDATION_TIMESTAMP_COUNT,
 ) -> PreparedData:
     """Window the train and both validation sets with train-fitted scalers.
+
+    Training windows are every stride-1 window. Both validation sets keep only
+    their validation timestamps (``validation_timestamp_indices``, ADR 0003).
 
     Args:
         splits: The train, backbone validation set and posterior validation set
@@ -270,9 +360,14 @@ def prepare_windows(
         fit_scalers: Fit the pipeline's scalers on the training histories (a
             backbone run). ``False`` uses already fitted scalers as they are
             (runs consuming a backbone, see ``backbone_data_pipeline``).
+        validation_timestamp_count: K, the validation timestamps per history.
 
     Returns:
         The prepared windows of every split.
+
+    Raises:
+        ValueError: If ``validation_timestamp_count < 2``, or a validation set
+            has no histories.
     """
     pipeline.set_mode(
         ScalingMode.FIT_TRANSFORM if fit_scalers else ScalingMode.TRANSFORM
@@ -280,13 +375,15 @@ def prepare_windows(
     X_train, y_train = pipeline(splits.train)
 
     pipeline.set_mode(ScalingMode.TRANSFORM)
-    X_backbone, y_backbone = pipeline(splits.backbone_val)
-    X_posterior, y_posterior = pipeline(splits.posterior_val)
-
     return PreparedData(
         train=ArrayDataSource(features=X_train, targets=y_train),
-        backbone_val=ArrayDataSource(features=X_backbone, targets=y_backbone),
-        posterior_val=ArrayDataSource(features=X_posterior, targets=y_posterior),
+        backbone_val=_validation_windows(
+            splits.backbone_val, pipeline, validation_timestamp_count
+        ),
+        posterior_val=_validation_windows(
+            splits.posterior_val, pipeline, validation_timestamp_count
+        ),
+        validation_timestamp_count=validation_timestamp_count,
     )
 
 

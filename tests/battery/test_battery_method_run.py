@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import jax
@@ -11,6 +13,7 @@ from flax import nnx
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from stagereg.core import InMemoryCheckpointStore, is_finalized
+from stagereg.jax import MetricSuite
 
 from qmodem.battery import method_run
 from qmodem.battery.data_processing import ValidationSet
@@ -31,13 +34,24 @@ from qmodem.battery.posterior import (
     COST_DRAWS_PER_SECOND,
     COST_TRAINABLE_PARAMETERS,
     COST_WALL_CLOCK,
+    DRAWS_PER_SECOND_WINDOWS,
     INFERRED_SUBNETWORK,
     VAL_CRPS_BASELINE,
+    VALIDATION_METRIC,
+    VALIDATION_TAG_PREFIX,
+    PosteriorKeys,
     PosteriorStageHyperparameters,
+    diagnostic_metrics,
+    posterior_loader,
+    score_validation,
+    validation_metrics,
 )
 from qmodem.battery.train import Method, OptimizerHyperparameters, backbone_keys
+from qmodem.data import ArrayDataSource
 
 PREDICTIVE_SAMPLE_COUNT = 100
+CRPS = f"{VALIDATION_TAG_PREFIX}{VALIDATION_METRIC}"
+"""The per-epoch posterior validation criterion's tag."""
 COST_TAGS = {COST_WALL_CLOCK, COST_TRAINABLE_PARAMETERS, COST_DRAWS_PER_SECOND}
 
 
@@ -221,7 +235,7 @@ def test_the_same_seed_gives_identical_finalized_bbb_checkpoints_and_draws(
 
 def test_a_bbb_run_finalizes_its_best_epoch_on_validation_crps(bbb_run) -> None:
     run, tracker, persistent = bbb_run
-    crps = tracker.history("posterior/validation/crps")
+    crps = tracker.history(CRPS)
     finalized = persistent.load("posterior/best")
 
     assert is_finalized(finalized)
@@ -253,14 +267,64 @@ def test_a_bbb_run_logs_only_its_posterior_hyperparameters_with_the_dataset_size
     }
 
 
-def test_a_bbb_run_logs_the_shared_validation_criterion_and_diagnostics(
-    bbb_run,
+def test_a_bbb_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
+    bbb_run, crps_per_epoch_and_diagnostics_once
 ) -> None:
-    _, tracker, _ = bbb_run
+    _, tracker, persistent = bbb_run
     epochs = len(tracker.history("posterior/train/loss"))
 
-    for metric in ("crps", "nll", "rmse", "coverage_95"):
-        assert len(tracker.history(f"posterior/validation/{metric}")) == epochs
+    assert len(tracker.history(CRPS)) == epochs
+    crps_per_epoch_and_diagnostics_once(
+        tracker, persistent.load("posterior/best").epoch
+    )
+
+
+def _full_suite() -> MetricSuite:
+    """Compose the pre-#139 per-epoch suite: the criterion plus the diagnostics.
+
+    Returns:
+        ``validation_metrics()`` and ``diagnostic_metrics()`` merged into one
+        suite, so one pass scores all of them on the same predictive samples.
+
+    Raises:
+        ValueError: If the two suites' predictors or sample counts differ.
+    """
+    criterion, diagnostics = validation_metrics(), diagnostic_metrics()
+    if criterion.predictive_sample_count != diagnostics.predictive_sample_count:
+        raise ValueError("the suites score different predictive sample counts.")
+    if type(criterion.predictor) is not type(diagnostics.predictor):
+        raise ValueError("the suites use different predictors.")
+    return dataclasses.replace(criterion, epoch=criterion.epoch + diagnostics.epoch)
+
+
+@pytest.mark.parametrize("fixture", ["bbb_run", "mcd_run"])
+def test_the_diagnostics_and_best_crps_are_the_full_suites_scores_of_the_best_epoch(
+    fixture, request, trained_backbone
+) -> None:
+    # The full suite on the finalized posterior, under the stage's validation key,
+    # reproduces both the logged diagnostics and the best epoch's logged CRPS.
+    run, tracker, persistent = request.getfixturevalue(fixture)
+    config = TINY_BBB if fixture == "bbb_run" else TINY_MCD
+    keys = PosteriorKeys.of(run.key)
+    full = score_validation(
+        lambda inputs, key: run.predictive(inputs, key, PREDICTIVE_SAMPLE_COUNT),
+        posterior_loader(
+            trained_backbone.battery.data,
+            batch_size=config.stage.batch_size,
+            key=keys.loader,
+        ),
+        keys.validation,
+        _full_suite(),
+    )
+    best = persistent.load("posterior/best").epoch
+    crps_steps = tracker.steps(CRPS)
+    best_crps = tracker.history(CRPS)[crps_steps.index(best)]
+
+    assert full["crps"] == pytest.approx(best_crps, rel=1e-5)
+    for name in ("nll", "rmse", "coverage_95"):
+        assert tracker.history(f"{VALIDATION_TAG_PREFIX}{name}") == [
+            pytest.approx(full[name], rel=1e-5)
+        ]
 
 
 @settings(max_examples=10, deadline=None)
@@ -314,17 +378,55 @@ def mcd_run(trained_backbone, tracker_factory, store_factory):
     return run, tracker, persistent
 
 
+@pytest.fixture
+def probe_inputs(monkeypatch) -> list[np.ndarray]:
+    """Record the inputs of every draws-per-second probe of a method run."""
+    seen: list[np.ndarray] = []
+    probe = method_run.draws_per_second
+
+    def spy(
+        draw: Callable[[jax.Array, jax.Array], jax.Array],
+        inputs: jax.Array,
+        key: jax.Array,
+        num_draws: int,
+    ) -> float:
+        """Record the probed inputs, then time them with the real probe.
+
+        Args:
+            draw: The method run's draw function.
+            inputs: The windows the probe times.
+            key: The probe's draw key.
+            num_draws: Draws per timed call.
+
+        Returns:
+            The real probe's draws per second.
+        """
+        seen.append(np.asarray(inputs))
+        return probe(draw, inputs, key, num_draws)
+
+    monkeypatch.setattr(method_run, "draws_per_second", spy)
+    return seen
+
+
 @pytest.mark.parametrize("config", [HNNConfig(), TINY_MCD], ids=["hnn", "mcd"])
 def test_a_method_run_reads_only_the_posterior_validation_set(
-    config, mcd_run, trained_backbone, only_serving, tracker_factory, store_factory
+    config,
+    mcd_run,
+    trained_backbone,
+    only_serving,
+    tracker_factory,
+    store_factory,
+    probe_inputs,
 ) -> None:
     # The posterior stage, its baseline and the draws-per-second probe all run on
     # the posterior validation set; reading the backbone one would fail.
     tracker = tracker_factory()
+    data = trained_backbone.battery.data
+    windows = np.asarray(data.posterior_val.features)
 
     train_method_run(
         backbone=_fresh_backbone_handle(trained_backbone, store_factory),
-        data=only_serving(trained_backbone.battery.data, ValidationSet.POSTERIOR),
+        data=only_serving(data, ValidationSet.POSTERIOR),
         config=config,
         seed=trained_backbone.seed,
         tracker=tracker,
@@ -332,10 +434,54 @@ def test_a_method_run_reads_only_the_posterior_validation_set(
     )
 
     assert COST_DRAWS_PER_SECOND in tracker.tags
+    # The probe times 1024 posterior validation windows, cycled if there are fewer.
+    assert DRAWS_PER_SECOND_WINDOWS == 1024
+    (inputs,) = probe_inputs
+    np.testing.assert_array_equal(inputs, windows[np.arange(1024) % len(windows)])
     if isinstance(config, MCDConfig):
         _, reference, _ = mcd_run
-        for tag in ("posterior/validation/crps", VAL_CRPS_BASELINE):
+        for tag in (CRPS, VAL_CRPS_BASELINE):
             assert tracker.history(tag) == pytest.approx(reference.history(tag))
+
+
+@pytest.mark.parametrize("cap", [1, 3])
+def test_the_draws_per_second_probe_times_only_the_first_windows(
+    cap, trained_backbone, tracker_factory, store_factory, probe_inputs, monkeypatch
+) -> None:
+    # A posterior validation set larger than the window count is cut to its head.
+    monkeypatch.setattr(method_run, "DRAWS_PER_SECOND_WINDOWS", cap)
+    windows = np.asarray(trained_backbone.battery.data.posterior_val.features)
+    assert len(windows) > cap
+
+    train_method_run(
+        backbone=_fresh_backbone_handle(trained_backbone, store_factory),
+        data=trained_backbone.battery.data,
+        config=HNNConfig(),
+        seed=trained_backbone.seed,
+        tracker=tracker_factory(),
+        store=store_factory(),
+    )
+
+    (inputs,) = probe_inputs
+    np.testing.assert_array_equal(inputs, windows[:cap])
+
+
+@settings(deadline=None)
+@given(n_windows=st.integers(1, 40), cap=st.integers(1, 40))
+def test_the_draws_per_second_probe_size_is_independent_of_the_validation_set_size(
+    n_windows: int, cap: int
+) -> None:
+    # Throughput depends on the batch size, so the probe must not shrink with K.
+    features = np.arange(n_windows)[:, None, None].astype(np.float32)
+    data = SimpleNamespace(
+        posterior_val=ArrayDataSource(features=features, targets=features[:, 0, 0])
+    )
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(method_run, "DRAWS_PER_SECOND_WINDOWS", cap)
+        inputs = np.asarray(method_run._posterior_validation_inputs(data))
+
+    assert inputs.shape == (cap, 1, 1)
+    np.testing.assert_array_equal(inputs[:, 0, 0], np.arange(cap) % n_windows)
 
 
 def test_a_restored_mcd_run_yields_the_trained_runs_predictive_samples(
@@ -408,9 +554,19 @@ def test_mcd_draws_differ_but_each_is_one_function_across_input_subsets(
             assert not np.allclose(whole[i], whole[j])
 
 
+def test_an_mcd_run_validates_on_crps_every_epoch_and_diagnoses_its_best_once(
+    mcd_run, crps_per_epoch_and_diagnostics_once
+) -> None:
+    _, tracker, persistent = mcd_run
+
+    crps_per_epoch_and_diagnostics_once(
+        tracker, persistent.load("posterior/best").epoch
+    )
+
+
 def test_an_mcd_run_finalizes_its_best_epoch_on_validation_crps(mcd_run) -> None:
     run, tracker, persistent = mcd_run
-    crps = tracker.history("posterior/validation/crps")
+    crps = tracker.history(CRPS)
     finalized = persistent.load("posterior/best")
 
     assert is_finalized(finalized)
@@ -432,8 +588,6 @@ def test_an_mcd_run_logs_its_cost_and_only_its_posterior_hyperparameters(
         **TINY_MCD.posterior_hyperparameters(),
         "dataset_size": len(trained_backbone.battery.data.train),
     }
-    for metric in ("crps", "nll", "rmse", "coverage_95"):
-        assert tracker.history(f"posterior/validation/{metric}")
 
 
 @settings(max_examples=10, deadline=None)
@@ -550,7 +704,7 @@ def test_the_baseline_is_epoch_0s_score_of_a_posterior_that_barely_moved(
     tracker, _ = _train_mcd_at(1e-12, trained_backbone, tracker_factory, store_factory)
 
     assert tracker.history(VAL_CRPS_BASELINE)[0] == pytest.approx(
-        tracker.history("posterior/validation/crps")[0], rel=1e-5
+        tracker.history(CRPS)[0], rel=1e-5
     )
 
 
@@ -562,7 +716,7 @@ def test_the_best_epoch_ignores_a_baseline_lower_than_every_epoch(
         10.0, trained_backbone, tracker_factory, store_factory
     )
     baseline = tracker.history(VAL_CRPS_BASELINE)[0]
-    crps = tracker.history("posterior/validation/crps")
+    crps = tracker.history(CRPS)
     finalized = persistent.load("posterior/best")
 
     assert baseline < min(crps)
