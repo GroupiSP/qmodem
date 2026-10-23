@@ -26,6 +26,7 @@ from qmodem.battery.evaluate import (
     log_evaluation,
     metric_table,
 )
+from qmodem.battery.forecasts import ReferenceSamples
 
 _FINITE = st.floats(-50.0, 50.0, allow_nan=False, width=32)
 
@@ -50,7 +51,7 @@ def case_samples(draw: st.DrawFn, *, name: str = "case_0", policy: int = 0):
         policy=policy,
         times=np.cumsum(steps),
         targets=matrix(n_times, 1)[:, 0],
-        reference_samples=matrix(n_times, n_ref),
+        reference=ReferenceSamples(matrix(n_times, n_ref)),
         predictive_samples=predictive,
     )
 
@@ -60,12 +61,17 @@ def case_samples(draw: st.DrawFn, *, name: str = "case_0", policy: int = 0):
 def test_the_t0_row_never_changes_a_metric(case: CaseSamples, t0_values) -> None:
     other = t0_values.draw(case_samples())
     n_pred = case.predictive_samples.shape[1]
-    n_ref = case.reference_samples.shape[1]
+    n_ref = case.reference.samples.shape[1]
     replaced = dataclasses.replace(
         case,
         targets=np.concatenate([other.targets[:1], case.targets[1:]]),
-        reference_samples=np.vstack(
-            [np.resize(other.reference_samples[0], n_ref), case.reference_samples[1:]]
+        reference=ReferenceSamples(
+            np.vstack(
+                [
+                    np.resize(other.reference.samples[0], n_ref),
+                    case.reference.samples[1:],
+                ]
+            )
         ),
         predictive_samples=np.vstack(
             [np.full((1, n_pred), 1e6), case.predictive_samples[1:]]
@@ -114,7 +120,7 @@ def test_coverage_is_monotone_non_decreasing_in_the_level(
 @given(case=case_samples())
 def test_crps_is_the_mean_expected_sample_crps_without_t0(case: CaseSamples) -> None:
     expected = expected_sample_crps(
-        case.predictive_samples[1:], case.reference_samples[1:]
+        case.predictive_samples[1:], case.reference.samples[1:]
     ).mean()
 
     assert case_metrics(case, coverage_levels=(0.95,))["crps"] == pytest.approx(
@@ -143,7 +149,7 @@ def test_rmse_and_coverage_on_a_worked_example() -> None:
         policy=0,
         times=np.array([0.0, 10.0, 20.0, 30.0]),
         targets=np.array([99.0, 1.0, 5.0, 100.0]),
-        reference_samples=np.zeros((4, 3)),
+        reference=ReferenceSamples(np.zeros((4, 3))),
         predictive_samples=np.array(
             [[np.nan] * 3, [0.0, 1.0, 2.0], [2.0, 3.0, 4.0], [4.0, 5.0, 6.0]]
         ),
@@ -191,7 +197,7 @@ def test_the_metric_table_has_one_row_per_case() -> None:
             policy=i % 2,
             times=np.array([0.0, 1.0, 2.0]),
             targets=np.array([0.0, 1.0, 2.0]),
-            reference_samples=np.ones((3, 2)),
+            reference=ReferenceSamples(np.ones((3, 2))),
             predictive_samples=np.ones((3, 4)) * i,
         )
         for i in range(3)

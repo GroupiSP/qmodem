@@ -36,7 +36,8 @@ from stagereg.core import (
 from stagereg.jax import PosteriorPredictive
 
 from .data_processing import FEATURES, WINDOW_SIZE, evenly_spaced_indices
-from .rul_plot import central_band, plot_rul_over_time
+from .forecasts import ReferenceSamples, central_band
+from .rul_plot import plot_rul_over_time
 
 PRIMARY_COVERAGE_LEVEL = 0.95
 """The protocol's primary coverage level, also the band WSU integrates."""
@@ -67,7 +68,7 @@ class CaseSamples:
         policy: Current-policy ID of the test case.
         times: Strictly increasing timestamps ``(T,)``, t0 first.
         targets: Realized RUL at each timestamp ``(T,)``.
-        reference_samples: Simulator reference RUL samples ``(T, R)``.
+        reference: Simulator reference RUL samples, t0 included.
         predictive_samples: Predictive RUL samples ``(T, M)``.
     """
 
@@ -75,7 +76,7 @@ class CaseSamples:
     policy: int
     times: np.ndarray
     targets: np.ndarray
-    reference_samples: np.ndarray
+    reference: ReferenceSamples
     predictive_samples: np.ndarray
 
 
@@ -121,7 +122,7 @@ def case_metrics(
     targets = case.targets[1:]
     metrics = {
         "crps": float(
-            expected_sample_crps(predictive, case.reference_samples[1:]).mean()
+            expected_sample_crps(predictive, case.reference.samples[1:]).mean()
         ),
         "rmse": rmse(targets, predictive.mean(axis=1)),
     }
@@ -321,7 +322,7 @@ class CasePrediction:
             "policy": samples.policy,
             "times": samples.times.tolist(),
             "targets": samples.targets.tolist(),
-            "reference_samples": samples.reference_samples.tolist(),
+            "reference_samples": samples.reference.samples.tolist(),
             "predictive_samples": samples.predictive_samples[1:].tolist(),
             "epistemic_variance": self.epistemic_variance.tolist(),
             "aleatoric_variance": self.aleatoric_variance.tolist(),
@@ -447,7 +448,7 @@ def predict_case(
             policy=policy,
             times=history["time"].to_numpy(dtype=np.float64)[indices],
             targets=history["rul"].to_numpy(dtype=np.float64)[indices],
-            reference_samples=np.asarray(reference_samples, dtype=np.float64),
+            reference=ReferenceSamples(np.asarray(reference_samples, dtype=np.float64)),
             predictive_samples=np.vstack([no_prediction, sampled.samples.T]),
         ),
         epistemic_variance=sampled.means.var(axis=0),
