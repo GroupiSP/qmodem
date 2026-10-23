@@ -11,11 +11,11 @@ from matplotlib.collections import PolyCollection
 from matplotlib.figure import Figure
 
 from qmodem.battery.evaluate import CaseSamples
+from qmodem.battery.forecasts import ReferenceSamples, central_band
 from qmodem.battery.rul_plot import (
     PREDICTED_LABEL,
     REFERENCE_LABEL,
     TARGET_LABEL,
-    central_band,
     plot_rul_over_time,
 )
 
@@ -34,7 +34,9 @@ def case() -> CaseSamples:
         policy=2,
         times=times,
         targets=targets,
-        reference_samples=targets[:, None] + rng.normal(0.0, 5.0, (N_TIMES, 30)),
+        reference=ReferenceSamples(
+            targets[:, None] + rng.normal(0.0, 5.0, (N_TIMES, 30))
+        ),
         predictive_samples=predictive,
     )
 
@@ -78,19 +80,22 @@ def test_the_target_spans_every_timestamp_and_the_prediction_skips_t0(case) -> N
     np.testing.assert_allclose(predicted_y, case.predictive_samples[1:].mean(axis=1))
 
 
-@pytest.mark.parametrize(
-    ("label", "rows"),
-    [(REFERENCE_LABEL, slice(None)), (PREDICTED_LABEL, slice(1, None))],
-)
-def test_the_bands_are_the_metric_central_bands(case, label, rows) -> None:
-    samples = {
-        REFERENCE_LABEL: case.reference_samples,
-        PREDICTED_LABEL: case.predictive_samples,
-    }[label][rows]
+def test_the_reference_band_is_the_reference_interval(case) -> None:
     ax = _axes(plot_rul_over_time(case, level=0.9))
 
-    lower, upper = central_band(samples, 0.9)
-    assert _band_extent(ax, label) == pytest.approx((lower.min(), upper.max()))
+    lower, upper = case.reference.interval(0.9)
+    assert _band_extent(ax, REFERENCE_LABEL) == pytest.approx(
+        (lower.min(), upper.max())
+    )
+
+
+def test_the_predictive_band_is_the_metric_central_band(case) -> None:
+    ax = _axes(plot_rul_over_time(case, level=0.9))
+
+    lower, upper = central_band(case.predictive_samples[1:], 0.9)
+    assert _band_extent(ax, PREDICTED_LABEL) == pytest.approx(
+        (lower.min(), upper.max())
+    )
 
 
 @settings(max_examples=25, deadline=None)
@@ -104,7 +109,7 @@ def test_the_figure_is_invariant_to_permuting_samples_within_a_timestamp(
         policy=case.policy,
         times=case.times,
         targets=case.targets,
-        reference_samples=rng.permuted(case.reference_samples, axis=1),
+        reference=ReferenceSamples(rng.permuted(case.reference.samples, axis=1)),
         predictive_samples=rng.permuted(case.predictive_samples, axis=1),
     )
     original = _axes(plot_rul_over_time(case, level=0.95))

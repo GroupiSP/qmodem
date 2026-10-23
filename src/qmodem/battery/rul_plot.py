@@ -2,16 +2,18 @@
 
 The figure shows the realized RUL and the simulator's reference band over every
 timestamp, and the predictive mean and band from the first evaluated timestamp on
-(t0 has no prediction). Bands are the same empirical central bands as the coverage
-metric of ``qmodem.battery.evaluate``.
+(t0 has no prediction). The reference band is the ``ReferenceSamples`` interval; the
+predictive band is the same empirical central band as the coverage metric of
+``qmodem.battery.evaluate``.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 from matplotlib.figure import Figure
+
+from .forecasts import central_band
 
 if TYPE_CHECKING:
     from .evaluate import CaseSamples
@@ -19,21 +21,6 @@ if TYPE_CHECKING:
 TARGET_LABEL = "True RUL"
 REFERENCE_LABEL = "Reference RUL"
 PREDICTED_LABEL = "Predicted RUL"
-
-
-def central_band(samples: np.ndarray, level: float) -> tuple[np.ndarray, np.ndarray]:
-    """Return the empirical central band of each row of ``samples``.
-
-    Args:
-        samples: Samples ``(U, M)``.
-        level: Nominal coverage level in ``(0, 1)``.
-
-    Returns:
-        The lower and upper empirical percentiles ``(U,)`` each.
-    """
-    tail = 100 * (1 - level) / 2
-    lower, upper = np.percentile(samples, [tail, 100 - tail], axis=1)
-    return lower, upper
 
 
 def plot_rul_over_time(case: CaseSamples, *, level: float) -> Figure:
@@ -56,7 +43,7 @@ def plot_rul_over_time(case: CaseSamples, *, level: float) -> Figure:
     ax.plot(case.times, case.targets, color="black", label=TARGET_LABEL)
     ax.fill_between(
         case.times,
-        *central_band(case.reference_samples, level),
+        *case.reference.interval(level),
         color="tab:blue",
         alpha=0.25,
         label=f"{REFERENCE_LABEL} {band}",
