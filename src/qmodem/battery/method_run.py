@@ -627,7 +627,7 @@ def _log_validation_diagnostics(
 
     NLL, RMSE and the 95% coverage are scored on the best checkpoint with the
     stage's validation key and ``PREDICTIVE_SAMPLE_COUNT`` draws, i.e. on the same
-    predictive samples as that epoch's CRPS. They are logged at the best epoch's
+    draws as that epoch's CRPS. They are logged at the best epoch's
     step under the per-epoch validation names. stagereg's ``MetricSuite`` has no
     final-only metrics, so qmodem scores them here.
 

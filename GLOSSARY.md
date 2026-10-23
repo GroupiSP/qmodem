@@ -86,6 +86,10 @@ _Avoid_: Validation windows (suggests every window), validation subsample
 The single score, at the validation timestamps of the posterior validation set, that selects a posterior stage's best checkpoint, stops it early and serves as its HPO objective, shared by every method of the comparison protocol.
 _Avoid_: Validation loss (training losses differ by method), monitored metric (the stopper's mechanism, not the protocol's choice)
 
+**Posterior predictive**:
+The equal-weight mixture of one Gaussian per posterior draw, all sharing the aleatoric variance, from which every test and validation score is computed exactly.
+_Avoid_: Predictive samples, BMA samples
+
 **Ablation arm**:
 An optional set of method runs that changes one component of a core method, reported against the core methods and never ranked among them.
 _Avoid_: Variant, baseline

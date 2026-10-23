@@ -284,14 +284,12 @@ def _full_suite() -> MetricSuite:
 
     Returns:
         ``validation_metrics()`` and ``diagnostic_metrics()`` merged into one
-        suite, so one pass scores all of them on the same predictive samples.
+        suite, so one pass scores all of them on the same draws.
 
     Raises:
-        ValueError: If the two suites' predictors or sample counts differ.
+        ValueError: If the two suites' predictors differ.
     """
     criterion, diagnostics = validation_metrics(), diagnostic_metrics()
-    if criterion.predictive_sample_count != diagnostics.predictive_sample_count:
-        raise ValueError("the suites score different predictive sample counts.")
     if type(criterion.predictor) is not type(diagnostics.predictor):
         raise ValueError("the suites use different predictors.")
     return dataclasses.replace(criterion, epoch=criterion.epoch + diagnostics.epoch)

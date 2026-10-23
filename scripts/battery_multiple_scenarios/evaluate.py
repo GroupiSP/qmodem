@@ -2,11 +2,12 @@
 
 The method run is restored in this process (backbone checkpoints and scalers from its
 parent backbone run, its posterior from its own ``checkpoints/posterior/best``). Every
-test case is evaluated at ``--n-timestamps`` timestamps with M predictive samples per
-timestamp against the simulator's reference samples, and the evaluation is logged
-into the method run as ``evaluation/test/<case>/<metric>``,
-``evaluation/test/<metric>`` and ``evaluation/test/policy_<p>/<metric>``, with the
-per-case samples as artifacts.
+test case is evaluated at ``--n-timestamps`` timestamps from the exact posterior
+predictive over M posterior draws (``--num-draws``) against the simulator's reference
+samples, and the evaluation is logged into the method run as
+``evaluation/test/<case>/<metric>``, ``evaluation/test/<metric>`` and
+``evaluation/test/policy_<p>/<metric>``, with each case's posterior predictive as an
+artifact.
 
 The method run is selected by ``--run-id`` or by ``--method`` and ``--seed`` (newest
 finished ``role=method`` run). Configuration comes from the environment, falling
@@ -105,10 +106,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Evaluation timestamps per test case, t0 included.",
     )
     parser.add_argument(
-        "--num-samples",
+        "--num-draws",
         type=int,
-        default=_DEFAULTS.num_samples,
-        help="Predictive samples per timestamp (M).",
+        default=_DEFAULTS.num_draws,
+        help="Posterior draws per timestamp (M).",
     )
     parser.add_argument(
         "--n-reference-samples",
@@ -127,7 +128,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """
     args = parse_args(argv)
     parameters = EvaluationParameters(
-        n_timestamps=args.n_timestamps, num_samples=args.num_samples
+        n_timestamps=args.n_timestamps, num_draws=args.num_draws
     )
     with script_session() as session:
         run_id = METHOD_RUN_SELECTOR.resolve(

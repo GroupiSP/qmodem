@@ -6,9 +6,9 @@ for MCD, the posterior network) differs. This module owns what is shared:
 
 - the inferred subnetwork (the whole conv layer, ``INFERRED_SUBNETWORK``),
 - the prior ``IsotropicGaussianPrior(precision=1.0)``,
-- the validation criterion: mean sample CRPS of the posterior predictive over
-  ``PREDICTIVE_SAMPLE_COUNT`` draws, under one validation key per method run
-  (``validation_metrics``, ``PosteriorKeys.validation``, ADR 0002),
+- the validation criterion: mean closed-form CRPS of the posterior predictive
+  over ``PREDICTIVE_SAMPLE_COUNT`` draws, under one validation key per method run
+  (``validation_metrics``, ``PosteriorKeys.validation``, ADRs 0002 and 0004),
 - the validation diagnostics NLL, RMSE and coverage@0.95, scored once on the best
   checkpoint (``diagnostic_metrics``, ``validation_diagnostics``),
 - early stopping on validation CRPS (``posterior_early_stopper``),
@@ -32,6 +32,7 @@ from flax import nnx
 from pydantic import BaseModel, ConfigDict, Field
 from stagereg.core import (
     CheckpointStore,
+    ClosedFormContinuousRankedProbabilityScore,
     EarlyStopper,
     EventSink,
     ExperimentTracker,
@@ -39,7 +40,6 @@ from stagereg.core import (
     LoaderFactory,
     NegativeLogLikelihood,
     RootMeanSquaredError,
-    SampleContinuousRankedProbabilityScore,
     TrainingEvent,
 )
 from stagereg.jax import (
@@ -81,10 +81,11 @@ PRIOR_PRECISION = 1.0
 """Precision of the isotropic Gaussian prior shared by every posterior."""
 
 PREDICTIVE_SAMPLE_COUNT = 100
-"""Draws (and predictive samples) per window: validation and evaluation alike.
+"""Posterior draws per window: validation and evaluation alike (M_val).
 
-It sets the draws per window; the number of validation windows per history is
-``data_processing.VALIDATION_TIMESTAMP_COUNT`` (ADR 0003).
+No predictive samples are drawn: every validation metric is exact given the
+draws (ADR 0004). It sets the draws per window; the number of validation windows
+per history is ``data_processing.VALIDATION_TIMESTAMP_COUNT`` (ADR 0003).
 """
 
 VALIDATION_METRIC = "crps"
@@ -225,18 +226,18 @@ def validation_metrics() -> MetricSuite:
     """Return the per-epoch validation suite of every posterior stage: CRPS only.
 
     CRPS is the validation criterion, the only metric that drives early stopping,
-    checkpoint selection and HPO. Each epoch scores ``PREDICTIVE_SAMPLE_COUNT``
-    mixture samples of the posterior predictive; stagereg keys them per batch
-    from the stage's validation key. The diagnostics are scored once, on the
-    best checkpoint (``diagnostic_metrics``).
+    checkpoint selection and HPO. Each epoch scores the closed-form CRPS of the
+    posterior predictive (the mixture over ``PREDICTIVE_SAMPLE_COUNT`` draws)
+    against the validation targets, so no predictive samples are drawn and the
+    score carries no Monte Carlo noise (ADR 0004). The diagnostics are scored
+    once, on the best checkpoint (``diagnostic_metrics``).
 
     Returns:
         The metric suite.
     """
     return MetricSuite(
-        epoch=(SampleContinuousRankedProbabilityScore(name=VALIDATION_METRIC),),
+        epoch=(ClosedFormContinuousRankedProbabilityScore(name=VALIDATION_METRIC),),
         predictor=PosteriorPredictivePredictor(),
-        predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
     )
 
 
@@ -244,8 +245,9 @@ def diagnostic_metrics() -> MetricSuite:
     """Return the validation diagnostics: NLL, RMSE and the 95% coverage.
 
     They never drive selection, so a posterior stage scores them once, on its
-    best checkpoint, from the same ``PREDICTIVE_SAMPLE_COUNT`` predictive samples
-    as the criterion (``validation_diagnostics``).
+    best checkpoint, from the same draws as the criterion
+    (``validation_diagnostics``). All three are exact for the posterior
+    predictive (mixture density, mean and quantiles): no predictive samples.
 
     Returns:
         The metric suite.
@@ -259,7 +261,6 @@ def diagnostic_metrics() -> MetricSuite:
             ),
         ),
         predictor=PosteriorPredictivePredictor(),
-        predictive_sample_count=PREDICTIVE_SAMPLE_COUNT,
     )
 
 
@@ -271,10 +272,12 @@ def score_validation(
 ) -> dict[str, float]:
     """Score a metric suite on the validation batches, as a posterior epoch does.
 
-    The keys derive from ``validation_key`` exactly as stagereg's posterior
-    validation derives them (``split`` into a draw key and a metric key, then
-    ``fold_in(metric_key, batch_index)``), so for the same posterior every suite
-    scores the same predictive samples as the stage's epochs.
+    The draw key derives from ``validation_key`` exactly as stagereg's posterior
+    validation derives it (the first half of ``split``), so for the same
+    posterior every suite scores the same draws as the stage's epochs. The
+    metric half of the split is folded per batch into the predictor's metric
+    key, never shared with the draws; no validation metric samples the
+    predictive, so no score reads it (ADR 0002).
 
     Args:
         predictive: Maps validation inputs and the draw key to the posterior
@@ -288,12 +291,16 @@ def score_validation(
 
     Raises:
         RuntimeError: If the suite has no predictor.
+        ValueError: If the suite draws predictive samples.
     """
     predictor = suite.predictor
     if predictor is None:
         raise RuntimeError("The validation metric suite has no predictor.")
+    if suite.prediction_requirements.fields.predictive_samples:
+        raise ValueError("validation suites must not draw predictive samples.")
     draw_key, metric_key = jax.random.split(validation_key)
     parts = [
+        # The per-batch metric key is unused: nothing samples the predictive.
         predictor(
             lambda inputs: predictive(inputs, draw_key),
             batch,
