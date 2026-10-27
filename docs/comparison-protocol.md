@@ -10,12 +10,12 @@ comparison protocol
 ├─ data        one data-gen run; train 10 · backbone val 20 · posterior val 20 · test 20
 │              fixed 70/30 policy counts per split
 ├─ seeds       R = 5, dataset fixed, keys derived from r, paired by seed
-├─ posterior   N = #windows; M = 100 draws × 1 aleatoric noise sample
+├─ posterior   N = #windows; M = 100 draws; scored by the exact posterior predictive
 ├─ tuning      50 TPE trials per posterior stage on seed 0, HPs frozen; fixed prior
 │              one shared validation criterion: validation CRPS, M_val = 100,
 │              on the posterior validation set; mean/variance on the backbone validation set
 ├─ metrics     expected CRPS (grid-free), RMSE, coverage@0.95, WSU per trajectory
-│              sample-based; t0 dropped; mean over test cases (+ per policy)
+│              exact mixture; t0 dropped; mean over test cases (+ per policy)
 ├─ validity    a failed check invalidates the seed for all methods
 └─ outputs     T1 · T2 · T3 · F1 · F2 · F3 · F4
 ```
@@ -71,10 +71,10 @@ Every method with a posterior stage gets the **same Optuna budget** on seed 0's 
 | Setting | Value | Applies to |
 |---|---|---|
 | Study budget | 50 trials, `TPESampler` (fixed seed), `MedianPruner(n_startup_trials=5, n_warmup_steps=60)` | every posterior study |
-| Validation criterion | mean sample CRPS (stagereg `crps`, energy form) on the posterior validation set; the only per-epoch score | every posterior stage |
-| Validation draws | M_val = 100 draws × 1 noise sample, one validation key per method run ([ADR 0002](adr/0002-posterior-validation-key-per-method-run.md)); smaller M_val ruled out (plug-in CRPS bias favours narrow predictives); independent of Q-AVI's S | every posterior stage |
+| Validation criterion | mean closed-form CRPS of the posterior predictive (the mixture over the M_val draws; stagereg `ClosedFormContinuousRankedProbabilityScore`, name `crps`) against the posterior validation targets; no predictive samples, no MC noise; the only per-epoch score ([ADR 0004](adr/0004-closed-form-crps.md)) | every posterior stage |
+| Validation draws | M_val = 100 posterior draws, no noise samples; one validation key per method run, of which only the draw key is used ([ADR 0002](adr/0002-posterior-validation-key-per-method-run.md)); M_val kept equal to the evaluation's M for validation/evaluation parity ([ADR 0004](adr/0004-closed-form-crps.md)); independent of Q-AVI's S | every posterior stage |
 | Validation timestamps | K = 50 evenly spaced windows per history (min(K, n), ends included); training stays stride-1 ([ADR 0003](adr/0003-validation-at-fixed-timestamps.md)) | both validation sets |
-| Diagnostics | `nll`, `rmse`, `coverage_95` scored once on the best checkpoint, same samples, logged at the best epoch; never select | every posterior stage |
+| Diagnostics | `nll`, `rmse`, `coverage_95` scored once on the best checkpoint, same draws, exact for the mixture, logged at the best epoch; never select | every posterior stage |
 | Baseline | `val_crps_baseline`, criterion before epoch 0, same key; diagnostic only | every posterior stage |
 | Cap / patience | 300 epochs / 60 (≈ 20% of cap, covers Q-AVI's oscillations), `min_delta = 0`; shared, never tuned | MCD, BBB, Q-AVI, C-AVI |
 | Chain | fixed 300 epochs, first 100 burn-in, `thinning` set so M = 100 samples are retained | pSGLD |
@@ -104,15 +104,15 @@ Every method with a posterior stage gets the **same Optuna budget** on seed 0's 
 
 ## 6. Evaluation
 
-- **Draws**: M = 100 posterior draws per window × **one** aleatoric noise sample each; HNN gets 100 aleatoric samples from its single mean. M is never tuned per method.
+- **Draws**: M = 100 posterior draws per window, no aleatoric noise samples; the posterior predictive is the exact mixture `(1/M) Σ_m N(μ_m, s²)` ([ADR 0004](adr/0004-closed-form-crps.md)). HNN's M draws all equal its single mean (a Gaussian); pSGLD uses its retained draws. M is never tuned per method.
 - **Test cases**: all 20 test cases of the fixed run, with 100 simulator reference samples per timestamp. **t0** has no predictions: dropped from every metric, used only as WSU's time origin.
-- **Sample-based** means and intervals for every method (Q-AVI has no analytic form).
+- **Exact** means, intervals and CRPS of the mixture for every method, given the draws; no metric depends on noise.
 
 | Metric (stagereg `core.metrics`) | Definition |
 |---|---|
-| CRPS | **expected CRPS**, grid-free: `mean_j sample_crps(pred_samples, y_ref_j)` over reference samples = E_{Y∼true}[CRPS(F_pred, Y)]. Never Cramér distance |
-| RMSE | vs the predictive sample mean |
-| Coverage | empirical 2.5/97.5 percentiles, inclusive; level **0.95** is a protocol parameter |
+| CRPS | **expected CRPS**, closed form: `expected_gaussian_mixture_crps(draw_means, s², y_ref)` = E_{Y∼true}[CRPS(F_pred, Y)] over the reference samples. Never Cramér distance |
+| RMSE | vs the mixture mean |
+| Coverage | central mixture quantiles at 2.5/97.5%, inclusive; level **0.95** is a protocol parameter |
 | WSU | `core.metrics.wsu` **per trajectory**, t0 as origin; never the epoch `WeightedSpread` adapter |
 
 **Aggregation**: per test case, then **unweighted mean over test cases** (primary), plus the same mean per current policy (secondary). No pooled values.

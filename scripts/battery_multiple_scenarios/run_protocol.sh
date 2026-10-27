@@ -39,7 +39,7 @@ if [[ ${SMOKE:-0} == 1 ]]; then
     POSTERIOR_ARGS=(--max-epochs 4 --patience 2)
     POSTERIOR_STUDY_ARGS=(--n-trials 2)
     PSGLD_ARGS=(--posterior-param burn_in_epochs=2)
-    EVALUATE_ARGS=(--n-timestamps 3 --num-samples 10 --n-reference-samples 10)
+    EVALUATE_ARGS=(--n-timestamps 3 --num-draws 10 --n-reference-samples 10)
 else
     MEAN_STUDY_ARGS=()
     BACKBONE_ARGS=()
